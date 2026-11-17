@@ -35,6 +35,14 @@ CheckQ 是一个**看得见、说得清、拿得走**的开源可视化自动挂
 
 > 首次启用需在仓库 **Settings → Pages → Source** 选 **GitHub Actions**（之后每次 push 自动发布）。
 
+## 品牌资产
+
+| 标准标志 | 单色标志 | 浏览器图标 |
+| --- | --- | --- |
+| <img src="web/public/brand/checkq-mark.svg" width="44" alt="CheckQ 标准标志" /> | <img src="web/public/brand/checkq-mark-mono.svg" width="44" alt="CheckQ 单色标志" /> | <img src="web/public/favicon-32x32.png" width="32" alt="CheckQ favicon" /> |
+
+品牌规范、色值与使用边界见 [`docs/BRAND.md`](docs/BRAND.md)；GitHub 社交预览图见 [`docs/assets/social-preview.png`](docs/assets/social-preview.png)（Settings → Social preview 上传）。
+
 ## 特性
 
 - **模板系统** — 调试好的流程一键「存为模板」，列表管理变量名与任务数；从模板创建任务自动克隆节点图，变量（cookie 等）各任务独立填写
