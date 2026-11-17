@@ -6,15 +6,14 @@
  * 都能通过 stdio JSON-RPC 2.0 调用。零依赖，Node 18+。
  *
  * 环境变量：
- *   CHECKQ_URL       CheckQ 基址，例如 http://checkq.local:18888（必填）
+ *   CHECKQ_URL       CheckQ 基址（必填）。服务端默认端口 8888；
+ *                    http://checkq.local:18888 是 docker-compose.yml 为本地测试方便设的宿主映射
  *   CHECKQ_PASSWORD  登录密码（与 CHECKQ_API_KEY 二选一）
  *   CHECKQ_API_KEY   X-API-Key（推荐，免登录；从 CheckQ 设置页生成）
  *
  * 启动：node mcp/checkq-mcp.cjs
  * 协议：JSON-RPC 2.0 over stdio（Content-Length framing 与 newline-delimited 两种都兼容）
  */
-const fs = require('fs');
-
 const BASE = (process.env.CHECKQ_URL || '').replace(/\/+$/, '');
 const PASSWORD = process.env.CHECKQ_PASSWORD || '';
 const API_KEY = process.env.CHECKQ_API_KEY || '';
@@ -92,11 +91,17 @@ async function callTool(name, args) {
       return api('PUT', '/api/flows/' + encodeURIComponent(args.id), { enabled: !!args.enabled });
     case 'flow_create': {
       if (args.templateId) {
-        const tpl = await api('GET', '/api/templates/' + encodeURIComponent(args.templateId));
-        return api('POST', '/api/templates/' + encodeURIComponent(args.templateId) + '/instantiate', {
+        const flow = await api('POST', '/api/templates/' + encodeURIComponent(args.templateId) + '/instantiate', {
           name: args.name,
           vars: args.vars || {},
         });
+        // instantiate 只收 name/vars/note：把 inputSchema 声明的调度参数补一次 PUT，避免静默忽略
+        const patch = {};
+        if (args.cron !== undefined) patch.cron = args.cron;
+        if (args.timezone !== undefined) patch.timezone = args.timezone;
+        if (args.enabled !== undefined) patch.enabled = args.enabled;
+        if (!Object.keys(patch).length) return flow;
+        return api('PUT', '/api/flows/' + encodeURIComponent(flow.id), patch);
       }
       return api('POST', '/api/flows', {
         name: args.name,

@@ -1,7 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../../api.js';
 import Modal from '../Modal.jsx';
-import { isSensitiveName } from '../../util.js';
+import RecoveryFields from '../RecoveryFields.jsx';
+import { isSensitiveName, CHANNEL_TYPE_OPTIONS } from '../../util.js';
+import { CHANNEL_FIELDS } from '../../channel-fields.js';
 
 function CookieHelpModal({ flow, onClose, onSaved }) {
   const [url, setUrl] = useState('https://');
@@ -66,6 +68,9 @@ function CookieHelpModal({ flow, onClose, onSaved }) {
         </div>
         {tabId && <p style={{ color: 'var(--muted)', fontSize: 11 }}>tab: {String(tabId).slice(0, 12)}… 登录后点上方抓取</p>}
         <pre className="code-block">{bookmarklet}</pre>
+        <p style={{ color: 'var(--muted)', fontSize: 11, marginTop: 4 }}>
+          书签脚本仅在同域会话下可用（会话 Cookie 为 SameSite=Strict）；跨域请用上方「自动抓 Cookie」或手动粘贴。
+        </p>
         <div className="field">
           <label>备用：粘贴 cookie 后保存</label>
           <input className="mono" readOnly value={snippet} onFocus={(e) => e.target.select()} />
@@ -79,7 +84,7 @@ function CookieHelpModal({ flow, onClose, onSaved }) {
   );
 }
 
-/** 日志配置抽屉（PRD §4.7.4）：level 三档 + include 四开关 + resBodyLimit + keywords 规则表 */
+/** 通知渠道弹窗：任务级通知渠道、触发条件与消息模板 */
 function NotifyModal({ flow, onClose, onSaved, onToast }) {
   const cur = flow.notify && typeof flow.notify === 'object' ? flow.notify : {};
   const [channels, setChannels] = useState(Array.isArray(cur.channels) ? cur.channels : []);
@@ -89,34 +94,7 @@ function NotifyModal({ flow, onClose, onSaved, onToast }) {
   const [err, setErr] = useState('');
   const [testResult, setTestResult] = useState(null);
 
-  const TYPES = [
-    ['inbox', '站内通知（无需外部服务）'],
-    ['webhook', 'Webhook（通用 JSON）'],
-    ['bark', 'Bark（iOS）'],
-    ['telegram', 'Telegram Bot'],
-    ['serverchan', 'Server酱 Turbo'],
-    ['pushplus', 'PushPlus（微信）'],
-    ['dingtalk', '钉钉机器人'],
-    ['wecom', '企业微信机器人'],
-    ['feishu', '飞书机器人'],
-    ['gotify', 'Gotify（自建推送）'],
-    ['ntfy', 'ntfy（自建/公共）'],
-    ['email', '邮件（SMTP）'],
-  ];
-  const FIELDS = {
-    inbox: [['title', '标题（可选）']],
-    webhook: [['url', 'URL']],
-    bark: [['url', '服务器 URL'], ['title', '标题'], ['group', '分组（可选）']],
-    telegram: [['token', 'Bot Token'], ['chat', 'Chat ID']],
-    serverchan: [['key', 'SendKey'], ['title', '标题']],
-    pushplus: [['token', 'PushPlus Token'], ['title', '标题']],
-    dingtalk: [['url', 'Webhook URL'], ['secret', '加签密钥（可选）'], ['title', '标题']],
-    wecom: [['url', 'Webhook URL']],
-    feishu: [['url', 'Webhook URL'], ['secret', '签名密钥（可选）']],
-    gotify: [['url', '服务器地址（如 https://gotify.example.com）'], ['token', 'App Token'], ['priority', '优先级（1-10）']],
-    ntfy: [['url', '服务器（默认 https://ntfy.sh）'], ['topic', 'Topic'], ['priority', '优先级（min/low/default/high/urgent）']],
-    email: [['host', 'SMTP 服务器'], ['port', '端口（465/587）'], ['user', '用户名'], ['pass', '密码/授权码'], ['from', '发件人'], ['to', '收件人（多个用逗号）'], ['subject', '主题']],
-  };
+  const TYPES = CHANNEL_TYPE_OPTIONS.map(([k, , label]) => [k, label]);
 
   const patch = (i, k, v) => setChannels(channels.map((c, j) => (j === i ? { ...c, [k]: v } : c)));
   const save = async (opts = {}) => {
@@ -174,7 +152,7 @@ function NotifyModal({ flow, onClose, onSaved, onToast }) {
               </select>
               <button className="small danger" onClick={() => setChannels(channels.filter((_, j) => j !== i))}>删除</button>
             </div>
-            {(FIELDS[c.type || 'webhook'] || []).map(([k, label]) => (
+            {(CHANNEL_FIELDS[c.type || 'webhook'] || CHANNEL_FIELDS.webhook).map(([k, label]) => (
               <div className="field" key={k} style={{ marginBottom: 8 }}>
                 <label>{label}</label>
                 <input className="mono" value={c[k] || ''} placeholder={label} onChange={(e) => patch(i, k, e.target.value)} />
@@ -331,7 +309,6 @@ function VarsEditor({ flow, onVars }) {
     }).catch(() => setMissing([]));
   }, [flow.id]);
 
-  const isSensitive = isSensitiveName;
 
   return (
     <div>
@@ -346,34 +323,38 @@ function VarsEditor({ flow, onVars }) {
           <div style={{ color: 'var(--muted)' }}>在下面「变量名」输入同名后填值（顺序随便），重跑即自动替换。</div>
         </div>
       )}
-      {Object.entries(vars).map(([k, v]) => {
-        const sensitive = isSensitive(k);
-        const [open, setOpen] = useState(!sensitive);
-        return (
-          <div key={k} className="var-row" style={{ marginBottom: 8 }}>
-            <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-              <input className="mono" style={{ fontSize: 11, padding: '4px 6px' }} value={k} disabled />
-              <button className="small var-eye" title={open ? '隐藏值' : '显示值'} aria-label={open ? '隐藏值' : '显示值'} onClick={() => setOpen(!open)}>{open ? '隐藏' : '显示'}</button>
-              <button className="small danger var-del" title={`删除变量 ${k}`} aria-label={`删除变量 ${k}`} onClick={() => remove(k)}>删除</button>
-            </div>
-            {open ? (
-              <textarea
-                className="mono"
-                style={{ fontSize: 11, padding: '4px 6px', marginTop: 3 }}
-                rows={Math.min(3, String(v).length / 60 + 1)}
-                value={v}
-                onChange={(e) => change(k, e.target.value)}
-                onBlur={() => onVars(vars)}
-              />
-            ) : (
-              <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 3 }}>•••••••• <button className="small" onClick={() => setOpen(true)}>显示</button></div>
-            )}
-          </div>
-        );
-      })}
+      {Object.entries(vars).map(([k, v]) => (
+        <VarRow key={k} k={k} v={v} vars={vars} sensitive={isSensitiveName(k)} remove={remove} change={change} onVars={onVars} />
+      ))}
       <input style={{ fontSize: 11, padding: '4px 6px', marginBottom: 4 }} placeholder="变量名" value={nk} onChange={(e) => setNk(e.target.value)} />
       <input style={{ fontSize: 11, padding: '4px 6px', marginBottom: 4 }} placeholder="值" value={nv} onChange={(e) => setNv(e.target.value)} />
       <button className="small" style={{ width: '100%' }} onClick={add}>+ 添加变量</button>
+    </div>
+  );
+}
+
+/** 变量行组件：显隐状态放行组件内（hooks 不能写在 map 回调里——变量增删会改变 hook 数量导致崩溃） */
+function VarRow({ k, v, vars, sensitive, remove, change, onVars }) {
+  const [open, setOpen] = useState(!sensitive);
+  return (
+    <div className="var-row" style={{ marginBottom: 8 }}>
+      <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+        <input className="mono" style={{ fontSize: 11, padding: '4px 6px' }} value={k} disabled />
+        <button className="small var-eye" title={open ? '隐藏值' : '显示值'} aria-label={open ? '隐藏值' : '显示值'} onClick={() => setOpen(!open)}>{open ? '隐藏' : '显示'}</button>
+        <button className="small danger var-del" title={`删除变量 ${k}`} aria-label={`删除变量 ${k}`} onClick={() => remove(k)}>删除</button>
+      </div>
+      {open ? (
+        <textarea
+          className="mono"
+          style={{ fontSize: 11, padding: '4px 6px', marginTop: 3 }}
+          rows={Math.min(3, String(v).length / 60 + 1)}
+          value={v}
+          onChange={(e) => change(k, e.target.value)}
+          onBlur={() => onVars(vars)}
+        />
+      ) : (
+        <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 3 }}>•••••••• <button className="small" onClick={() => setOpen(true)}>显示</button></div>
+      )}
     </div>
   );
 }
@@ -388,6 +369,10 @@ function ScheduleModal({ flow, onClose, onSave }) {
     enabled: true, maxAttempts: 3, backoff: 'exponential', baseDelayMs: 5000, maxDelayMs: 300000, jitter: true,
     ...(flow.retry || {}),
   }));
+  const [recovery, setRecovery] = useState(() => ({
+    enabled: false, intervalMinutes: 60, maxAttempts: 2,
+    ...(flow.recovery || {}),
+  }));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
 
@@ -397,17 +382,21 @@ function ScheduleModal({ flow, onClose, onSave }) {
     if (!retry.enabled) return '';
     const base = Math.max(1000, Number(retry.baseDelayMs) || 5000);
     const max = Math.max(base, (Number(retry.maxDelayMs) || 300000));
+    const fmt = (ms) => (ms >= 60000 ? `${Math.round(ms / 60000)} 分钟` : `${Math.round(ms / 1000)} 秒`);
     const waits = [];
     for (let n = 1; n < Math.min(4, Number(retry.maxAttempts) || 3); n++) {
       let d = retry.backoff === 'fixed' ? base : retry.backoff === 'linear' ? base * n : base * 2 ** (n - 1);
       d = Math.min(d, max);
-      if (retry.jitter) d = d * 0.75;
-      waits.push(d >= 60000 ? `${Math.round(d / 60000)} 分钟` : `${Math.round(d / 1000)} 秒`);
+      waits.push(retry.jitter ? `${fmt(d / 2)}–${fmt(d)}` : fmt(d));
     }
     return waits.length ? `失败后依次等待：${waits.join(' → ')}${Number(retry.maxAttempts) > 4 ? ' …' : ''}` : '';
   })();
 
   const save = async () => {
+    if (enabled && !cron.trim()) {
+      setErr('启用定时调度需要填写 cron 表达式');
+      return;
+    }
     setBusy(true); setErr('');
     try {
       await onSave({
@@ -416,9 +405,14 @@ function ScheduleModal({ flow, onClose, onSave }) {
           enabled: !!retry.enabled,
           maxAttempts: Number(retry.maxAttempts) || 3,
           backoff: retry.backoff,
-          baseDelayMs: Math.round((Number(retry.baseDelayMs) || 5) * 1000),
-          maxDelayMs: Math.round((Number(retry.maxDelayMs) || 300) * 1000),
+          baseDelayMs: Math.round(Number(retry.baseDelayMs) || 5000),
+          maxDelayMs: Math.round(Number(retry.maxDelayMs) || 300000),
           jitter: !!retry.jitter,
+        },
+        recovery: {
+          enabled: !!recovery.enabled,
+          intervalMinutes: Math.min(1440, Math.max(30, Math.round(Number(recovery.intervalMinutes) || 60))),
+          maxAttempts: Math.min(5, Math.max(1, Math.round(Number(recovery.maxAttempts) || 2))),
         },
       });
       onClose();
@@ -460,6 +454,13 @@ function ScheduleModal({ flow, onClose, onSave }) {
         <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
         启用定时调度
       </label>
+      {flow.pausedAt && (
+        <p className="pause-note" title={flow.pausedReason || ''}>
+          {flow.recovery?.enabled
+            ? `连续失败已自动停用；自动恢复探测已开启（每 ${flow.recovery.intervalMinutes} 分钟）。`
+            : '连续失败已自动停用。勾选上方开关即恢复；也可以开启下方自动探测。'}
+        </p>
+      )}
 
       <div className="retry-box">
         <label className="checkline retry-head">
@@ -503,6 +504,9 @@ function ScheduleModal({ flow, onClose, onSave }) {
             {preview && <p className="retry-preview">{preview}</p>}
           </>
         )}
+      </div>
+      <div style={{ marginTop: 8 }}>
+        <RecoveryFields value={recovery} onChange={setRecovery} />
       </div>
       {err && <p style={{ color: 'var(--fail)', fontSize: 12 }}>{err}</p>}
     </Modal>

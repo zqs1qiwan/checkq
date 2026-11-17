@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../../api.js';
 import Modal from '../Modal.jsx';
+import GroupPicker from '../GroupPicker.jsx';
 import { confirmDialog } from '../../confirm.jsx';
 import { setToast } from './helpers.js';
+import { downloadJson } from '../../util.js';
 
 function InstantiateModal({ tpl, onClose, onCreated }) {
   const [name, setName] = useState('');
@@ -199,7 +201,7 @@ function CsvImportModal({ tpl, onClose, onDone }) {
   );
 }
 
-/** 系统设置：改密 + API Key */
+/** 站内通知中心：列表 / 已读 / 清空 */
 function NotificationsModal({ onClose }) {
   const [data, setData] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -281,6 +283,7 @@ function TemplateEditorModal({ tpl, onDone }) {
   const [desc, setDesc] = useState(tpl.desc || '');
   const [detail, setDetail] = useState(null);
   const [vars, setVars] = useState([]); // [{name, value}]
+  const [newVarName, setNewVarName] = useState('');
   const [err, setErr] = useState('');
 
   useEffect(() => {
@@ -332,8 +335,30 @@ function TemplateEditorModal({ tpl, onDone }) {
             </div>
           ))}
           <div style={{ display: 'flex', gap: 6 }}>
-            <input style={{ fontSize: 11, padding: '4px 6px' }} placeholder="新变量名" id="tpl-new-var" />
-            <button className="small" onClick={() => setVars([...vars, { name: document.getElementById('tpl-new-var')?.value || `var${vars.length + 1}`, value: '' }])}>+ 添加变量</button>
+            <input
+              style={{ fontSize: 11, padding: '4px 6px' }}
+              placeholder="新变量名"
+              value={newVarName}
+              onChange={(e) => setNewVarName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  const n = newVarName.trim() || `var${vars.length + 1}`;
+                  setVars([...vars, { name: n, value: '' }]);
+                  setNewVarName('');
+                }
+              }}
+            />
+            <button
+              className="small"
+              onClick={() => {
+                const n = newVarName.trim() || `var${vars.length + 1}`;
+                setVars([...vars, { name: n, value: '' }]);
+                setNewVarName('');
+              }}
+            >
+              + 添加变量
+            </button>
           </div>
         </div>
         {err && <p style={{ color: 'var(--fail)', fontSize: 12 }}>{err}</p>}
@@ -350,12 +375,7 @@ function BackupFullModal({ onClose }) {
     setBusy(true); setErr('');
     try {
       const data = await api.backupFull(password);
-      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = `checkq-backup-full-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.json`;
-      a.click();
-      URL.revokeObjectURL(a.href);
+      downloadJson(`checkq-backup-full-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.json`, data);
       onClose();
     } catch (e) { setErr(e.message); } finally { setBusy(false); }
   };
@@ -406,20 +426,15 @@ function GroupAssignModal({ ids, groups = [], onClose, onDone }) {
       }
     >
       <div className="field">
-        <label title="留空=移出分组；填已有分组名=并入该组">分组名</label>
-        <input
-          list="checkq-group-options-batch"
+        <label title="留空=移出分组；选已有分组=并入该组；只影响列表折叠与统计展示">分组名</label>
+        <GroupPicker
           value={group}
-          aria-label="分组名"
-          autoFocus
-          onChange={(e) => setGroup(e.target.value)}
-          placeholder="例如：签到 / 监控 / 实验（留空=未分组）"
+          onChange={setGroup}
+          groups={groups}
+          ariaLabel="分组名"
+          placeholder="选已有分组或输入新名字（留空=未分组）"
         />
-        <datalist id="checkq-group-options-batch">
-          {groups.map((g) => <option key={g} value={g} />)}
-        </datalist>
       </div>
-      <p className="hint" style={{ margin: 0 }}>分组只影响列表的折叠与统计展示，不改变任务的调度与执行。</p>
       {err && <p style={{ color: 'var(--fail)', fontSize: 12, margin: '8px 0 0' }}>{err}</p>}
     </Modal>
   );

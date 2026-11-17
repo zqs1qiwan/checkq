@@ -8,6 +8,7 @@ on:
     paths:
       - 'tools/build-wiki.cjs'
       - 'docs/**'
+      - 'wiki/**'            # 手动改过已提交的产物时也重新生成，保证源与产物一致
       - '.github/workflows/pages.yml'
   workflow_dispatch:
 

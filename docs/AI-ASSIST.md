@@ -1,76 +1,87 @@
-# 快速组装与 AI 助手（规划 + 现状）
+# 快速组装与 AI 助手
 
-> 2026-11-10 · 对应「快速组装原理是什么 / 背后有没有 AI」的答案与落地记录。
+> **定位**：这两项都属于"帮用户把第一版流程写出来"的辅助能力，**不是**产品的核心路径。
+> **红线**：模型只产出流程草稿，永不直接发起外部请求、永不自动运行、永不接触真实凭据。
+> 产品口径见 `docs/PRD.md` §1、§5；接口见 `docs/API.md`。
 
-## 1. 快速组装现状（v0.3.17-ui4 之前）
+---
 
-**纯前端确定性规则生成器，零 AI、零外部请求。**
+## 1. 快速组装（纯规则，默认路径）
 
-- `web/src/components/FlowList.jsx` → `parseNatural(text)`：正则抽取
-  - URL：`/https?:\/\/[^\s"'）)]+/`
-  - 方法：出现 `POST` → POST，否则 GET
-  - 成功词：`/看到(.{2,12}?)算?成功/` 或 `成功词[是:：](.{2,12})`
-  - 事件类型：文本命中 签到/抽卡/库存监控/信息查询
-- `buildWizardFlow({url, method, keyword, eventLabel})`：硬编码 2 节点骨架
-  - `http` 节点（带 UA header、可选 keyword 断言 `asserts:[{res:[kw],from:'content'}]`）
-  - `log` 节点（`{{eventLabel}}完成：{{last.status}}`）
-  - `cron: '0 8 * * *'`、`enabled: false`
-- 一句话只是「填充表单」的语法糖，生成逻辑完全本地，可离线用。
+**一句话描述 → 两节点草稿。** 完全在前端运行，零网络请求、零 API 消耗，离线可用。
 
-**局限**：只能生成固定骨架；不理解多步流程（登录→取 token→签到）、不理解 POST body / 变量引用。
-
-## 2. LLM 接入（2026-11-10 已落地）
-
-### 服务端
-
-| 端点 | 说明 |
+| 项 | 实现 |
 |---|---|
-| `GET /api/system/ai` | 读配置（key 打码 `sk-abc…`），返回 `configured` |
-| `PUT /api/system/ai` | 存 `{baseUrl, apiKey, model}` 到 `meta.json`；key 传打码占位时保留旧值 |
-| `POST /api/ai/generate` | 代理调用 OpenAI 兼容 `POST {baseUrl}/chat/completions`，60s 超时 |
+| 输入解析 | `web/src/components/flow-list/wizard-logic.js` 的 `parseNatural(text)`：正则抽取 URL、方法（出现 `POST` 即 POST）、成功词（"看到…算成功"/"成功词：…"）、事件类型（签到 / 抽卡 / 库存监控 / 信息查询） |
+| 生成 | `buildWizardFlow({url, method, keyword, eventLabel})`：`http` 节点（带 UA 头、可选关键字断言）+ `log` 节点（`{{eventLabel}}完成：{{last.status}}`） |
+| 默认值 | `cron: '0 8 * * *'`、`enabled: false` |
+| 共用 | 同一份纯逻辑被组件与 `server/test/wizard.test.js` 共用（避免前后端分叉） |
 
-安全与校验：
-- key 只存服务端 `meta.json`，任何响应不回显明文，日志不打印。
-- LLM 输出必须为 JSON（自动剥 ```json 围栏），服务端白名单校验：
-  - 节点类型仅 `http / log / set / delay`，最多 6 节点
-  - 必须含合法 `http` 节点且 URL 为绝对 http(s)
-  - 统一补齐 `timezone: Asia/Shanghai`、`enabled: false`、`vars: {}`
-- AI 只产出**草稿**，用户在弹窗里点「用 AI 结果创建」才落库；绝不自动运行。
+**它擅长**：单步查询、单步签到、URL 明确且结果可用一句话描述的场景。
+**它不擅长**：多步链路（登录 → 取 token → 签到）、需要 POST body、需要变量引用、需要循环。
 
-### 前端
+> 失败处理：解析不出 URL 时就地提示"没识别到地址，请直接填 URL"，不生成空流程。
 
-- 设置 → AI 助手：Base URL / API Key / 模型（支持 DeepSeek / OpenAI / Ollama 等 OpenAI 兼容端点）。
-- 快速组装弹窗：一句话 →「✨ AI 生成流程」→ 预览（名称 / 节点数 / cron / 节点链）→「用 AI 结果创建」。
-- 未配置或调用失败 → 中文提示，规则模式（「规则填充（不耗 API）」）始终可用。
+---
 
-### 验证记录（2026-11-10 本地 mock LLM）
+## 2. AI 助手（可选，BYO Key）
 
-```
-unconfigured: 400 未配置 AI：请到「设置 → AI 助手」…
-save-ai: 200
-get-ai: 200 {"configured":true,…,"apiKey":"sk-tes…"}
-generate: 200 draft.name=mock签到任务 nodes=2 cron=0 8 * * * assert=[{"res":["签到成功"],"from":"content"}]
-create-from-draft: 200 mock签到任务 nodes=2
-```
+**用户自带 OpenAI 兼容端点**（DeepSeek / OpenAI / Ollama 等），不内置供应商、不代付费用。
 
-## 3. MCP / API 控制（规划）
+| 端点 | 行为 |
+|---|---|
+| `GET /api/system/ai` | 返回 `configured`、`baseUrl`、`model`；`apiKey` 只回显前缀（`sk-abc…`） |
+| `PUT /api/system/ai` | 保存 `{baseUrl, apiKey, model}`；传打码占位时保留旧 Key；不打印到日志 |
+| `POST /api/ai/generate` | 代理调用 `POST {baseUrl}/chat/completions`，60s 超时；未配置时返回中文提示 |
 
-CheckQ 已有完整的 REST 面 + `X-API-Key` 鉴权（`POST /api/system/apikey`），天然可被 MCP 包装：
+**服务端结构校验（任何 AI 产物都必须过）**
 
-- **近期**：`checkq-mcp` server 薄封装现有端点：
-  - `create_flow(draft)` / `run_flow(id)` / `get_run(id)` / `list_flows()` / `list_templates()` / `instantiate_template(id, vars)`
-  - 用途：外部 agent（Claude/Cursor/自研）直接创建与调试流程，无需 UI。
-- **中期**：AI 对话面板（ChatPanel）多轮编排：
-  - 工具调用流：`get_flow` → `update_flow_node` → `run_flow(debugStopId)` → 读 run 日志 → 继续修
-  - 与 Pick Panel 共用节点生成器（前端确定性代码生成仍是主路径，LLM 只做「翻译」）
-- **原则**（沿用 PRD §4.0）：
-  1. LLM 永不直接执行外部请求，只产/改流程 JSON；
-  2. 所有 LLM 产物过服务端结构校验；
-  3. key 服务端存储、可随时清除；
-  4. 规则模式永久保留为离线降级。
+1. 输出必须是 JSON（自动剥离 Markdown 代码围栏）；
+2. 节点类型仅限 `http / log / set / delay`，节点数 ≤ 6；
+3. 必须含一个合法 `http` 节点，URL 为绝对 `http(s)`；
+4. 统一补齐 `timezone: Asia/Shanghai`、`enabled: false`、`vars: {}`；
+5. 校验失败 → 返回可读错误，**不落库**。
 
-## 4. 待决策
+**用户流程**：一句话 →「AI 生成流程」→ 预览（名称 / 节点数 / cron / 节点链）→「用 AI 结果创建」→ 落库为**停用**任务。
 
-- [ ] 是否内置默认模型供应商（当前 BYO key，零成本零锁定）
-- [ ] MCP server 放本仓库 `mcp/` 还是独立包
-- [ ] ChatPanel 是否走 SSE 流式（复用现有 run 流式通道）
+**降级**：未配置、超时、返回非法结构 → 明确中文提示，规则模式始终可用（不因 AI 失败而阻塞建流程）。
+
+---
+
+## 3. 已知边界与风险
+
+| 项 | 现状 | 处理 |
+|---|---|---|
+| Key 存储 | 存于 `meta.json`，响应打码、日志不打印；**当前为明文**，与 flow 变量/渠道的 AES-256-GCM 策略不一致 | 列入 v0.6「凭据加密补全」（`docs/PRD.md` §8.2）；在此之前备份需注意 |
+| 模型幻觉 | 可能生成不存在的域名或错误方法 | 服务端结构校验 + 用户确认预览 + 任务默认停用 |
+| 提示注入 | 当前只接收用户一句话，不接收页面内容，注入面很小 | 若未来把响应体喂给模型，必须先做隔离与白名单，并单独评审 |
+| 数据外发 | 只有用户主动点「AI 生成」才会把**那句话**发给其自配端点 | 界面明确提示；不做后台调用 |
+| 费用 | 由用户自己的 Key 承担 | 不做默认供应商、不做代付 |
+
+---
+
+## 4. 本期（v0.5）的取舍
+
+- **做**：保持现状；AI 只做"草稿生成"，不进入诊断、不改流程、不自动运行。
+- **不做**：对话式编排面板（ChatPanel）、日志解释、自动修复。
+- **为什么**：P0-3 的诊断必须可复现、可回放、离线可用；用模型解释日志会让结论不可验证，也会把用户日志外发给第三方。
+
+> 若未来要做"AI 解释日志"，前置条件是：用户显式开启、每次发送可预览、脱敏后发送、结果标注"仅供参考"且不产生动作按钮。
+
+---
+
+## 5. 未来方向（不进本期）
+
+| 方向 | 价值 | 进入条件 |
+|---|---|---|
+| 模板生成 | 从一句描述产出多步链路草稿 | 规则版已覆盖 80% 单步场景后 |
+| 对话式编排 | 多轮改流程（`flow_get → flow_update → flow_run → 读日志`） | MCP 已能满足外部 Agent，先看真实需求 |
+| 日志解释 | 把"看不懂"变成"看得懂" | 诊断规则覆盖率稳定后，且满足 §4 的隐私前置 |
+
+---
+
+## 6. 维护提示
+
+- 改动快速组装逻辑时，同时更新 `wizard-logic.js` 与 `server/test/wizard.test.js`（共用一份逻辑，禁止复制）。
+- 改动 AI 校验白名单时，同时更新本文与 `docs/PRD.md` §5 的相关验收。
+- Key 的加密方案落地后，必须回头修改本文 §3 的"明文"描述，并补一条回归测试。

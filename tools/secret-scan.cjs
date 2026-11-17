@@ -40,8 +40,11 @@ const ALLOW = [
 const PRIVATE_PATTERNS = [
   /(^|\/)AGENTS\.md$/i,
   /(^|\/)docs\/agent-notes\//i,
+  /(^|\/)docs\/.+\.(flow|template)\.json$/i,     // 具体业务模板/实例（与 project-audit 同口径）
   /(^|\/)tools\/wb-/i,
   /(^|\/)tools\/private-terms\.local\.txt$/i,   // 私有词表本身也必须留在本地
+  /(^|\/)data\//i,
+  /(^|\/)server\/public\//i,                    // 构建产物不进仓库
 ];
 
 // 私有词表（站点名 / 模板名 / 个人名…）：放在本地 tools/private-terms.local.txt（已 gitignore），

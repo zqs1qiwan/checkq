@@ -1,5 +1,5 @@
 /**
- * 单次运行 → HAR 1.2（默认脱敏）
+ * 单次运行 → HAR 1.2（默认脱敏；版本号见 version.js）
  *
  * 用途：把一次运行里的 HTTP 步骤导出成浏览器 DevTools 可导入的 HAR，便于排障。
  * 安全：
@@ -8,6 +8,7 @@
  *   - 响应体使用引擎已截断的内容（resBodyLimit），不会把完整大响应塞进 HAR
  */
 import { isSensitiveName } from './secret.js';
+import { VERSION } from './version.js';
 
 const SENSITIVE_HEADERS = /^(cookie|set-cookie|authorization|proxy-authorization|x-api-key|api-key)$/i;
 
@@ -102,7 +103,7 @@ export function runToHar(run, flow) {
   return {
     log: {
       version: '1.2',
-      creator: { name: 'CheckQ', version: '0.3.17' },
+      creator: { name: 'CheckQ', version: VERSION },
       pages: [{
         startedDateTime: new Date(run?.startedAt || Date.now()).toISOString(),
         id: String(run?.id || 'run'),

@@ -1,16 +1,17 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../../api.js';
 import Modal from '../Modal.jsx';
-import { IconBell, IconSparkle, IconShield, IconUsers, IconKey } from '../Icons.jsx';
+import { IconBell, IconSparkle, IconShield, IconUsers, IconKey, IconGear } from '../Icons.jsx';
 import AccountPanel from '../AccountPanel.jsx';
 import UsersPanel from '../UsersPanel.jsx';
 import ApiKeysPanel from '../ApiKeysPanel.jsx';
+import MetricsPanel from './metrics.jsx';
 import { setToastLevel, getToastLevel } from '../../toast.js';
-import { CHANNEL_LABELS } from '../../util.js';
 import { setToast } from './helpers.js';
+import SystemNotify from './system-notify.jsx';
 
-function SettingsModal({ onClose, initialTab }) {
-  const [tab, setTab] = useState(initialTab || 'general');
+function SettingsModal({ onClose }) {
+  const [tab, setTab] = useState('general');
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
   const [me, setMe] = useState(null);
@@ -18,7 +19,8 @@ function SettingsModal({ onClose, initialTab }) {
     api.me().then((r) => setMe(r.authenticated ? r.user : null)).catch(() => {});
   }, []);
   const TABS = [
-    { id: 'general', label: '通知与推送', desc: '每日汇总推送与模板', Icon: IconBell },
+    { id: 'general', label: '通知与推送', desc: '系统通知与界面提示', Icon: IconBell },
+    { id: 'metrics', label: '统计', desc: '本机运行与修复速度', Icon: IconGear },
     { id: 'ai', label: 'AI 助手', desc: '快速组装用的模型', Icon: IconSparkle },
     { id: 'security', label: '账号安全', desc: '密码、两步验证、会话', Icon: IconShield },
     ...(me?.role === 'admin' ? [{ id: 'users', label: '用户管理', desc: '账号与角色', Icon: IconUsers }] : []),
@@ -53,7 +55,9 @@ function SettingsModal({ onClose, initialTab }) {
           <p>{cur.desc}</p>
         </div>
 
-        {tab === 'general' && <SettingsFlow onToast={(text) => { setMsg(text); setErr(''); }} />}
+        {tab === 'general' && <SettingsFlow isAdmin={me?.role === 'admin'} onToast={(text) => { setMsg(text); setErr(''); }} />}
+
+        {tab === 'metrics' && <MetricsPanel />}
 
         {tab === 'ai' && <AiSettings />}
 
@@ -112,34 +116,13 @@ function AiSettings() {
   );
 }
 
-/* 设置内：每日总推送（可选）+ 界面提示级别 */
-function SettingsFlow({ onToast }) {
-  const [cfg, setCfg] = useState({ enabled: false, time: '08:00', timezone: 'Asia/Shanghai', targetFlowIds: [] });
-  const [pushable, setPushable] = useState([]);
-  const [selectedUnits, setSelectedUnits] = useState([]);
-  const [marketUrl, setMarketUrl] = useState('');
+/* 设置内：界面提示级别 + 系统通知（每日汇总） */
+function SettingsFlow({ onToast, isAdmin }) {
   const [level, setLevel] = useState(getToastLevel());
-  const [pushing, setPushing] = useState(false);
-  useEffect(() => {
-    api.dailySummaryConfig().then((c) => {
-      setCfg({ ...c, targetFlowIds: c.targetFlowIds || [] });
-      setSelectedUnits(c.targetFlowIds || (c.targetFlowId ? [c.targetFlowId] : []));
-    }).catch(() => {});
-    api.pushTargets().then(setPushable).catch(() => setPushable([]));
-  }, []);
   const changeLevel = async (v) => {
     setLevel(v);
     setToastLevel(v);
     try { await api.saveUiSettings({ toastLevel: v }); } catch (e) { onToast(e.message); }
-  };
-  const pushNow = async () => {
-    if (!selectedUnits.length) { onToast('先勾选至少一个推送单位'); return; }
-    setPushing(true);
-    try {
-      const r = await api.pushDailySummary({ flowIds: selectedUnits });
-      onToast(`已推送到 ${(r.groups || []).length} 个单位：${r.text || '今日汇总'}`);
-    } catch (e) { onToast(e.message); }
-    finally { setPushing(false); }
   };
   return (
     <>
@@ -158,56 +141,10 @@ function SettingsFlow({ onToast }) {
           全部提示
         </label>
       </div>
-      <div className="field">
-        <label title="默认关闭；开启后每天指定时间把今日汇总推送到勾选的任务">每日汇总推送</label>
-        <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <input type="checkbox" style={{ width: 'auto' }} checked={!!cfg.enabled} onChange={(e) => setCfg({ ...cfg, enabled: e.target.checked })} />
-          每天 {cfg.time} 把今日汇总推送到下面勾选的任务
-        </label>
-        <div className="push-units">
-          {pushable.length === 0 && <div className="hint">还没有可推送的任务</div>}
-          {pushable.map((f) => (
-            <label key={f.id} className="push-unit">
-              <input
-                type="checkbox"
-                style={{ width: 'auto' }}
-                checked={selectedUnits.includes(f.id)}
-                onChange={(e) => setSelectedUnits(e.target.checked ? [...selectedUnits, f.id] : selectedUnits.filter((x) => x !== f.id))}
-              />
-              <span className="push-unit-name">{f.name}</span>
-              {/* 服务端返回的 channels 是类型名字符串数组（历史接口形态），兼容对象形态 */}
-              <span className="push-unit-ch">{(f.channels || []).map((c) => { const t = typeof c === 'string' ? c : c.type; return CHANNEL_LABELS[t] || t; }).filter(Boolean).join(' / ')}</span>
-            </label>
-          ))}
-        </div>
-        <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-          <input type="time" style={{ width: 110 }} value={cfg.time} onChange={(e) => setCfg({ ...cfg, time: e.target.value })} />
-          <button className="small" onClick={async () => {
-            try {
-              const r = await api.saveDailySummaryConfig({ ...cfg, targetFlowIds: selectedUnits });
-              setCfg(r);
-              onToast(`每日总推送设置已保存（${selectedUnits.length} 个推送单位）`);
-            } catch (e) { onToast(e.message); }
-          }}>保存</button>
-          <button className="small" onClick={pushNow} disabled={pushing || selectedUnits.length === 0}>{pushing ? '推送中…' : '立即推送今日汇总'}</button>
-          {selectedUnits.length > 0 && <span style={{ color: 'var(--muted)', fontSize: 11 }}>已选 {selectedUnits.length} 个推送单位</span>}
-        </div>
-      </div>
-      <div className="field">
-        <label title="从 URL 导入索引 JSON">模板市场</label>
-        <div style={{ display: 'flex', gap: 6 }}>
-          <input className="mono" placeholder="https://.../template.json" value={marketUrl} onChange={(e) => setMarketUrl(e.target.value)} />
-          <button className="small" onClick={async () => {
-            try { await api.templateFromUrl(marketUrl); onToast('模板已导入'); setMarketUrl(''); }
-            catch (e) { onToast(e.message); }
-          }}>导入</button>
-        </div>
-      </div>
+      <SystemNotify isAdmin={isAdmin} onToast={onToast} />
     </>
   );
 }
-
-/** 恢复备份：JSON 文件 → 全部以新 ID 恢复（默认停用，不覆盖现有） */
 
 export default SettingsModal;
 

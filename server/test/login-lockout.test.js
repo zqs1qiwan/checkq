@@ -7,6 +7,10 @@ process.env.DATA_DIR = '';
 import assert from 'node:assert';
 import fs from 'node:fs';
 import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const pkg = JSON.parse(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'package.json'), 'utf8'));
 
 const dir = fs.mkdtempSync(os.tmpdir() + '/cq-login-');
 const { buildServer } = await import('../src/api.js');
@@ -39,7 +43,7 @@ const okLogin = await app2.inject({ method: 'POST', url: '/api/login', payload: 
 check('正确密码 → 200', okLogin.statusCode === 200 && okLogin.json().ok === true);
 
 const health = await app2.inject({ method: 'GET', url: '/api/health' });
-check('health version 与 package 一致(0.3.17)', health.json().version === '0.3.17');
+check('health version 与 package 一致', health.json().version === pkg.version);
 
 await app.close();
 await app2.close();

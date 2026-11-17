@@ -24,6 +24,10 @@ fi
 echo "==> 解包 $TARBALL"
 tar -xzf "$TARBALL" -C "$WORK"
 
+# 替换前先备份当前镜像（健康检查失败时至少有一个可回退的镜像）
+echo "==> 备份当前镜像为 ${TAG}.bak"
+docker commit "$CONTAINER" "${TAG}.bak" >/dev/null || { echo "备份镜像失败，已中止（未改动容器）" >&2; exit 1; }
+
 # 设备刚重启时容器可能还没起来（docker 会按 restart 策略拉起，但有延迟）
 if ! docker ps --filter "name=^${CONTAINER}$" --filter status=running -q | grep -q .; then
   echo "==> 容器未运行，先启动"
@@ -43,18 +47,29 @@ if [ -d "$WORK/server/src" ]; then
   echo "==> 替换服务端代码（/app/src）"
   docker cp "$WORK/server/src/." "$CONTAINER:/app/src/"
 fi
+if [ -f "$WORK/server/package.json" ]; then
+  docker cp "$WORK/server/package.json" "$CONTAINER:/app/package.json"
+fi
 
 echo "==> 重启容器"
 docker restart "$CONTAINER" >/dev/null
 sleep 5
 
 echo "==> 健康检查"
-HEALTH="$(curl -s --max-time 8 http://127.0.0.1:${CHECKQ_PORT:-18888}/api/health || true)"
-echo "$HEALTH"
+# 服务端默认端口是 8888（server/src/index.js: PORT||8888）；18888 只是本地测试用的宿主映射。
+# 显式设置 CHECKQ_PORT 时只试该端口，否则依次试默认 8888 与本地测试映射 18888。
+HEALTH=""
+# CHECKQ_PORT 只是“优先尝试”的端口；8888 在部分宿主上被 Basic Auth 反向代理占用，
+# 显式锁定它会把健康检查误判为失败，所以仍保留 8888 / 18888 兜底。
+for p in ${CHECKQ_PORT:+$CHECKQ_PORT }8888 18888; do
+  H="$(curl -s --max-time 8 "http://127.0.0.1:${p}/api/health" || true)"
+  echo "  端口 ${p}: ${H:-无响应}"
+  case "$H" in *'"ok":true'*) HEALTH="$H"; break ;; esac
+done
 case "$HEALTH" in
   *'"ok":true'*) ;;
-  *) echo "健康检查未通过，已回滚到备份镜像" >&2
-     docker tag "$CONTAINER" "$TAG" >/dev/null 2>&1 || true
+  *) echo "健康检查未通过：容器内文件已被替换，不会假装回滚" >&2
+     echo "备份镜像 ${TAG}.bak 尚未被覆盖；需要人工确认后手动重建容器再恢复。" >&2
      exit 1 ;;
 esac
 

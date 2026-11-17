@@ -1,0 +1,31 @@
+{
+  "name": "风控：403 + 人机校验",
+  "flow": { "name": "站点签到", "nodes": [] },
+  "run": {
+    "id": "run-risk",
+    "status": "failed",
+    "finalMessage": "第 2 步「签到」失败",
+    "logs": [
+      {
+        "stepId": "n2",
+        "index": 2,
+        "name": "签到",
+        "type": "http",
+        "ok": false,
+        "message": "断言失败: 含 /\"code\":0/ (content)",
+        "errorType": "assert",
+        "detail": {
+          "method": "POST",
+          "url": "https://example.org/api/checkin",
+          "response": {
+            "status": 403,
+            "headers": { "content-type": "text/html", "cf-mitigated": "challenge" },
+            "body": "<title>请稍候…</title><div id=\"challenge-platform\">正在校验您的浏览器</div>",
+            "ms": 90
+          }
+        }
+      }
+    ]
+  },
+  "expect": { "rule": "risk-control", "causeIncludes": ["异常访问"] }
+}

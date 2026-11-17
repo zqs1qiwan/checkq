@@ -89,12 +89,3 @@ export function validateFlow(flow, { allowEmptyDraft = true } = {}) {
   if (nodes.length && !starts.length) errors.push('没有起点（所有节点都有入线，流程成环）');
   return errors;
 }
-
-/** 找入口节点：无入边的第一个（多个时取画布最靠左的） */
-export function findEntry(flow) {
-  const nodes = flow.nodes || [];
-  const edges = flow.edges || [];
-  const noIn = nodes.filter((n) => !edges.some((e) => e.target === n.id));
-  if (!noIn.length) return null;
-  return noIn.sort((a, b) => a.x - b.x)[0];
-}

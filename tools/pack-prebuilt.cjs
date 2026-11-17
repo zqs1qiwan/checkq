@@ -25,8 +25,9 @@ if (!fs.existsSync(path.join(dist, 'index.html'))) {
 }
 fs.cpSync(dist, path.join(STAGE, 'web'), { recursive: true });
 
-// 服务端代码
+// 服务端代码与版本文件
 fs.cpSync(path.join(ROOT, 'server', 'src'), path.join(STAGE, 'server', 'src'), { recursive: true });
+fs.cpSync(path.join(ROOT, 'server', 'package.json'), path.join(STAGE, 'server', 'package.json'));
 
 fs.rmSync(OUT, { force: true });
 execSync(`tar -czf "${OUT}" -C "${STAGE}" web server`, { stdio: 'inherit' });

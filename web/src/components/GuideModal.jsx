@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { recordEvent, EVENTS } from '../events.js';
 import Modal from './Modal.jsx';
 import { IconBook } from './Icons.jsx';
 
@@ -65,8 +66,7 @@ const SECTIONS = [
 
 export default function GuideModal({ onClose }) {
   const [tab, setTab] = useState('start');
-  const cur = SECTIONS.find((s) => s.id === tab);
-  return (
+  const cur = SECTIONS.find((s) => s.id === tab);  return (
     <Modal
       title="使用引导"
       onClose={onClose}
@@ -75,7 +75,7 @@ export default function GuideModal({ onClose }) {
     >
       <div className="guide-nav">
         {SECTIONS.map((s) => (
-          <button key={s.id} className={`guide-tab${tab === s.id ? ' active' : ''}`} onClick={() => setTab(s.id)}>{s.title}</button>
+          <button key={s.id} className={`guide-tab${tab === s.id ? ' active' : ''}`} onClick={() => { setTab(s.id); recordEvent(EVENTS.guideStep); }}>{s.title}</button>
         ))}
       </div>
       <div className="guide-body">

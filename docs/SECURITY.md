@@ -16,7 +16,7 @@
 
 - 算法：**scrypt**（N=16384, r=8, p=1, 32 字节输出），每账号 **16 字节随机盐**，存储格式 `salt:hash`（hex）；
 - 比较：`crypto.timingSafeEqual` 常量时间；**用户不存在时也会执行一次等价 scrypt**，避免用响应时间枚举用户名；
-- **明文密码永不落盘**：旧版的 `meta.plainHint`（曾把随机生成的初始密码明文写进 meta.json）已删除，初始密码只在启动日志里打印一次；
+- **明文密码永不落盘**：旧版的 `meta.plainHint` 已删除；初始密码只在启动日志里打印一次，也不写入 `meta.firstRunPassword`；
 - 改密后：其它设备的会话立即失效；新密码不能与当前密码相同；
 - 生产实测：`meta.json` 内 `root has passwordHash: false | plainHint: false`，`passwordHash 格式: scrypt salt:hash ✓`，`明文密码出现在 meta: false`。
 
@@ -36,7 +36,7 @@
 | 会话 Cookie | `qsid`，**httpOnly + SameSite=Strict**，7 天绝对有效期 + 24 小时空闲失效 |
 | 服务端存储 | 按用户记录（创建时间 / 最近活跃 / IP / UA），可列出、可吊销、可「退出所有设备」 |
 | 停用 / 删号 / 改密 / 重置 2FA | 立即吊销该用户所有会话 |
-| API Key | 多把、可命名；**服务端只存 sha256 摘要**，明文只在创建时返回一次；可单独吊销；带 `x-api-key` 头访问 |
+| API Key | 多把、可命名；**服务端只存 sha256 摘要**，明文只在创建时返回一次；可单独吊销；带 `x-api-key` 头访问。旧版单条 `meta.apiKey` 已改为密文落盘 |
 | 登录限流 | 按 IP：10 分钟内 5 次失败即 429；按账号：连续 8 次失败锁定 15 分钟 |
 
 ## 5. 权限矩阵
@@ -153,7 +153,7 @@ API 对照：
 | 风险 | 说明 | 建议 |
 |---|---|---|
 | 明文 HTTP 传输 | 若直接以明文 HTTP 部署，Cookie 与密码在链路上未加密 | 前置 HTTPS 反代（自签或内网证书）并加 HSTS |
-| 单机 JSON 存储 | `meta.json` 明文可读（只有哈希），但**拥有该文件 = 可离线爆破哈希** | 限制文件权限（600）、对 `meta.json` 加密或用系统 keyring；同时 `data/` 目录不进版本库 |
+| 单机 JSON 存储 | `meta.json` 的密码只存 scrypt 哈希，AI Key / 旧 API Key 已加密；但**拥有该文件 = 可离线爆破密码哈希** | 限制文件权限（600）、对 `meta.json` 加密或用系统 keyring；同时 `data/` 目录不进版本库 |
 | 无 Passkey / WebAuthn | 目前是密码 + TOTP | 后续版本可加 WebAuthn 免密登录 |
 | 无异地备份 | `data/` 目录是唯一数据源 | 用「设置 → 备份」定期导出并加密保存到别处 |
 | 审计日志只在本机 | 可被有 root 的人改 | 严重场景可外送到日志系统 |
@@ -205,6 +205,7 @@ ssh root@checkq.local 'docker exec checkq node -e "
 **加密范围**（`server/src/secret.js`）：
 - **变量**：名字命中 `cookie|token|sess|auth|password|passwd|secret|api_key|credential|jwt|bearer|refresh`，或值形态像凭据（长 base64/hex、JWT `eyJ…`、含 `sess=`/`token=` 的 cookie 串）→ 加密；
 - **通知渠道**：`token / key / pass / password / secret / url / user` 等字段 → 加密（Telegram bot token、SMTP 密码、webhook URL 里的签名都在内）；
+- **meta**：`meta.ai.apiKey`（AI 助手模型密钥）与旧版 `meta.apiKey` → 加密；密码仍只存 scrypt 哈希；
 - **不加密**：普通变量（如 `ua`、`site`）、流程图、脚本代码、日志记录 —— 保持可读、可 diff、可 grep。
 
 **工作方式**：

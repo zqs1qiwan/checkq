@@ -1,0 +1,23 @@
+{
+  "name": "缺变量：cookie 未填",
+  "flow": { "name": "新任务", "nodes": [] },
+  "run": {
+    "id": "run-missing",
+    "status": "failed",
+    "finalMessage": "第 1 步「签到」失败",
+    "logs": [
+      {
+        "stepId": "n1",
+        "index": 1,
+        "name": "签到",
+        "type": "http",
+        "ok": false,
+        "message": "请求失败: invalid URL",
+        "errorType": "network",
+        "missing": ["cookie"],
+        "detail": { "method": "POST", "url": "", "response": { "status": 0, "body": "" } }
+      }
+    ]
+  },
+  "expect": { "rule": "missing-var", "causeIncludes": ["cookie"] }
+}

@@ -1,4 +1,7 @@
-/** 共享小工具：时间格式化、敏感字段判定（全站唯一来源，避免各组件各写一份） */
+/** 共享小工具：时间格式化、敏感字段判定、渠道清单、文件下载（全站唯一来源） */
+
+// 与服务端 secret.js 共用同一份判定，避免前后端口径漂移
+export { isSensitiveName } from '../../server/src/sensitive-name.js';
 
 const p2 = (n) => String(n).padStart(2, '0');
 
@@ -34,26 +37,38 @@ export function fmtAgo(ts) {
   return fmtDateTime(ts);
 }
 
-/** 变量名是否敏感（与后端 secret.js 的 isSensitiveName 同口径） */
-export function isSensitiveName(name) {
-  return /cookie|token|sess|auth|password|passwd|secret|api[_-]?key|credential|jwt|bearer|refresh/i.test(String(name || ''));
-}
+/**
+ * 渠道清单唯一来源：[type, 短名（列表/详情用）, 完整标签（编辑器下拉用）]。
+ * CHANNEL_LABELS 与 CHANNEL_TYPE_OPTIONS 都从这里派生，不再跨文件手工同步。
+ */
+export const CHANNEL_TYPE_OPTIONS = [
+  ['inbox', '站内通知', '站内通知（无需外部服务）'],
+  ['webhook', 'Webhook', 'Webhook（通用 JSON）'],
+  ['bark', 'Bark', 'Bark（iOS）'],
+  ['telegram', 'Telegram', 'Telegram Bot'],
+  ['serverchan', 'Server酱', 'Server酱 Turbo'],
+  ['pushplus', 'PushPlus', 'PushPlus（微信）'],
+  ['dingtalk', '钉钉', '钉钉机器人'],
+  ['wecom', '企业微信', '企业微信机器人'],
+  ['feishu', '飞书', '飞书机器人'],
+  ['gotify', 'Gotify', 'Gotify（自建推送）'],
+  ['ntfy', 'ntfy', 'ntfy（自建/公共）'],
+  ['email', '邮件', '邮件（SMTP）'],
+];
 
-/** 渠道类型 → 中文名（与编辑器通知面板一致） */
-export const CHANNEL_LABELS = {
-  inbox: '站内通知',
-  webhook: 'Webhook',
-  bark: 'Bark',
-  telegram: 'Telegram',
-  serverchan: 'Server酱',
-  pushplus: 'PushPlus',
-  dingtalk: '钉钉',
-  wecom: '企业微信',
-  feishu: '飞书',
-  gotify: 'Gotify',
-  ntfy: 'ntfy',
-  email: '邮件',
-};
+/** 渠道 type → 短中文名（任务详情 / 列表展示） */
+export const CHANNEL_LABELS = Object.fromEntries(CHANNEL_TYPE_OPTIONS.map(([k, short]) => [k, short]));
+
+/** 下载 JSON 文件（模板导出 / 脱敏备份 / 完整备份共用） */
+export function downloadJson(filename, data) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
 
 /** 角色 → 中文名 */
 export const ROLE_LABELS = { admin: '管理员', operator: '操作员', viewer: '只读' };

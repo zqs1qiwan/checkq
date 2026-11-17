@@ -5,16 +5,18 @@ import LogStream from './LogStream.jsx';
 import Modal from './Modal.jsx';
 import Dropdown from './Dropdown.jsx';
 import TaskDetailModal from './TaskDetailModal.jsx';
-import { IconBell, IconGear, IconGlobe } from './Icons.jsx';
+import { IconBell, IconGear, IconGlobe, IconMore } from './Icons.jsx';
+import Logo, { BrandMark } from './Logo.jsx';
 import { confirmDialog } from '../confirm.jsx';
-import { ROLE_LABELS } from '../util.js';
+import { ROLE_LABELS, downloadJson } from '../util.js';
 import { getTheme, setTheme } from '../theme.js';
 import { fmtTime, setToast } from './flow-list/helpers.js';
-import WizardModal, { buildWizardFlow, parseNatural } from './flow-list/wizard.jsx';
+import { recordEvent, EVENTS } from '../events.js';
+import WizardModal from './flow-list/wizard.jsx';
 import SettingsModal from './flow-list/settings.jsx';
+import VarsQuickModal from './flow-list/vars-quick.jsx';
+import MarketPanel from './flow-list/market.jsx';
 import { InstantiateModal, CurlImportModal, CsvImportModal, NotificationsModal, RestoreModal, TemplateEditorModal, BackupFullModal, GroupAssignModal } from './flow-list/modals.jsx';
-
-export { buildWizardFlow, parseNatural };
 
 export default function FlowList({ onOpen, onLogout }) {
   const [flows, setFlows] = useState(null);
@@ -26,8 +28,8 @@ export default function FlowList({ onOpen, onLogout }) {
   const [filter, setFilter] = useState('all'); // all | scheduled | recent-failed
   const [stats, setStats] = useState(null);
   const [notifOpen, setNotifOpen] = useState(false);
-  const [viewTab, setViewTab] = useState('flows'); // 首页大 tab：任务 / 模板
-  const [marketUrl, setMarketUrl] = useState('');
+  const [viewTab, setViewTab] = useState('flows'); // 首页大 tab：任务 / 模板 / 市场
+  const [features, setFeatures] = useState(null); // { demo: true } 演练场是否可用
   const [unread, setUnread] = useState(0);
   const [me, setMe] = useState(null);
   const [, setThemeTick] = useState(0); // 移动端「切换主题」后强制重渲染菜单文案
@@ -38,7 +40,6 @@ export default function FlowList({ onOpen, onLogout }) {
     try { return new Set(JSON.parse(localStorage.getItem('checkq-group-collapsed') || '[]')); } catch { return new Set(); }
   });
   const fileRef = useRef();
-  const editTemplateRef = useRef(); // 模板编辑页回调刷新
 
   // 首次按「大分组默认收起」初始化：≥8 个任务的分组（含未分组）先收起，用户操作后以 localStorage 为准
   useEffect(() => {
@@ -61,6 +62,9 @@ export default function FlowList({ onOpen, onLogout }) {
   };
 
   useEffect(() => { load(); }, []);
+
+  // 演练场是否可用（P0-1）：以服务端开关为准，不自己写死
+  useEffect(() => { api.features().then(setFeatures).catch(() => setFeatures({ demo: false })); }, []);
 
   // 当前登录身份（用户名 / 角色）
   useEffect(() => {
@@ -199,10 +203,19 @@ export default function FlowList({ onOpen, onLogout }) {
     load();
   };
 
-  const runNow = async (f) => {
+  const runNow = async (f, opts = {}) => {
+    if (running === f.id) {
+      setToast({ kind: 'fail', text: '已在运行，本次未重复提交' });
+      return;
+    }
     setRunning(f.id);
+    recordEvent(EVENTS.runQuick);
     try {
-      const run = await api.runFlow(f.id);
+      const run = await api.runFlow(f.id, { dedupe: true, ...(opts.debug ? { debug: true } : {}) });
+      if (run && run.deduped) {
+        setToast({ kind: 'fail', text: '已在运行，本次未重复提交' });
+        return;
+      }
       load();
       // 统一日志入口：运行完直接看连续日志流（最新一次在最下面）
       setModal({ type: 'logstream', flowId: f.id, flowName: f.name, refresh: Date.now() });
@@ -212,6 +225,18 @@ export default function FlowList({ onOpen, onLogout }) {
     } finally {
       setRunning(null);
     }
+  };
+
+  /** 演练场（P0-1）：建一条内置演示任务并直接进画布，跑通一次再换成自己的站点 */
+  const startDemo = async () => {
+    setRunning('demo');
+    try {
+      const f = await api.demoFlow(window.location.origin);
+      setToast({ kind: 'ok', text: '演示任务已就绪，先点运行试一遍' });
+      onOpen(f.id);
+    } catch (e) {
+      setToast({ kind: 'fail', text: `演练任务创建失败: ${e.message}` });
+    } finally { setRunning(null); }
   };
 
   const openLog = async (f) => {
@@ -231,24 +256,37 @@ export default function FlowList({ onOpen, onLogout }) {
     );
   };
 
+  // 自动停用状态附带恢复探测信息，避免管理页只能看到「已暂停」而不知道还会不会再跑
+  const pausedTitle = (f) => {
+    const base = f.pausedReason ? `已暂停：${f.pausedReason}` : '已暂停';
+    const rec = f.recovery;
+    if (!rec?.enabled) return base;
+    if (rec.exhausted) return `${base}；自动恢复已停止（${rec.attempts}/${rec.maxAttempts} 次失败）`;
+    return `${base}；自动恢复每 ${rec.intervalMinutes} 分钟探测一次`;
+  };
+
   if (flows === null) return <div className="boot">加载中…</div>;
+  const readOnly = me?.role === 'viewer';
+  const demoOn = features ? features.demo !== false : false;
 
   return (
     <>
       <a className="skip-link" href="#main">跳到主要内容</a>
       <header className="topbar">
-        <span className="logo" aria-label="CheckQ">
-          <span className="logo-mark" aria-hidden="true">
-            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M4 12.5l5 5L20 6.5" />
-            </svg>
-          </span>
-          {'Check'}<em>Q</em>
-        </span>
+        <Logo size={22} wordSize={15} className="topbar-brand" />
         <span className="spacer" />
-        <button className="primary new-task-btn" aria-label="新建任务" title="新建任务" onClick={() => setModal('new')}>
-          <span className="btn-label">+ 新建任务</span>
-        </button>
+        <Dropdown
+          trigger={<span className="btn-label">+ 新建</span>}
+          caret
+          triggerClass="new-task-btn"
+          width={200}
+          ariaLabel="新建任务"
+        >
+          <button onClick={() => setModal('new')} disabled={readOnly}>空白流程</button>
+          <button onClick={() => setViewTab('tpls')} disabled={readOnly}>从模板</button>
+          <button onClick={() => setModal('import')} disabled={importBusy || readOnly}>导入 HAR / JSON</button>
+          <button onClick={() => setModal('curl')} disabled={importBusy || readOnly}>导入 cURL 命令</button>
+        </Dropdown>
         <Dropdown
           trigger={<span className="dd-label">更多</span>}
           caret
@@ -256,9 +294,7 @@ export default function FlowList({ onOpen, onLogout }) {
           width={210}
           ariaLabel="更多操作"
         >
-          <button onClick={() => setModal('wizard')}>快速组装</button>
-          <button onClick={() => setModal('curl')} disabled={importBusy}>导入 cURL 命令</button>
-          <button onClick={() => setModal('import')} disabled={importBusy}>导入 HAR / JSON</button>
+          <button onClick={() => { recordEvent(EVENTS.wizardOpen); setModal('wizard'); }} disabled={readOnly}>快速组装</button>
           <div className="menu-sep mobile-only" />
           {/* 窄屏：顶栏只保留「新建 / 更多 / 设置」，其余动作收进这里，避免按钮被挤到换行 */}
           <button className="mobile-only" onClick={() => {
@@ -331,7 +367,15 @@ export default function FlowList({ onOpen, onLogout }) {
         <div className="big-tabs">
           <button className={viewTab === 'flows' ? 'on' : ''} onClick={() => setViewTab('flows')}>任务 <em>{flows?.length ?? 0}</em></button>
           <button className={viewTab === 'tpls' ? 'on' : ''} onClick={() => setViewTab('tpls')}>模板 <em>{templates?.length ?? 0}</em></button>
+          <button className={viewTab === 'market' ? 'on' : ''} onClick={() => setViewTab('market')}>市场</button>
         </div>
+
+        {viewTab === 'market' && (
+          <MarketPanel
+            onToast={(text, kind) => setToast({ kind, text })}
+            onImported={() => { load(); }}
+          />
+        )}
 
         {viewTab === 'tpls' && (
         <>
@@ -350,18 +394,13 @@ export default function FlowList({ onOpen, onLogout }) {
                 </div>
                 <div className="tpl-actions">
                   <button className="small primary" onClick={() => setModal({ type: 'instantiate', tpl: t })}>+ 创建任务</button>
-                  <Dropdown trigger="···" triggerClass="dd-row" align="right" width={170} ariaLabel="模板更多操作">
+                  <Dropdown trigger={<IconMore />} triggerClass="dd-row" align="right" width={170} ariaLabel="模板更多操作">
                     <button onClick={() => setModal({ type: 'csv', tpl: t })}>批量创建</button>
                     <button onClick={() => setModal({ type: 'template-editor', tpl: t })}>管理模板</button>
                     <button onClick={async () => {
                       try {
                         const data = await api.exportTemplate(t.id);
-                        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-                        const a = document.createElement('a');
-                        a.href = URL.createObjectURL(blob);
-                        a.download = `${t.name.replace(/[\\/:*?"<>|]/g, '_')}.json`;
-                        a.click();
-                        URL.revokeObjectURL(a.href);
+                        downloadJson(`${t.name.replace(/[\\/:*?"<>|]/g, '_')}.json`, data);
                       } catch (e) {
                         setToast({ kind: 'fail', text: `导出失败: ${e.message}` });
                       }
@@ -384,19 +423,10 @@ export default function FlowList({ onOpen, onLogout }) {
 
         <div className="page-head" style={{ marginTop: 20 }}>
           <h2>模板市场</h2>
-          <span style={{ color: 'var(--muted)', fontSize: 12 }}>从 JSON 索引地址导入一批模板</span>
+          <span style={{ color: 'var(--muted)', fontSize: 12 }}>从索引订阅一批模板</span>
         </div>
         <div className="field-inline" style={{ maxWidth: 560 }}>
-          <div className="field" style={{ flex: '1 1 auto' }}>
-            <label>索引地址</label>
-            <input className="mono" placeholder="https://example.com/templates.json" value={marketUrl} onChange={(e) => setMarketUrl(e.target.value)} />
-          </div>
-          <div className="field" style={{ flex: '0 0 auto', display: 'flex', alignItems: 'flex-end' }}>
-            <button className="small" onClick={async () => {
-              try { await api.templateFromUrl(marketUrl); setMarketUrl(''); load(); setToast({ kind: 'ok', text: '模板已导入' }); }
-              catch (e) { setToast({ kind: 'fail', text: e.message }); }
-            }}>导入</button>
-          </div>
+          <button className="small" onClick={() => setViewTab('market')}>去市场浏览</button>
         </div>
         </>
         )}
@@ -416,7 +446,7 @@ export default function FlowList({ onOpen, onLogout }) {
               <button className="small" onClick={() => setSelected(new Set())}>取消</button>
             </span>
           )}
-          <button className={`small ${batchMode ? 'primary' : ''}`} title={batchMode ? '退出批量模式' : '进入批量模式：可勾选多个任务一起操作'} onClick={() => { setBatchMode((v) => !v); setSelected(new Set()); }}>
+          <button className={`small ${batchMode ? 'primary' : ''}`} hidden={readOnly} title={batchMode ? '退出批量模式' : '进入批量模式：可勾选多个任务一起操作'} onClick={() => { setBatchMode((v) => !v); setSelected(new Set()); }}>
             {batchMode ? '退出批量' : '批量管理'}
           </button>
           <input
@@ -446,16 +476,11 @@ export default function FlowList({ onOpen, onLogout }) {
           )}
           </div>
           <span className="spacer" />
-          <div className="toolbar-right">
+          <div className="toolbar-right" hidden={readOnly}>
           <button className="small" title="下载脱敏备份（cookie/token 等凭据已清空，适合分享与存档）" onClick={async () => {
             try {
               const data = await api.backup();
-              const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-              const a = document.createElement('a');
-              a.href = URL.createObjectURL(blob);
-              a.download = `checkq-backup-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.json`;
-              a.click();
-              URL.revokeObjectURL(a.href);
+              downloadJson(`checkq-backup-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.json`, data);
               setToast({ kind: 'ok', text: '备份已下载（凭据已脱敏）' });
             } catch (e) { setToast({ kind: 'fail', text: e.message }); }
           }}>备份</button>
@@ -466,7 +491,13 @@ export default function FlowList({ onOpen, onLogout }) {
 
         {visibleFlows.length === 0 ? (
           <div className="empty">
-            <p>{(search || filter !== 'all') ? '没有匹配的任务。' : '还没有任务。从上方模板创建，或「+ 新建任务」从零开始搭建。'}</p>
+            {!search && filter === 'all' && <BrandMark size={38} className="empty-mark" />}
+            <p>{(search || filter !== 'all') ? '没有匹配的任务。' : '还没有任务。「+ 新建」里选空白流程、从模板或导入 HAR / cURL。'}</p>
+            {!search && filter === 'all' && !readOnly && demoOn && (
+              <button className="small primary" disabled={running === 'demo'} onClick={startDemo}>
+                {running === 'demo' ? '准备中…' : '先演练一遍（内置演示站点）'}
+              </button>
+            )}
           </div>
         ) : (
           <div className="table-scroll" role="region" aria-label="任务列表" tabIndex={0}>
@@ -522,29 +553,42 @@ export default function FlowList({ onOpen, onLogout }) {
                           <td className="col-next">
                             {f.nextRunAt ? <span style={{ fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap' }}>{fmtTime(f.nextRunAt)}</span> : <span style={{ color: 'var(--muted)', fontSize: 12 }}>—</span>}
                           </td>
-                          <td style={{ whiteSpace: 'nowrap', fontSize: 12, color: f.enabled ? 'var(--ok)' : 'var(--muted)' }}>
-                            <span className={`status-dot${f.enabled ? ' on' : ''}`} />{f.enabled ? '已启用' : '已停用'}
+                          <td style={{ whiteSpace: 'nowrap', fontSize: 12, color: f.enabled ? 'var(--ok)' : (f.pausedAt ? 'var(--warn)' : 'var(--muted)') }}>
+                            <span className={`status-dot${f.enabled ? ' on' : (f.pausedAt ? ' paused' : '')}`} />
+                            {f.enabled ? '已启用' : (f.pausedAt ? <span title={pausedTitle(f)}>已暂停</span> : '已停用')}
                           </td>
                           <td className="col-last">{lastStatus(f)}</td>
                           <td>
                             <div className="cell-actions">
-                              <button className="small row-run" disabled={running === f.id} title={running === f.id ? '正在运行…' : '立即运行一次'}
-                                onClick={() => runNow(f)}>{running === f.id ? '运行中' : '运行'}</button>
-                              <button className="small" title="查看运行日志（每天的签到记录都在这里）" onClick={() => openLog(f)}>日志</button>
-                              <Dropdown trigger="···" triggerClass="dd-row" align="right" width={170} ariaLabel="任务更多操作">
-                                <button onClick={() => onOpen(f.id)}>编辑流程</button>
-                                <button onClick={async () => {
-                                  try {
-                                    await api.cloneFlow(f.id);
-                                    setToast({ kind: 'ok', text: '已克隆为副本（调度暂停）' });
-                                    load();
-                                  } catch (e) {
-                                    setToast({ kind: 'fail', text: e.message });
-                                  }
-                                }}>复制副本</button>
-                                <button onClick={() => toggle(f)}>{f.enabled ? '停用调度' : '启用调度'}</button>
-                                <button className="danger-text" onClick={() => del(f)}>删除</button>
+                              <Dropdown
+                                trigger={<span className="run-trigger-label">{running === f.id ? '运行中' : '运行'}</span>}
+                                caret
+                                triggerClass="dd-run"
+                                align="right"
+                                width={190}
+                                ariaLabel={`运行「${f.name}」`}
+                              >
+                                <button disabled={readOnly || running === f.id} onClick={() => runNow(f)}>立即运行</button>
+                                <button disabled={readOnly} onClick={() => setModal({ type: 'vars', flow: f })}>带改变量运行</button>
+                                <button onClick={() => openLog(f)}>只看日志</button>
+                                <button disabled={readOnly} onClick={() => runNow(f, { debug: true })}>调试运行</button>
                               </Dropdown>
+                              {!readOnly && (
+                                <Dropdown trigger={<IconMore />} triggerClass="dd-row" align="right" width={170} ariaLabel="任务更多操作">
+                                  <button onClick={() => onOpen(f.id)}>编辑流程</button>
+                                  <button onClick={async () => {
+                                    try {
+                                      await api.cloneFlow(f.id);
+                                      setToast({ kind: 'ok', text: '已克隆为副本（调度暂停）' });
+                                      load();
+                                    } catch (e) {
+                                      setToast({ kind: 'fail', text: e.message });
+                                    }
+                                  }}>复制副本</button>
+                                  <button onClick={() => toggle(f)}>{f.enabled ? '停用调度' : '启用调度'}</button>
+                                  <button className="danger-text" onClick={() => del(f)}>删除</button>
+                                </Dropdown>
+                              )}
                             </div>
                           </td>
                         </tr>
@@ -621,6 +665,15 @@ export default function FlowList({ onOpen, onLogout }) {
         />
       )}
 
+      {modal?.type === 'vars' && (
+        <VarsQuickModal
+          flow={modal.flow}
+          onClose={() => setModal(null)}
+          onDone={() => { const f = modal.flow; setModal(null); load(); setModal({ type: 'logstream', flowId: f.id, flowName: f.name, refresh: Date.now() }); }}
+          onToast={(text, kind) => setToast({ kind, text })}
+        />
+      )}
+
       {modal === 'backup-full' && <BackupFullModal onClose={() => setModal(null)} />}
 
       {modal === 'restore' && (
@@ -640,10 +693,6 @@ export default function FlowList({ onOpen, onLogout }) {
         <SettingsModal onClose={() => setModal(null)} />
       )}
 
-      {modal === 'settings-api' && (
-        <SettingsModal onClose={() => setModal(null)} initialTab="api" />
-      )}
-
       {notifOpen && (
         <NotificationsModal onClose={() => { setNotifOpen(false); api.notifications(1).then((r) => setUnread(r.unread || 0)).catch(() => {}); }} />
       )}
@@ -651,5 +700,3 @@ export default function FlowList({ onOpen, onLogout }) {
     </>
   );
 }
-
-/** 从模板创建任务：填任务名 + 覆盖变量 */

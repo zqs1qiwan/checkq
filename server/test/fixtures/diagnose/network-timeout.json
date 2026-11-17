@@ -1,0 +1,22 @@
+{
+  "name": "网络：请求超时",
+  "flow": { "name": "定时查询", "nodes": [] },
+  "run": {
+    "id": "run-timeout",
+    "status": "failed",
+    "finalMessage": "第 1 步「查询」失败",
+    "logs": [
+      {
+        "stepId": "n1",
+        "index": 1,
+        "name": "查询",
+        "type": "http",
+        "ok": false,
+        "message": "请求失败: timeout of 10000ms exceeded",
+        "errorType": "network",
+        "detail": { "method": "GET", "url": "https://example.org/api/list" }
+      }
+    ]
+  },
+  "expect": { "rule": "network", "causeIncludes": ["超时"] }
+}

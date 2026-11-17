@@ -16,20 +16,25 @@ async function req(method, url, body, isForm = false) {
     }
   }
   const r = await fetch(url, opts);
-  if (r.status === 401) {
-    if (on401) on401();
-    throw new Error('未登录');
-  }
   const ct = r.headers.get('content-type') || '';
   const data = ct.includes('json') ? await r.json().catch(() => ({})) : await r.text();
-  if (!r.ok) throw new Error((data && data.error) || `HTTP ${r.status}`);
+  const withBody = (message) => {
+    const err = new Error(message);
+    err.status = r.status;
+    err.data = data;   // 保留结构化字段（如登录接口的 needTotp）
+    return err;
+  };
+  if (r.status === 401) {
+    if (on401) on401();
+    throw withBody('未登录');
+  }
+  if (!r.ok) throw withBody((data && data.error) || `HTTP ${r.status}`);
   return data;
 }
 
 export const api = {
   login: (username, password, code) => req('POST', '/api/login', { username, password, code }),
   bootstrap: () => req('GET', '/api/system/bootstrap'),
-  setupPassword: (password) => req('POST', '/api/system/bootstrap', { password }),
   setupAccount: (username, password) => req('POST', '/api/system/bootstrap', { username, password }),
   logout: () => req('POST', '/api/logout', {}),
   me: () => req('GET', '/api/me'),
@@ -60,7 +65,7 @@ export const api = {
   createFlow: (flow) => req('POST', '/api/flows', flow),
   updateFlow: (id, patch) => req('PUT', `/api/flows/${id}`, patch),
   deleteFlow: (id) => req('DELETE', `/api/flows/${id}`),
-  runFlow: (id, debugStopId, debug) => req('POST', `/api/flows/${id}/run`, { ...(debugStopId ? { debugStopId } : {}), ...(debug ? { debug: true } : {}) }),
+  runFlow: (id, body = {}) => req('POST', `/api/flows/${id}/run`, body),
   // 单次运行导出 HAR（服务端已脱敏）；返回 Blob 供前端下载
   downloadRunHar: async (id) => {
     const r = await fetch(`/api/runs/${id}/har`, { credentials: 'include' });
@@ -75,12 +80,12 @@ export const api = {
     return r.blob();
   },
   // SSE 流式运行（PRD §4.7.3）：onStart/onLog 实时回调，返回完整 run 对象
-  runFlowStream: async (id, { debugStopId, debug, onStart, onLog } = {}) => {
+  runFlowStream: async (id, { debugStopId, debug, dedupe = true, onStart, onLog } = {}) => {
     const res = await fetch(`/api/flows/${id}/run`, {
       method: 'POST',
       credentials: 'include',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ stream: true, ...(debugStopId ? { debugStopId } : {}), ...(debug ? { debug: true } : {}) }),
+      body: JSON.stringify({ stream: true, ...(dedupe ? { dedupe: true } : {}), ...(debugStopId ? { debugStopId } : {}), ...(debug ? { debug: true } : {}) }),
     });
     if (res.status === 401) {
       if (on401) on401();
@@ -88,6 +93,7 @@ export const api = {
     }
     if (!res.ok || !res.headers.get('content-type')?.includes('text/event-stream')) {
       const data = await res.json().catch(() => ({}));
+      if (data && data.deduped) return { deduped: true, message: data.message, status: 'running', logs: [] };
       throw new Error(data.error || `HTTP ${res.status}`);
     }
     const reader = res.body.getReader();
@@ -122,7 +128,6 @@ export const api = {
   // templates
   templates: () => req('GET', '/api/templates'),
   template: (id) => req('GET', `/api/templates/${id}`),
-  createTemplate: (tpl) => req('POST', '/api/templates', tpl),
   saveFlowAsTemplate: (flowId, name, desc) => req('POST', `/api/templates/from-flow/${flowId}`, { name, desc }),
   updateTemplate: (id, patch) => req('PUT', `/api/templates/${id}`, patch),
   deleteTemplate: (id) => req('DELETE', `/api/templates/${id}`),
@@ -132,9 +137,7 @@ export const api = {
   importCurl: (command) => req('POST', '/api/import/curl', { command }),
   importHar: (formData) => req('POST', '/api/import/har', formData, true),
   stats: () => req('GET', '/api/system/stats'),
-  systemSettings: () => req('GET', '/api/system/settings'),
   changePassword: (oldPassword, newPassword) => req('POST', '/api/system/password', { oldPassword, newPassword }),
-  genApiKey: () => req('POST', '/api/system/apikey', {}),
   aiSettings: () => req('GET', '/api/system/ai'),
   saveAiSettings: (cfg) => req('PUT', '/api/system/ai', cfg),
   aiGenerate: (sentence) => req('POST', '/api/ai/generate', { sentence }),
@@ -144,6 +147,11 @@ export const api = {
   notifyTest: (flowId) => req('POST', `/api/flows/${flowId}/notify-test`, {}),
   dailySummary: (flowId) => req('POST', '/api/system/daily-summary', flowId ? { flowId } : {}),
   pushDailySummary: (opts) => req('POST', '/api/system/daily-summary', opts || {}),
+  systemNotify: () => req('GET', '/api/system/notify'),
+  saveSystemNotify: (body) => req('PUT', '/api/system/notify', body),
+  previewSystemNotify: (date) => req('POST', '/api/system/notify/preview', date ? { date } : {}),
+  testSystemNotify: (channelId) => req('POST', '/api/system/notify/test', channelId ? { channelId } : {}),
+  sendSystemNotify: (body) => req('POST', '/api/system/notify/send', body || {}),
   batch: (ids, action, extra = {}) => req('POST', '/api/flows/batch', { ids, action, ...extra }),
   browserLoginStart: (flowId, url) => req('POST', '/api/browser-login/start', { flowId, url }),
   browserLoginCapture: (flowId, tabId) => req('POST', '/api/browser-login/capture', { flowId, tabId }),
@@ -157,4 +165,23 @@ export const api = {
   uiSettings: () => req('GET', '/api/system/ui'),
   pushTargets: () => req('GET', '/api/system/push-targets'),
   saveUiSettings: (patch) => req('PUT', '/api/system/ui', patch),
+
+  // ---- v0.5 新增 ----
+  // 功能开关（演练场是否可用）
+  features: () => req('GET', '/api/system/features'),
+  // 演练场：内置演示任务（重复调用复用同一条）
+  demoFlow: (origin) => req('POST', '/api/demo/flow', { origin }),
+  // 度量（P0-6，只算本机）
+  metrics: (days = 7) => req('GET', `/api/system/metrics?days=${days}`),
+  recordEvent: (name) => req('POST', '/api/system/events', { name }),
+  // 结构检查（P0-2）：详情里已带 structure，这里给"只取结构"的场景用
+  structure: (id) => req('GET', `/api/flows/${id}`).then((f) => f.structure || null),
+  // 模板市场（P0-5）
+  marketSubscriptions: () => req('GET', '/api/market/subscriptions'),
+  marketIndex: (url) => req('GET', `/api/market/index?url=${encodeURIComponent(url)}`),
+  marketPreview: (url, id) => req('POST', '/api/market/preview', { url, id }),
+  marketImport: (url, id, mode) => req('POST', '/api/market/import', { url, id, mode }),
+  marketSubscribe: (url) => req('POST', '/api/market/subscribe', { url }),
+  marketUnsubscribe: (url) => req('DELETE', `/api/market/subscribe?url=${encodeURIComponent(url)}`),
+  marketAck: (url, count) => req('POST', '/api/market/ack', { url, count }),
 };

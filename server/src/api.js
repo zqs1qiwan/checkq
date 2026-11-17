@@ -1,4 +1,4 @@
-﻿/**
+/**
  * CheckQ API server — Fastify
  * 认证: cookie session + 可选 X-API-Key（自动化）
  * run 接口: 同步返回完整结果（流程通常 < 60s）
@@ -11,8 +11,6 @@ import multipart from '@fastify/multipart';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import net from 'node:net';
-import tls from 'node:tls';
 import { fileURLToPath } from 'node:url';
 
 import { Store, hashPwd, verifyPwd } from './store.js';
@@ -27,6 +25,16 @@ import { parseCurl } from './curl-import.js';
 import { Scheduler } from './scheduler.js';
 import { runWithRetry, normalizeRetry, attemptLabel } from './retry.js';
 import { runToHar } from './har-export.js';
+import { VERSION } from './version.js';
+import { analyzeStructure } from './structure.js';
+import { diagnose } from './diagnose.js';
+import { shouldAutoPause, applyAutoPause } from './auto-pause.js';
+import { normalizeRecovery, afterProbeFailure, afterProbeSuccess, nextProbeTime } from './recovery.js';
+import { isDemoEnabled, demoProfile, demoCheckin, demoItems, demoReset, ensureDemoFlow, originOf } from './demo.js';
+import { computeMetrics, bumpEvents, EVENT_NAMES } from './metrics.js';
+import { sendToChannels as sendChannelsCore, SUMMARY_CHANNEL_TYPES } from './notify.js';
+import { createLimiter } from './concurrency.js';
+import { parseIndex, resolveEntry, previewOf, fetchJson, MARKET_LIMITS } from './market.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -39,13 +47,7 @@ function shellQuote(s) {
 export function buildServer({ dataDir, port }) {
   const store = new Store(dataDir);
   const app = Fastify({ logger: false, bodyLimit: 32 * 1024 * 1024 });
-  // 容器 stop/restart 会发 SIGTERM：先立即落盘再退出，避免丢掉 400ms 节流窗口内的配置变更
-  const flushExit = () => {
-    store.flush();
-    process.exit(0);
-  };
-  process.once('SIGTERM', flushExit);
-  process.once('SIGINT', flushExit);
+  // 进程退出（SIGTERM/SIGINT）由 startServer 统一处理：停调度器 + 落盘
   const sessions = new Map(); // qsid -> { userId, createdAt, lastSeenAt, ip, ua, expiresAt }
   const SESSION_TTL = 7 * 24 * 3600e3;   // 绝对有效期 7 天
   const SESSION_IDLE = 24 * 3600e3;       // 空闲 24 小时失效
@@ -98,34 +100,40 @@ export function buildServer({ dataDir, port }) {
   }
 
   const runningFlows = new Set();
+  const manualInFlight = new Set(); // 手动触发的在途请求（同步占位，避免并发点击跑两遍）
   const queueMap = new Map(); // flowId -> Promise 链（运行排队：同 flow 串行执行）
   const enqueueRun = (flowId, fn) => {
     const prev = queueMap.get(flowId) || Promise.resolve();
     let release;
     const cur = new Promise((res) => { release = res; });
-    queueMap.set(flowId, prev.then(() => cur));
-    return prev.then(async () => {
+    // 上一轮即使异常结束，也不能毒化整条队列：吞掉旧错误后继续排队。
+    const tail = prev.catch(() => {});
+    queueMap.set(flowId, tail.then(() => cur));
+    return tail.then(async () => {
       try { return await fn(); } finally { release(); }
     });
   };
   const queuedSet = new Set(); // 等待中的 flowId（排队中徽章）
+  const runLimiter = createLimiter(process.env.CHECKQ_MAX_CONCURRENCY || 4);
   const runner = {
-    async runFlow(flow, trigger, { debugStopId, onLog, debug } = {}) {
-      const isQueued = runningFlows.has(flow.id);
-      if (isQueued) queuedSet.add(flow.id);
+    async runFlow(flow, trigger, { debugStopId, onLog, debug, notify = true } = {}) {
+      queuedSet.add(flow.id);
       try {
         return await enqueueRun(flow.id, async () => {
+          await runLimiter.acquire();
           runningFlows.add(flow.id);
           queuedSet.delete(flow.id);
+          try {
           const runId = crypto.randomUUID();
           const run = {
             id: runId, flowId: flow.id, flowName: flow.name, trigger,
             startedAt: Date.now(), status: 'running', logs: [], vars: {}, finalMessage: '',
             attempts: [],
           };
-          // 任务级重试：调试运行不重试（要看到断点处的真实失败）
+          // 任务级重试：调试运行不重试（要看到断点处的真实失败）；恢复探测也不重试，
+          // 否则一次探测会连续打多次请求，绕过“最多探测 N 次”的风控上限。
           const cfg = normalizeRetry(flow.retry);
-          if (debugStopId) cfg.enabled = false;
+          if (debugStopId || trigger === 'probe') cfg.enabled = false;
           const maxAttempts = cfg.enabled ? cfg.maxAttempts : 1;
           let lastMessage = '';
           try {
@@ -176,8 +184,6 @@ export function buildServer({ dataDir, port }) {
           } catch (err) {
             run.status = 'failed';
             run.finalMessage = `引擎异常: ${err.message}`;
-          } finally {
-            runningFlows.delete(flow.id);
           }
           if (!run.logs.length && run.finalMessage) {
             run.logs = [{
@@ -190,9 +196,77 @@ export function buildServer({ dataDir, port }) {
           if (run.attempts.length > 1) {
             run.finalMessage = `${run.finalMessage || (run.status === 'success' ? '执行成功' : '执行失败')}（第 ${run.attempts.length}/${maxAttempts} 次尝试）`;
           }
+          // 可解释失败（P0-3）：失败运行带一份诊断（纯函数、不重跑、只给证据与动作）
+          if (run.status === 'failed') {
+            try { run.diagnosis = diagnose({ run, flow }); } catch { run.diagnosis = null; }
+          }
+          // 恢复探测（v0.6.1）：探测失败不改变调度，只累计次数；成功才重新启用
+          if (trigger === 'probe') {
+            try {
+              const rec = normalizeRecovery(flow.recovery);
+              if (run.status === 'success') {
+                const next = afterProbeSuccess(rec);
+                store.updateFlow(flow.id, { enabled: true, pausedAt: null, pausedReason: '', recovery: next });
+                scheduler.rebuild();
+                run.recovered = true;
+                run.recovery = { attempt: rec.attempts + 1, maxAttempts: rec.maxAttempts, outcome: 'success' };
+                store.addNotification({
+                  title: '任务已自动恢复',
+                  content: `任务「${flow.name}」恢复探测成功，调度已重新启用。`,
+                  level: 'success',
+                  flowId: flow.id,
+                  flowName: flow.name,
+                });
+              } else {
+                const next = afterProbeFailure(rec);
+                store.updateFlow(flow.id, { recovery: next });
+                run.recovery = { attempt: next.attempts, maxAttempts: next.maxAttempts, outcome: 'failed', exhausted: next.exhausted };
+                if (next.exhausted) {
+                  store.addNotification({
+                    title: '自动恢复已停止',
+                    content: `任务「${flow.name}」连续 ${next.attempts} 次恢复探测失败，已停止自动探测；请手动检查账号或站点。`,
+                    level: 'fail',
+                    flowId: flow.id,
+                    flowName: flow.name,
+                  });
+                }
+              }
+            } catch { /* 探测状态写入失败不影响本次运行记录 */ }
+          } else if (shouldAutoPause(trigger, run)) {
+            // 连续失败自动停用（只针对调度触发）：把任务停掉，避免错误状态一直刷
+            try {
+              if (applyAutoPause({ store, scheduler, flowId: flow.id, reason: run.finalMessage })) {
+                run.paused = true;
+                run.finalMessage = `${run.finalMessage || '执行失败'}（已自动停用调度）`;
+              }
+            } catch { /* 停用失败不影响本次运行的记录 */ }
+          }
           store.addRun(run);
-          await sendNotify(flow, run);
+          // 恢复探测是静默诊断：不写任务通知、不碰外部渠道，避免反复失败触发站点风控。
+          if (notify !== false && trigger !== 'probe') {
+            const notifyResults = await sendNotify(flow, run);
+            if (Array.isArray(notifyResults) && notifyResults.length) {
+              const failed = notifyResults.filter((r) => !r.ok).map((r) => ({ type: r.type, error: String(r.error || '').slice(0, 80) }));
+              run.notify = { total: notifyResults.length, ok: notifyResults.length - failed.length, failed };
+              store.flush();
+              // 外部渠道全部失败时补一条站内告警：通知本身也不能静默失败
+              const external = notifyResults.filter((r) => r.type !== 'inbox');
+              if (external.length && external.every((r) => !r.ok)) {
+                store.addNotification({
+                  title: '任务通知失败',
+                  content: `任务「${flow.name}」的 ${external.length} 个外部渠道全部发送失败：${failed.filter((f) => f.type !== 'inbox').map((f) => `${f.type}: ${f.error}`).join('；')}`,
+                  level: 'fail',
+                  flowId: flow.id,
+                  flowName: flow.name,
+                });
+              }
+            }
+          }
           return run;
+          } finally {
+            runningFlows.delete(flow.id);
+            runLimiter.release();
+          }
         });
       } finally {
         if (queuedSet.has(flow.id) && !runningFlows.has(flow.id)) queuedSet.delete(flow.id);
@@ -200,47 +274,232 @@ export function buildServer({ dataDir, port }) {
     },
     /** 调度器用：上一次运行（含重试等待）还没结束就跳过这一拍，避免堆积 */
     isBusy(flowId) {
-      return runningFlows.has(flowId) || queuedSet.has(flowId);
+      return runningFlows.has(flowId) || queuedSet.has(flowId) || manualInFlight.has(flowId);
+    },
+    /**
+     * 手动运行的同步占位（P0-4）：同一任务并发点击只产生一次运行。
+     * 必须在第一个 await 之前调用，才能挡住同一拍的两个请求。
+     */
+    claimManual(flowId) {
+      if (this.isBusy(flowId) || manualInFlight.has(flowId)) return false;
+      manualInFlight.add(flowId);
+      return true;
+    },
+    releaseManual(flowId) {
+      manualInFlight.delete(flowId);
+      if (queuedSet.has(flowId) && !runningFlows.has(flowId)) queuedSet.delete(flowId);
     },
   };
+
+  // 统一通知出口：站内通知在 notify.js 里通过注入的 inbox 回调落库
+  const sendToChannels = (channels, text, ctx = {}) => sendChannelsCore(channels, text, ctx, {
+    inbox: (payload) => store.addNotification(payload),
+  });
 
   async function sendNotify(flow, run) {
     const n = flow.notify || {};
     const fire = (run.status === 'success' && n.onSuccess) || (run.status === 'failed' && n.onFailure);
     if (!fire || !n.channels?.length) return;
-    const text = renderNotifyTemplate(n, flow, run);
-    return sendToChannels(n.channels, text, { flowId: flow.id, flowName: flow.name, status: run.status });
+    try {
+      const text = renderNotifyTemplate(n, flow, run);
+      return await sendToChannels(n.channels, text, { flowId: flow.id, flowName: flow.name, status: run.status });
+    } catch (e) {
+      return [{ type: 'render', ok: false, error: `通知模板渲染失败: ${e.message}` }];
+    }
   }
 
-  /** 每日汇总的「推送单位」：由用户勾选的任务列表（每个任务用它自己的通知渠道） */
-  function summaryTargets(cfg = store.meta.dailySummary || {}) {
-    const ids = Array.isArray(cfg.targetFlowIds) && cfg.targetFlowIds.length
-      ? cfg.targetFlowIds
-      : (cfg.targetFlowId ? [cfg.targetFlowId] : []);
-    return ids.map((id) => store.getFlow(id)).filter((f) => f && f.notify?.channels?.length);
+  // ---- 每日汇总（v0.5.3：独立系统通知，不再借用任务渠道） ----
+  const pad2 = (n) => String(n).padStart(2, '0');
+  const localDateStr = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+
+  function dayWindow(dateStr) {
+    let d;
+    if (dateStr && /^\d{4}-\d{2}-\d{2}$/.test(String(dateStr))) {
+      d = new Date(`${dateStr}T00:00:00`);
+    } else {
+      const now = new Date();
+      d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+    }
+    const startMs = d.getTime();
+    const endMs = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999).getTime();
+    return { date: localDateStr(d), startMs, endMs };
   }
 
-  async function pushDailySummary(targets) {
+  function dailyConfig() {
+    const cfg = store.meta.dailySummary || {};
+    return {
+      enabled: cfg.enabled === true,
+      time: /^\d{2}:\d{2}$/.test(String(cfg.time || '')) ? cfg.time : '08:00',
+      timezone: cfg.timezone || 'Asia/Shanghai',
+      skipEmpty: cfg.skipEmpty !== false,
+      include: {
+        failures: cfg.include?.failures !== false,
+        paused: cfg.include?.paused !== false,
+        successCount: cfg.include?.successCount !== false,
+      },
+      lastSentDate: cfg.lastSentDate || null,
+      lastSentAt: cfg.lastSentAt || null,
+      lastResult: cfg.lastResult || null,
+      targetFlowIds: Array.isArray(cfg.targetFlowIds) ? cfg.targetFlowIds : (cfg.targetFlowId ? [cfg.targetFlowId] : []),
+      migratedFrom: cfg.migratedFrom || null,
+      migratedAt: cfg.migratedAt || null,
+    };
+  }
+
+  const shortTime = (ms) => new Date(ms).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
+
+  /** 每日汇总正文（纯函数，预览与发送共用；总长 ≤2000） */
+  function buildDailySummaryText(s, { catchup = false, include } = {}) {
+    const cfg = dailyConfig();
+    const inc = { ...cfg.include, ...(include || {}) };
+    const d = new Date(s.window.startMs);
+    const label = `${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+    const lines = [`每日汇总 · ${label}${catchup ? '（补发）' : ''}`];
+
+    if (s.empty) {
+      lines.push('昨日无任务运行');
+    } else {
+      const rate = inc.successCount && s.rate !== null ? `（成功率 ${s.rate}%）` : '';
+      lines.push(`${s.enabledFlows} 个启用任务，运行 ${s.runs} 次：成功 ${s.success} / 失败 ${s.failed}${rate}`);
+    }
+
+    const failLines = [];
+    let extraFailures = 0;
+    if (!s.empty && inc.failures) {
+      if (!s.failures.length) {
+        failLines.push('今天没有失败任务');
+      } else {
+        failLines.push('', '需要你看一眼');
+        for (const f of s.failures.slice(0, 5)) {
+          const consec = f.consecutive > 1 ? `，连续失败 ${f.consecutive} 次` : '';
+          failLines.push(`· ${f.flowName}：${f.message || '运行失败'}（${shortTime(f.at)}${consec}）`);
+        }
+        extraFailures = Math.max(0, s.failures.length - 5);
+        if (extraFailures) failLines.push(`另有 ${extraFailures} 个任务失败`);
+      }
+    }
+
+    const pauseLines = [];
+    if (inc.paused && s.paused.length) {
+      pauseLines.push('', '已自动停用');
+      for (const p of s.paused.slice(0, 5)) {
+        pauseLines.push(`· ${p.flowName}（${shortTime(p.at)}）${p.reason ? `：${String(p.reason).split('\n')[0].slice(0, 80)}` : ''}`);
+      }
+      if (s.paused.length > 5) pauseLines.push(`另 ${s.paused.length - 5} 个任务已停用`);
+    }
+
+    const rest = s.empty ? 0 : Math.max(0, s.enabledFlows - s.failures.length - s.paused.length);
+    const restLine = rest > 0 ? `其余 ${rest} 个任务正常` : null;
+    const nextLine = s.next?.at ? `下次调度：${s.next.flowName || '任务'} ${shortTime(s.next.at)}` : null;
+
+    const full = [...lines, ...failLines, ...pauseLines, ...(restLine ? [restLine] : []), ...(nextLine ? [nextLine] : [])];
+    let text = full.join('\n');
+    if (text.length <= 2000) return text;
+
+    // 截断顺序：「其余…正常」→「下次调度」→ 失败条目保留前 3 条
+    const withoutRest = [...lines, ...failLines, ...pauseLines, ...(nextLine ? [nextLine] : [])];
+    text = withoutRest.join('\n');
+    if (text.length <= 2000) return text;
+    const withoutNext = [...lines, ...failLines, ...pauseLines];
+    text = withoutNext.join('\n');
+    if (text.length <= 2000) return text;
+
+    if (s.failures.length > 3) {
+      const shortFails = ['', '需要你看一眼', ...s.failures.slice(0, 3).map((f) => {
+        const consec = f.consecutive > 1 ? `，连续失败 ${f.consecutive} 次` : '';
+        return `· ${f.flowName}：${f.message || '运行失败'}（${shortTime(f.at)}${consec}）`;
+      }), `另有 ${s.failures.length - 3} 个任务失败（已省略）`];
+      text = [...lines, ...shortFails, ...pauseLines].join('\n');
+    }
+    return text.length > 2000 ? `${text.slice(0, 1999)}…` : text;
+  }
+
+  /** 旧「每日汇总」正文：只服务于旧端点 /api/system/daily-summary?flowIds=（兼容一版） */
+  async function pushLegacySummary(targets) {
     const s = store.stats();
     const text = `每日汇总：今日 ${s.todayRuns} 次（成功 ${s.todaySuccess} / 失败 ${s.todayFailed}，成功率 ${s.successRate ?? '—'}%）；任务 ${s.flows}，调度中 ${s.enabledScheduled}，下次 ${s.nextRunAt ? new Date(s.nextRunAt).toLocaleString('zh-CN') : '—'}`;
     const groups = [];
     for (const target of targets) {
-      const results = await sendToChannels(target.notify.channels, text, { flowId: target.id, flowName: target.name, status: 'success' });
+      const results = await sendToChannels(target.notify.channels, text, { title: '每日汇总', flowId: null, flowName: '', status: 'success' });
       groups.push({ flowId: target.id, flowName: target.name, results });
     }
-    const total = groups.reduce((n, g) => n + g.results.length, 0);
-    const ok = groups.reduce((n, g) => n + g.results.filter((x) => x.ok).length, 0);
-    console.log(`[CheckQ] dailySummary 已发送 ${ok}/${total} 渠道（${groups.length} 个推送单位）`);
     return { text, results: groups.flatMap((g) => g.results), groups };
   }
 
-  runner.sendDailySummary = async () => {
-    const targets = summaryTargets();
-    if (!targets.length) {
-      console.log('[CheckQ] dailySummary 跳过：未选择推送单位（或所选任务没有通知渠道）');
-      return null;
+  let summaryInFlight = false;
+
+  async function sendDailySummary(mode = 'cron', opts = {}) {
+    const cfg = dailyConfig();
+    const win = dayWindow(opts.date);
+    if (mode !== 'manual' && cfg.lastSentDate === win.date) {
+      return { ok: true, skipped: 'duplicate', window: win, date: win.date };
     }
-    return pushDailySummary(targets);
+    if (summaryInFlight) return { ok: true, skipped: 'in-flight', window: win, date: win.date };
+    summaryInFlight = true;
+    try {
+      const stats = store.statsForRange(win.startMs, win.endMs);
+      if (stats.empty && cfg.skipEmpty && mode !== 'manual') {
+        console.log(`[CheckQ] dailySummary 跳过：${win.date} 没有任务运行`);
+        return { ok: true, skipped: 'empty', window: win, date: win.date, counts: { runs: 0, success: 0, failed: 0 } };
+      }
+      const text = buildDailySummaryText(stats, { catchup: mode === 'catchup' });
+      const level = (stats.failed || stats.paused.length) ? 'fail' : (stats.empty ? 'info' : 'success');
+      const ctx = { title: '每日汇总', flowId: null, flowName: '', status: level === 'fail' ? 'failed' : 'success', level };
+      const channels = store.getSystemChannels();
+      const results = await sendToChannels(channels, text, ctx);
+      const failed = results.filter((r) => !r.ok).map((r) => ({ type: r.type, error: String(r.error || '').slice(0, 60) }));
+      const external = results.filter((r) => r.type !== 'inbox');
+      const externalFailed = external.filter((r) => !r.ok);
+
+      if (external.length && externalFailed.length === external.length) {
+        store.addNotification({
+          title: '汇总推送失败',
+          content: `渠道 ${external.length} 个，成功 ${external.length - externalFailed.length}；${externalFailed.map((r) => `${r.type}: ${r.error}`).join('；')}`,
+          level: 'fail', flowId: null, flowName: '',
+        });
+      }
+
+      const lastResult = { ok: failed.length === 0, total: results.length, failed };
+      const daily = store.meta.dailySummary || {};
+      if (mode !== 'manual') {
+        daily.lastSentDate = win.date;
+        daily.lastSentAt = Date.now();
+      }
+      daily.lastResult = lastResult;
+      store.meta.dailySummary = daily;
+      store.flush();
+      store.audit('notify.daily', `${mode} ${win.date}：${results.length - failed.length}/${results.length} 成功`, 'system');
+      console.log(`[CheckQ] dailySummary ${mode} ${win.date} 已发送 ${results.length - failed.length}/${results.length}`);
+      return { ok: failed.length === 0, skipped: null, window: win, date: win.date, text, results, lastResult, counts: { runs: stats.runs, success: stats.success, failed: stats.failed } };
+    } catch (e) {
+      console.error('[CheckQ] dailySummary 失败:', e.message);
+      return { ok: false, error: e.message, window: win, date: win.date };
+    } finally {
+      summaryInFlight = false;
+    }
+  }
+
+  function previewDailySummary(dateStr) {
+    const win = dayWindow(dateStr);
+    const stats = store.statsForRange(win.startMs, win.endMs);
+    const cfg = dailyConfig();
+    const skipped = stats.empty && cfg.skipEmpty ? 'empty' : null;
+    return {
+      text: buildDailySummaryText(stats, {}),
+      window: win,
+      counts: { enabledFlows: stats.enabledFlows, runs: stats.runs, success: stats.success, failed: stats.failed, failures: stats.failures.length, paused: stats.paused.length },
+      skipped,
+    };
+  }
+
+  runner.sendDailySummary = (mode = 'cron', opts = {}) => sendDailySummary(mode, opts);
+  runner.previewDailySummary = (dateStr) => previewDailySummary(dateStr);
+  runner.catchUpDailySummary = async () => {
+    const cfg = dailyConfig();
+    if (!cfg.enabled) return { ok: true, skipped: 'disabled' };
+    const win = dayWindow();
+    if (cfg.lastSentDate && cfg.lastSentDate >= win.date) return { ok: true, skipped: 'sent' };
+    return sendDailySummary('catchup');
   };
 
   function renderNotifyTemplate(n, flow, run) {
@@ -253,7 +512,9 @@ export function buildServer({ dataDir, port }) {
       .replace(/\{\{\s*time\s*\}\}/g, new Date(run.startedAt || Date.now()).toLocaleString('zh-CN'));
   }
 
-  // Cookie 一键回填（统一浏览器登录）：书签脚本在站点页把 document.cookie POST 到这里，前端已登录的任务自动写入变量
+  // Cookie 一键回填（统一浏览器登录的备用路径）：把 document.cookie POST 到这里写入任务变量。
+  // 注意：会话 cookie 是 SameSite=Strict，跨站书签脚本不会携带 qsid，且同源校验会拦跨站 Origin；
+  // 因此该端点只在同域调用下可用。跨域场景请用「打开登录页 → 自动抓 Cookie」或手动粘贴。
   app.options('/api/cookie-capture', async (req, reply) => {
     reply.header('Access-Control-Allow-Origin', '*');
     reply.header('Access-Control-Allow-Methods', 'POST,OPTIONS');
@@ -317,213 +578,6 @@ export function buildServer({ dataDir, port }) {
       return reply.code(502).send({ error: `抓取失败：${e.message}` });
     }
   });
-
-  async function sendToChannels(channels, text, ctx = {}) {
-    const results = [];
-    for (const ch of channels || []) {
-      try {
-        if (ch.type === 'webhook') {
-          const res = await fetch(ch.url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: text, signal: AbortSignal.timeout(15000) });
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        } else if (ch.type === 'inbox') {
-          store.addNotification({
-            title: ch.title || `${ctx.flowName || 'CheckQ'} ${ctx.status === 'failed' ? '失败' : '通知'}`,
-            content: text, level: ctx.status === 'failed' ? 'fail' : 'success',
-            flowId: ctx.flowId || null, flowName: ctx.flowName || '',
-          });
-        } else if (ch.type === 'pushplus') {
-          const res = await fetch('https://www.pushplus.plus/send', {
-            method: 'POST', headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ token: String(ch.token || '').trim(), title: ch.title || 'CheckQ 通知', content: text, template: ch.template || 'txt' }),
-            signal: AbortSignal.timeout(15000),
-          });
-          const j = await res.json().catch(() => ({}));
-          if (!res.ok || (j.code !== undefined && j.code !== 200)) throw new Error(`HTTP ${res.status} code=${j.code} ${j.msg || ''}`);
-        } else if (ch.type === 'gotify') {
-          const base = String(ch.url || '').replace(/\/+$/, '');
-          const res = await fetch(`${base}/message?token=${encodeURIComponent(ch.token || '')}`, {
-            method: 'POST', headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ title: ch.title || 'CheckQ', message: text, priority: Number(ch.priority) || 5 }),
-            signal: AbortSignal.timeout(15000),
-          });
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        } else if (ch.type === 'ntfy') {
-          const base = String(ch.url || 'https://ntfy.sh').replace(/\/+$/, '');
-          const topic = String(ch.topic || '').trim();
-          if (!topic) throw new Error('缺少 topic');
-          const res = await fetch(`${base}/${encodeURIComponent(topic)}`, {
-            method: 'POST',
-            headers: { 'content-type': 'text/plain; charset=utf-8', Title: ch.title || 'CheckQ', Priority: String(ch.priority || 'default') },
-            body: text, signal: AbortSignal.timeout(15000),
-          });
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        } else if (ch.type === 'email') {
-          await smtpSend(ch, ch.subject || ch.title || '[CheckQ] 通知', text);
-        } else if (ch.type === 'telegram') {
-          const res = await fetch(`https://api.telegram.org/bot${ch.token}/sendMessage`, {
-            method: 'POST', headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ chat_id: ch.chat, text, disable_web_page_preview: true }),
-            signal: AbortSignal.timeout(15000),
-          });
-          const j = await res.json().catch(() => ({}));
-          if (!res.ok || j.ok === false) throw new Error(`HTTP ${res.status} ${j.description || ''}`);
-        } else if (ch.type === 'bark') {
-          const u = (ch.url || '').replace(/\/+$/, '');
-          const title = encodeURIComponent(ch.title || 'CheckQ');
-          const body = encodeURIComponent(text);
-          const res = await fetch(`${u}/${title}/${body}${ch.group ? '?group=' + encodeURIComponent(ch.group) : ''}`, { signal: AbortSignal.timeout(15000) });
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        } else if (ch.type === 'serverchan') {
-          const key = String(ch.key || '').trim();
-          const res = await fetch(`https://sctapi.ftqq.com/${key}.send`, {
-            method: 'POST', headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ title: ch.title || 'CheckQ 通知', desp: text }),
-            signal: AbortSignal.timeout(15000),
-          });
-          const j = await res.json().catch(() => ({}));
-          if (!res.ok) throw new Error(`HTTP ${res.status} ${j.message || ''}`);
-          if (j.code !== undefined && j.code !== 0) throw new Error(`HTTP ${res.status} code=${j.code} ${j.message || ''}`);
-        } else if (ch.type === 'dingtalk') {
-          const url = await signBotUrl(ch);
-          const res = await fetch(url, {
-            method: 'POST', headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ msgtype: 'markdown', markdown: { title: ch.title || 'CheckQ 通知', text } }),
-            signal: AbortSignal.timeout(15000),
-          });
-          const j = await res.json().catch(() => ({}));
-          if (!res.ok || j.errcode !== 0) throw new Error(`HTTP ${res.status} errcode=${j.errcode} ${j.errmsg || ''}`);
-        } else if (ch.type === 'wecom') {
-          const res = await fetch(ch.url, {
-            method: 'POST', headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ msgtype: 'markdown', markdown: { content: text } }),
-            signal: AbortSignal.timeout(15000),
-          });
-          const j = await res.json().catch(() => ({}));
-          if (!res.ok || j.errcode !== 0) throw new Error(`HTTP ${res.status} errcode=${j.errcode} ${j.errmsg || ''}`);
-        } else if (ch.type === 'feishu') {
-          const url = await signBotUrl(ch);
-          const res = await fetch(url, {
-            method: 'POST', headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ msg_type: 'text', content: { text } }),
-            signal: AbortSignal.timeout(15000),
-          });
-          const j = await res.json().catch(() => ({}));
-          if (!res.ok || j.code !== 0) throw new Error(`HTTP ${res.status} code=${j.code} ${j.msg || ''}`);
-        } else {
-          throw new Error('未知通知类型: ' + ch.type);
-        }
-        results.push({ type: ch.type, ok: true });
-      } catch (err) {
-        console.error(`[CheckQ] notify ${ch.type} failed:`, err.message);
-        results.push({ type: ch.type, ok: false, error: err.message });
-      }
-    }
-    return results;
-  }
-
-  /** 钉钉/飞书机器人签名：timestamp + "\n" + secret 做 HMAC-SHA256，base64 后拼到 URL */
-  async function signBotUrl(ch) {
-    const url = String(ch.url || '');
-    if (!ch.secret) return url;
-    const ts = Date.now();
-    const sign = encodeURIComponent(crypto.createHmac('sha256', ch.secret).update(`${ts}\n${ch.secret}`).digest('base64'));
-    const sep = url.includes('?') ? '&' : '?';
-    return `${url}${sep}timestamp=${ts}&sign=${sign}`;
-  }
-
-  /**
-   * 极简 SMTP 发信（零依赖）：支持 465 隐式 TLS / 587 STARTTLS / AUTH LOGIN。
-   * ch: { host, port, secure, user, pass, from, to }
-   */
-  function smtpSend(ch, subject, text) {
-    const host = String(ch.host || '').trim();
-    const port = Number(ch.port) || 465;
-    const from = String(ch.from || ch.user || '').trim();
-    const to = String(ch.to || '').trim();
-    if (!host || !from || !to) return Promise.reject(new Error('缺少 host/from/to'));
-    const implicitTLS = ch.secure === true || (ch.secure !== false && port === 465);
-
-    return new Promise((resolve, reject) => {
-      let socket = implicitTLS
-        ? tls.connect({ host, port, servername: host })
-        : net.connect({ host, port });
-      let buf = '';
-      let collect = [];
-      const waiters = [];
-      let settled = false;
-
-      const fail = (err) => { if (settled) return; settled = true; try { socket.destroy(); } catch {} reject(err); };
-      const done = (val) => { if (settled) return; settled = true; try { socket.end(); } catch {} resolve(val); };
-
-      const attach = (s) => {
-        s.setEncoding('utf8');
-        s.setTimeout(20000, () => fail(new Error('SMTP 超时')));
-        s.on('data', (d) => { buf += d; pump(); });
-        s.on('error', fail);
-      };
-      const pump = () => {
-        let idx;
-        while ((idx = buf.indexOf('\r\n')) !== -1) {
-          const line = buf.slice(0, idx);
-          buf = buf.slice(idx + 2);
-          if (/^\d{3}-/.test(line)) { collect.push(line); continue; }
-          const full = [...collect, line].join('\n');
-          collect = [];
-          const w = waiters.shift();
-          if (w) w(null, full);
-        }
-      };
-      const read = () => new Promise((res, rej) => {
-        waiters.push((e, v) => (e ? rej(e) : res(v)));
-        // 超时兜底
-        setTimeout(() => { const i = waiters.indexOf(waiters[waiters.length - 1]); if (i === -1 && !settled) rej(new Error('SMTP 响应超时')); }, 20000);
-      });
-      const cmd = async (line) => { socket.write(line + '\r\n'); return read(); };
-      const expect = (resp, code, what) => {
-        if (!resp || !resp.startsWith(String(code))) throw new Error(`${what} 失败: ${String(resp || '').split('\n').pop()}`);
-        return resp;
-      };
-
-      attach(socket);
-      (async () => {
-        expect(await read(), 220, '连接');
-        let ehlo = await cmd('EHLO checkq.local');
-        if (!implicitTLS && /STARTTLS/i.test(ehlo)) {
-          expect(await cmd('STARTTLS'), 220, 'STARTTLS');
-          const plain = socket;
-          plain.removeAllListeners('data');
-          socket = tls.connect({ socket: plain, servername: host });
-          attach(socket);
-          ehlo = await cmd('EHLO checkq.local');
-        }
-        if (ch.user) {
-          expect(await cmd('AUTH LOGIN'), 334, 'AUTH LOGIN');
-          expect(await cmd(Buffer.from(String(ch.user)).toString('base64')), 334, 'AUTH 用户名');
-          expect(await cmd(Buffer.from(String(ch.pass || '')).toString('base64')), 235, 'AUTH 密码');
-        }
-        expect(await cmd(`MAIL FROM:<${from}>`), 250, 'MAIL FROM');
-        for (const rcpt of to.split(/[,;]\s*/).filter(Boolean)) expect(await cmd(`RCPT TO:<${rcpt}>`), 250, 'RCPT TO');
-        expect(await cmd('DATA'), 354, 'DATA');
-        const bodyB64 = Buffer.from(text, 'utf8').toString('base64').replace(/(.{76})/g, '$1\r\n');
-        const msg = [
-          `From: <${from}>`,
-          `To: <${to}>`,
-          `Subject: =?UTF-8?B?${Buffer.from(subject, 'utf8').toString('base64')}?=`,
-          `Date: ${new Date().toUTCString()}`,
-          'MIME-Version: 1.0',
-          'Content-Type: text/plain; charset=UTF-8',
-          'Content-Transfer-Encoding: base64',
-          '',
-          bodyB64,
-          '.',
-        ].join('\r\n');
-        socket.write(msg + '\r\n');
-        expect(await read(), 250, '发送正文');
-        await cmd('QUIT').catch(() => '');
-        done('sent');
-      })().catch(fail);
-    });
-  }
 
   const scheduler = new Scheduler(store, runner);
   scheduler.start();
@@ -618,9 +672,10 @@ export function buildServer({ dataDir, port }) {
       return;
     }
 
-    // 3) 公开接口
+    // 3) 公开接口（演练端点必须免登录：任务自己是靠本机 fetch 打它们的）
     const pub = path === '/api/login' || path === '/api/health' || path === '/api/system/bootstrap' || path === '/api/me'
-      || path === '/api' || path === '/api/openapi.json' || !path.startsWith('/api/');
+      || path === '/api' || path === '/api/openapi.json' || !path.startsWith('/api/')
+      || path === '/api/demo/profile' || path === '/api/demo/checkin' || path === '/api/demo/items';
     if (pub) return;
     return reply.code(401).send({ error: '未登录' });
   });
@@ -633,7 +688,8 @@ export function buildServer({ dataDir, port }) {
   };
 
   app.post('/api/login', async (req, reply) => {
-    const ip = req.ip || req.hostname || 'unknown';
+    // 与全局 IP 黑名单同口径：优先 X-Forwarded-For（反代场景下 req.ip 全是网关地址）
+    const ip = clientIp(req) || 'unknown';
     if (loginLocked(ip)) {
       return reply.code(429).send({ error: '登录失败次数过多，请 10 分钟后再试' });
     }
@@ -772,12 +828,12 @@ export function buildServer({ dataDir, port }) {
     return { ok: true };
   });
 
-  app.get('/api/health', async () => ({ ok: true, version: '0.3.17' }));
+  app.get('/api/health', async () => ({ ok: true, version: VERSION }));
 
   // ---- 基础 API：索引与机器可读描述（外部 Agent 自助发现）----
   app.get('/api', async () => ({
     name: 'CheckQ API',
-    version: '0.3.17',
+    version: VERSION,
     description: 'CheckQ 自动化签到引擎的对外 REST 接口',
     auth: {
       apiKey: { header: 'x-api-key', where: '设置 → API Key 生成（可设作用域与回收日期）', scopes: ['read', 'run', 'write'] },
@@ -1050,7 +1106,6 @@ export function buildServer({ dataDir, port }) {
     const useScopes = wanted.length ? wanted : ['read', 'run', 'write'];
     // 回收日期：expiresAt（毫秒时间戳）；null = 永不过期
     let expiresAt = null;
-    if (expiresAt !== undefined) { /* noop */ }
     if (req.body && req.body.expiresAt) {
       const d = new Date(req.body.expiresAt);
       if (Number.isNaN(d.getTime())) return reply.code(400).send({ error: '回收日期格式无效（用 YYYY-MM-DD）' });
@@ -1204,19 +1259,119 @@ export function buildServer({ dataDir, port }) {
     return { ok: true, results, text };
   });
 
-  // 每日汇总预览/发送（PRD §4.8 P2）：基于 store.stats() 今日口径
+  // 每日汇总（v0.5.3）：旧端点兼容一版。带 flowIds/flowId 时按老逻辑借任务渠道，否则走系统渠道。
   app.post('/api/system/daily-summary', async (req, reply) => {
     const body = req.body || {};
     const ids = Array.isArray(body.flowIds) && body.flowIds.length ? body.flowIds : (body.flowId ? [body.flowId] : null);
     if (ids) {
       const targets = ids.map((id) => store.getFlow(id)).filter(Boolean);
       if (!targets.length) return reply.code(404).send({ error: '任务不存在' });
-      const missing = targets.filter((t) => !t.notify?.channels?.length);
-      if (missing.length === targets.length) return reply.code(400).send({ error: '所选任务都没有通知渠道' });
-      const out = await pushDailySummary(targets.filter((t) => t.notify?.channels?.length));
+      const withChannels = targets.filter((t) => t.notify?.channels?.length);
+      if (!withChannels.length) return reply.code(400).send({ error: '所选任务都没有通知渠道' });
+      const out = await pushLegacySummary(withChannels);
       return { ok: out.results.every((r) => r.ok), text: out.text, results: out.results, groups: out.groups };
     }
-    return { ok: true, stats: store.stats() };
+    return sendDailySummary('manual');
+  });
+
+  /** 系统渠道结构校验：返回错误文案（null = 通过） */
+  function validateSystemChannels(list) {
+    if (!Array.isArray(list)) return 'channels 必须是数组';
+    const external = list.filter((c) => c && c.type !== 'inbox');
+    if (external.length > 10) return '外部渠道最多 10 条';
+    if (list.filter((c) => c?.type === 'inbox').length > 1) return '站内通知只能有一条';
+    for (let i = 0; i < list.length; i++) {
+      const c = list[i];
+      if (!c || !SUMMARY_CHANNEL_TYPES.has(c.type)) return `第 ${i + 1} 条渠道类型不支持`;
+      if (c.type === 'inbox') continue;
+      const need = {
+        webhook: ['url'], bark: ['url'], telegram: ['token', 'chat'], serverchan: ['key'],
+        pushplus: ['token'], dingtalk: ['url'], wecom: ['url'], feishu: ['url'],
+        gotify: ['url', 'token'], ntfy: ['topic'], email: ['host', 'to'],
+      }[c.type] || [];
+      const miss = need.find((k) => !String(c[k] || '').trim());
+      if (miss) return `第 ${i + 1} 条渠道缺少 ${miss}`;
+    }
+    return null;
+  }
+
+  function currentNotifyView() {
+    const cfg = dailyConfig();
+    return {
+      daily: {
+        enabled: cfg.enabled, time: cfg.time, timezone: cfg.timezone, skipEmpty: cfg.skipEmpty,
+        include: cfg.include, lastSentDate: cfg.lastSentDate, lastSentAt: cfg.lastSentAt,
+      },
+      channels: store.getSystemChannels(),
+      migratedFrom: cfg.migratedFrom,
+      migratedFromName: cfg.migratedFrom ? (store.getFlow(cfg.migratedFrom)?.name || '原任务') : null,
+      migratedAt: cfg.migratedAt,
+      lastResult: cfg.lastResult,
+    };
+  }
+
+  app.get('/api/system/notify', async (req, reply) => {
+    if (!req.user) return reply.code(401).send({ error: '未登录' });
+    return currentNotifyView();
+  });
+
+  app.put('/api/system/notify', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return;
+    const body = req.body || {};
+    const daily = body.daily || {};
+    const time = String(daily.time ?? store.meta.dailySummary?.time ?? '08:00');
+    if (!/^\d{1,2}:\d{2}$/.test(time) || Number(time.split(':')[0]) > 23 || Number(time.split(':')[1]) > 59) {
+      return reply.code(400).send({ error: '时间格式必须是 HH:MM' });
+    }
+    if (body.channels !== undefined) {
+      const err = validateSystemChannels(body.channels);
+      if (err) return reply.code(400).send({ error: err });
+    }
+    const prev = store.meta.dailySummary || {};
+    store.meta.dailySummary = {
+      ...prev,
+      enabled: daily.enabled === true,
+      time: time.padStart(5, '0'),
+      timezone: String(daily.timezone || prev.timezone || 'Asia/Shanghai').slice(0, 64),
+      skipEmpty: daily.skipEmpty !== false,
+      include: {
+        failures: daily.include?.failures !== false,
+        paused: daily.include?.paused !== false,
+        successCount: daily.include?.successCount !== false,
+      },
+    };
+    if (body.channels !== undefined) {
+      const normalized = body.channels.map((c) => ({ ...c, id: c.id || `ch_${crypto.randomUUID()}` }));
+      store.setSystemChannels(normalized);
+    }
+    store.flush();
+    scheduler.rebuild();
+    return currentNotifyView();
+  });
+
+  app.post('/api/system/notify/preview', async (req, reply) => {
+    if (!req.user) return reply.code(401).send({ error: '未登录' });
+    return previewDailySummary((req.body || {}).date);
+  });
+
+  app.post('/api/system/notify/test', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return;
+    const body = req.body || {};
+    const all = store.getSystemChannels();
+    const channels = body.channelId ? all.filter((c) => c.id === body.channelId) : all;
+    if (!channels.length) return reply.code(404).send({ error: '渠道不存在' });
+    const text = `（测试）${previewDailySummary().text}`;
+    const results = await sendToChannels(channels, text, { title: '每日汇总', flowId: null, flowName: '', status: 'success' });
+    const failed = results.filter((r) => !r.ok);
+    if (failed.length) return reply.code(502).send({ error: failed.map((r) => `${r.type}: ${r.error}`).join('；'), results, text });
+    return { ok: true, results, text };
+  });
+
+  app.post('/api/system/notify/send', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return;
+    const body = req.body || {};
+    if (body.dryRun) return previewDailySummary(body.date);
+    return sendDailySummary('manual', { date: body.date });
   });
 
   // ---- flows ----
@@ -1381,7 +1536,8 @@ export function buildServer({ dataDir, port }) {
   app.get('/api/flows/:id', async (req, reply) => {
     const f = store.getFlow(req.params.id);
     if (!f) return reply.code(404).send({ error: 'not found' });
-    return { ...f, template: store.templateInfo(f) };
+    // structure = 结构事实（P0-2）：缺线出口 / 孤立步骤 / 起点 / 循环体范围，画布与检查清单共用
+    return { ...f, template: store.templateInfo(f), structure: analyzeStructure(f) };
   });
 
   app.put('/api/flows/:id', async (req, reply) => {
@@ -1406,33 +1562,41 @@ export function buildServer({ dataDir, port }) {
   app.post('/api/flows/:id/run', async (req, reply) => {
     const f = store.getFlow(req.params.id);
     if (!f) return reply.code(404).send({ error: 'not found' });
-    const debugStopId = (req.body || {}).debugStopId || null;
-    const stream = (req.body || {}).stream === true;
-    const queued = runningFlows.has(f.id); // 排队提示（第二次请求进入串行队列）
-
-    // SSE 模式（PRD §4.7.3 实时推送）：边执行边推送日志，结束事件携带完整 run
-    if (stream) {
-      reply.raw.writeHead(200, {
-        'content-type': 'text/event-stream',
-        'cache-control': 'no-cache',
-        connection: 'keep-alive',
-      });
-      const push = (event, data) => {
-        reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-      };
-      push('start', { flowId: f.id, flowName: f.name, queued });
-      const run = await runner.runFlow(f, debugStopId ? 'debug' : 'manual', {
-        debugStopId,
-        debug: (req.body || {}).debug === true,
-        onLog: (log) => push('log', log),
-      });
-      push('done', run);
-      reply.raw.end();
-      return reply;
+    const body = req.body || {};
+    const debugStopId = body.debugStopId || null;
+    const stream = body.stream === true;
+    // 手动运行去重（P0-4）：运行中再次触发 → 提示已排队，不产生第二次运行
+    if (body.dedupe === true && !runner.claimManual(f.id)) {
+      return { ok: true, deduped: true, queued: true, flowId: f.id, message: '已在运行，本次未重复提交' };
     }
+    const claimed = body.dedupe === true;
+    try {
+      // SSE 模式（PRD §4.7.3 实时推送）：边执行边推送日志，结束事件携带完整 run
+      if (stream) {
+        reply.raw.writeHead(200, {
+          'content-type': 'text/event-stream',
+          'cache-control': 'no-cache',
+          connection: 'keep-alive',
+        });
+        const push = (event, data) => {
+          reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+        };
+        push('start', { flowId: f.id, flowName: f.name, queued: false });
+        const run = await runner.runFlow(f, debugStopId ? 'debug' : 'manual', {
+          debugStopId,
+          debug: body.debug === true,
+          onLog: (log) => push('log', log),
+        });
+        push('done', run);
+        reply.raw.end();
+        return reply;
+      }
 
-    const run = await runner.runFlow(f, debugStopId ? 'debug' : 'manual', { debugStopId, debug: (req.body || {}).debug === true });
-    return run; // 完整 run 对象（含 logs），前端直接渲染
+      const run = await runner.runFlow(f, debugStopId ? 'debug' : 'manual', { debugStopId, debug: body.debug === true });
+      return run; // 完整 run 对象（含 logs + diagnosis）
+    } finally {
+      if (claimed) runner.releaseManual(f.id);
+    }
   });
 
   // 克隆任务：复制为新任务（PRD §4.4）
@@ -1453,6 +1617,8 @@ export function buildServer({ dataDir, port }) {
       edges: f.edges,
       notify: f.notify,
       log: f.log,
+      retry: f.retry,       // 克隆必须带上失败重试配置，否则副本会回到默认策略
+      recovery: f.recovery, // 恢复探测配置也随副本复制；是否启用由用户再确认
       tplId: f.tplId || null,
     });
     return clone;
@@ -1486,14 +1652,13 @@ export function buildServer({ dataDir, port }) {
   });
 
   // ---- runs ----
-  // 可推送单位：所有已配置通知渠道的任务（每日总推送时由用户勾选）
-  app.get('/api/system/push-targets', async () => store.flows
-    .filter((f) => f.notify?.channels?.length)
-    .map((f) => ({ id: f.id, name: f.name, channels: f.notify.channels.map((c) => c.type) })));
+  // 旧「可推送任务」端点（兼容一版）：v0.5.3 起每日汇总用独立系统渠道，这里改为返回系统渠道摘要
+  app.get('/api/system/push-targets', async () => store.getSystemChannels()
+    .map((c) => ({ id: c.id, type: c.type, title: c.title || '', enabled: true })));
 
   app.get('/api/system/stats', async () => {
     const s = store.stats();
-    return { ...s, queuedFlows: [...runningFlows, ...queuedSet], queueCount: queuedSet.size, runningCount: runningFlows.size, dailySummary: store.meta.dailySummary || null, unreadNotifications: store.listNotifications(1).unread };
+    return { ...s, queuedFlows: [...runningFlows, ...queuedSet], queueCount: queuedSet.size, runningCount: runningFlows.size, maxConcurrency: runLimiter.limit, globalWaiting: runLimiter.waiting, dailySummary: store.meta.dailySummary || null, unreadNotifications: store.listNotifications(1).unread };
   });
 
   // 站内通知（inbox 渠道）：列表 / 已读 / 清空
@@ -1507,20 +1672,30 @@ export function buildServer({ dataDir, port }) {
   app.get('/api/system/daily-summary-config', async () => {
     const cfg = store.meta.dailySummary || {};
     const targetFlowIds = Array.isArray(cfg.targetFlowIds) ? cfg.targetFlowIds : (cfg.targetFlowId ? [cfg.targetFlowId] : []);
-    return { enabled: !!cfg.enabled, time: cfg.time || '08:00', timezone: cfg.timezone || 'Asia/Shanghai', targetFlowId: cfg.targetFlowId || null, targetFlowIds };
+    return {
+      enabled: !!cfg.enabled, time: cfg.time || '08:00', timezone: cfg.timezone || 'Asia/Shanghai',
+      skipEmpty: cfg.skipEmpty !== false, include: dailyConfig().include,
+      targetFlowId: cfg.targetFlowId || null, targetFlowIds,
+      migratedFrom: cfg.migratedFrom || null, migratedAt: cfg.migratedAt || null,
+      lastSentDate: cfg.lastSentDate || null, lastSentAt: cfg.lastSentAt || null, lastResult: cfg.lastResult || null,
+    };
   });
   app.put('/api/system/daily-summary-config', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return;
     const cfg = req.body || {};
-    if (cfg.enabled && !/^\d{1,2}:\d{2}$/.test(String(cfg.time || ''))) return reply.code(400).send({ error: 'time must be HH:MM' });
-    const ids = Array.isArray(cfg.targetFlowIds)
-      ? cfg.targetFlowIds.filter(Boolean)
-      : (cfg.targetFlowId ? [cfg.targetFlowId] : []);
+    const time = String(cfg.time || store.meta.dailySummary?.time || '08:00');
+    if (!/^\d{1,2}:\d{2}$/.test(time) || Number(time.split(':')[0]) > 23 || Number(time.split(':')[1]) > 59) {
+      return reply.code(400).send({ error: 'time must be HH:MM' });
+    }
+    // 兼容一版：旧字段 targetFlowIds 只读，不再写入（汇总已与任务解耦）
+    const prev = store.meta.dailySummary || {};
     store.meta.dailySummary = {
+      ...prev,
       enabled: !!cfg.enabled,
-      time: cfg.time || '08:00',
-      timezone: cfg.timezone || 'Asia/Shanghai',
-      targetFlowIds: ids,
-      targetFlowId: ids[0] || null, // compat with old field
+      time: time.padStart(5, '0'),
+      timezone: cfg.timezone || prev.timezone || 'Asia/Shanghai',
+      skipEmpty: cfg.skipEmpty !== false,
+      include: cfg.include || prev.include || { failures: true, paused: true, successCount: true },
     };
     store.flush();
     scheduler.rebuild();
@@ -1577,13 +1752,14 @@ export function buildServer({ dataDir, port }) {
   // 备份/恢复：导出 flows/runs/templates（meta 密码不导出）；恢复以新 ID 导入避免覆盖
   // 备份（默认脱敏：cookie/token/密码等一律清空，适合分享与存档）
   app.get('/api/system/backup', async () => ({
-    version: '0.3.17',
+    version: VERSION,
     exportedAt: new Date().toISOString(),
     masked: true,
-    note: '敏感凭据已脱敏；如需完整迁移请用 POST /api/system/backup（需当前密码）',
+    note: '敏感凭据已脱敏；runs 为历史审计数据，恢复时不导入；如需完整迁移请用 POST /api/system/backup（需当前密码）',
     flows: store.flows.map((f) => store.maskedFlow(f)),
     runs: store.runs,
     templates: store.templates.map((t) => store.maskedTemplate(t)),
+    channels: store.maskedSystemChannels(),
   }));
 
   // 完整备份（含凭据）：需要再次输入当前密码，防止误下载/误分享
@@ -1594,16 +1770,19 @@ export function buildServer({ dataDir, port }) {
     if (!verifyPwd(password || '', me.passwordHash)) return reply.code(401).send({ error: '当前密码不正确' });
     store.audit('backup.full', '导出含凭据的完整备份', me.username);
     return {
-      version: '0.3.17',
+      version: VERSION,
       exportedAt: new Date().toISOString(),
       masked: false,
-      note: '包含明文凭据，请妥善保管',
+      note: '包含明文凭据，请妥善保管；runs 仅供审计，恢复时不导入',
       flows: store.flows,
       runs: store.runs,
       templates: store.templates,
+      channels: store.getSystemChannels(),
     };
   });
 
+  // 恢复只重建 flows/templates（默认停用、新 ID）：runs 是历史运行记录，
+  // 导出来仅供离线审计，导入会把旧 startedAt / flowId 混进新任务的今日统计。
   app.post('/api/system/restore', async (req, reply) => {
     const b = req.body || {};
     if (!Array.isArray(b.flows)) return reply.code(400).send({ error: '备份文件无效：缺少 flows 数组' });
@@ -1629,7 +1808,7 @@ export function buildServer({ dataDir, port }) {
       }
     }
     scheduler.rebuild();
-    return { createdFlows, createdTemplates };
+    return { createdFlows, createdTemplates, channelsIgnored: true };
   });
 
 
@@ -1691,7 +1870,8 @@ export function buildServer({ dataDir, port }) {
       entries: truncated,
       runs: runs.slice(0, 60).map((r) => ({ id: r.id, startedAt: r.startedAt, status: r.status, count: (r.logs || []).length, summary: r.summary || '', finalMessage: r.finalMessage || '' })),
       hasMore: entries.length > truncated.length || runs.length > 60,
-      nextBefore: runs.length ? runs[Math.min(runs.length - 1, 60)].id : null,
+      // 下一页从「本页最后一条展示的运行」之后继续（取 runs[59]，不是 runs[60]，否则第 61 条摘要被跳过）
+      nextBefore: runs.length ? runs[Math.min(runs.length - 1, 59)].id : null,
     };
   });
 
@@ -1722,6 +1902,144 @@ export function buildServer({ dataDir, port }) {
     }
   });
 
+  // ---- 演练场（P0-1）：内置演示端点 + 一条演练任务，全部本机、零外部依赖 ----
+  app.get('/api/system/features', async () => ({ demo: isDemoEnabled(), version: VERSION }));
+
+  app.get('/api/demo/profile', demoProfile);
+  app.post('/api/demo/checkin', demoCheckin);
+  app.get('/api/demo/items', demoItems);
+  app.post('/api/demo/reset', demoReset);
+
+  // 创建（或复用）演练任务：任务里只有本机演示地址，用户随时可改成自己的站点
+  app.post('/api/demo/flow', async (req) => {
+    const origin = originOf(req, (req.body || {}).origin);
+    const { flow, created } = ensureDemoFlow(store, origin);
+    scheduler.rebuild();
+    return { id: flow.id, name: flow.name, created, origin };
+  });
+
+  // ---- 度量（P0-6）：只算本机数据，不外传 ----
+  app.get('/api/system/metrics', async (req) => computeMetrics({
+    flows: store.flows,
+    runs: store.runs,
+    templates: store.templates,
+    days: Number((req.query || {}).days) || 7,
+  }));
+
+  // 界面本地事件（白名单、只落 meta、不随备份导出）
+  app.get('/api/system/events', async () => ({ events: store.meta.events || {} }));
+  app.post('/api/system/events', async (req, reply) => {
+    const name = String((req.body || {}).name || '');
+    if (!EVENT_NAMES.includes(name)) return reply.code(400).send({ error: `不支持的事件：${name}` });
+    store.meta.events = bumpEvents(store.meta.events, name);
+    store.flush();
+    return { ok: true, events: store.meta.events };
+  });
+
+  // ---- 模板市场 v1（P0-5）：索引解析 / 预览 / 哈希校验 / 导入 / 订阅 ----
+  const marketSubs = () => (store.meta.market && Array.isArray(store.meta.market.subs) ? store.meta.market.subs : []);
+  const saveSubs = (subs) => {
+    store.meta.market = { ...(store.meta.market || {}), subs };
+    store.flush();
+  };
+
+  app.get('/api/market/subscriptions', async () => ({ items: marketSubs() }));
+
+  app.get('/api/market/index', async (req, reply) => {
+    const url = String((req.query || {}).url || '').trim();
+    if (!url) return reply.code(400).send({ error: '缺少索引地址' });
+    let data;
+    try {
+      data = await fetchJson(url, { maxBytes: MARKET_LIMITS.indexBytes });
+    } catch (e) {
+      return reply.code(502).send({ error: e.message });
+    }
+    const parsed = parseIndex(data, url);
+    if (!parsed.ok) return reply.code(400).send({ error: parsed.errors.slice(0, 5).join('；'), errors: parsed.errors });
+    const sub = marketSubs().find((s) => s.url === url);
+    const newCount = sub ? Math.max(0, parsed.entries.length - (sub.seenCount || 0)) : 0;
+    return {
+      url,
+      name: parsed.name,
+      updatedAt: parsed.updatedAt,
+      entries: parsed.entries.map(previewOf),
+      newCount,
+      subscribed: !!sub,
+      localTemplates: store.listTemplates().map((t) => ({ id: t.id, name: t.name, sourceId: t.market?.sourceId || null })),
+    };
+  });
+
+  app.post('/api/market/preview', async (req, reply) => {
+    const { url, id } = req.body || {};
+    if (!url || !id) return reply.code(400).send({ error: '缺少 url/id' });
+    let data;
+    try { data = await fetchJson(url, { maxBytes: MARKET_LIMITS.indexBytes }); } catch (e) { return reply.code(502).send({ error: e.message }); }
+    const parsed = parseIndex(data, url);
+    if (!parsed.ok) return reply.code(400).send({ error: parsed.errors.slice(0, 5).join('；') });
+    const entry = parsed.entries.find((e) => e.id === id);
+    if (!entry) return reply.code(404).send({ error: '索引里没有这个条目' });
+    const resolved = await resolveEntry(entry);
+    if (!resolved.ok) return reply.code(400).send({ error: resolved.errors.join('；') });
+    return { entry: previewOf(entry), template: resolved.template, varsCleared: resolved.varsCleared, hashOk: true, sha256: resolved.sha256, hasScript: !!resolved.hasScript };
+  });
+
+  app.post('/api/market/import', async (req, reply) => {
+    const { url, id, mode } = req.body || {};
+    if (!url || !id) return reply.code(400).send({ error: '缺少 url/id' });
+    let data;
+    try { data = await fetchJson(url, { maxBytes: MARKET_LIMITS.indexBytes }); } catch (e) { return reply.code(502).send({ error: e.message }); }
+    const parsed = parseIndex(data, url);
+    if (!parsed.ok) return reply.code(400).send({ error: parsed.errors.slice(0, 5).join('；') });
+    const entry = parsed.entries.find((e) => e.id === id);
+    if (!entry) return reply.code(404).send({ error: '索引里没有这个条目' });
+    const resolved = await resolveEntry(entry);
+    if (!resolved.ok) return reply.code(400).send({ error: resolved.errors.join('；') });
+
+    const existing = store.templates.find((t) => t.market && t.market.sourceId === id);
+    if (existing && mode !== 'overwrite' && mode !== 'copy') {
+      return reply.code(409).send({ error: `已经导入过「${existing.name}」`, conflict: { templateId: existing.id, name: existing.name } });
+    }
+    const market = { sourceId: id, sourceUrl: url, templateUrl: entry.templateUrl, sha256: resolved.sha256, importedAt: Date.now(), entryName: entry.name };
+    const name = existing && mode === 'copy' ? `${resolved.template.name}（副本）` : resolved.template.name;
+    let tpl;
+    if (existing && mode === 'overwrite') {
+      tpl = store.updateTemplate(existing.id, { ...resolved.template, name, market });
+    } else {
+      tpl = store.createTemplate({ ...resolved.template, name, market }, 'market');
+    }
+    const missingVars = (entry.vars || [])
+      .filter((v) => v.required && !String((tpl.vars || {})[v.name] || '').trim())
+      .map((v) => v.name);
+    return { id: tpl.id, name: tpl.name, replaced: !!(existing && mode === 'overwrite'), missingVars, varsCleared: resolved.varsCleared, hasScript: resolved.template.hasScript };
+  });
+
+  app.post('/api/market/subscribe', async (req, reply) => {
+    const url = String((req.body || {}).url || '').trim();
+    if (!/^https?:\/\//i.test(url)) return reply.code(400).send({ error: '索引地址必须是 http/https' });
+    let data;
+    try { data = await fetchJson(url, { maxBytes: MARKET_LIMITS.indexBytes }); } catch (e) { return reply.code(502).send({ error: e.message }); }
+    const parsed = parseIndex(data, url);
+    if (!parsed.ok) return reply.code(400).send({ error: parsed.errors.slice(0, 3).join('；') });
+    const subs = marketSubs().filter((s) => s.url !== url);
+    subs.push({ url, name: parsed.name || url, addedAt: Date.now(), lastCheckedAt: Date.now(), seenCount: parsed.entries.length, count: parsed.entries.length });
+    saveSubs(subs);
+    return { ok: true, items: marketSubs() };
+  });
+
+  app.delete('/api/market/subscribe', async (req) => {
+    const url = String((req.query || {}).url || '');
+    saveSubs(marketSubs().filter((s) => s.url !== url));
+    return { ok: true, items: marketSubs() };
+  });
+
+  // 用户「看到了新条目」：把已见数量对齐，之后不再重复提示
+  app.post('/api/market/ack', async (req) => {
+    const url = String((req.body || {}).url || '');
+    const count = Number((req.body || {}).count) || 0;
+    saveSubs(marketSubs().map((s) => (s.url === url ? { ...s, seenCount: count, lastCheckedAt: Date.now() } : s)));
+    return { ok: true, items: marketSubs() };
+  });
+
   // ---- 静态前端 ----
   const pubDir = path.join(__dirname, '..', 'public');
   if (fs.existsSync(pubDir)) {
@@ -1736,7 +2054,7 @@ export function buildServer({ dataDir, port }) {
 }
 
 export function startServer({ dataDir, port }) {
-  const { app, store, scheduler } = buildServer({ dataDir, port });
+  const { app, store, scheduler, runner } = buildServer({ dataDir, port });
   const shutdown = (sig) => {
     try { scheduler.stop(); store.flush(); } catch {}
     process.exit(0);
@@ -1745,6 +2063,11 @@ export function startServer({ dataDir, port }) {
   process.on('SIGINT', () => shutdown('SIGINT'));
   app.listen({ port, host: '0.0.0.0' }).then(() => {
     console.log(`[CheckQ] listening on :${port}`);
+    // 启动补发：停机错过触发时刻时，昨日汇总补发一次（幂等，30 秒后检查）
+    const timer = setTimeout(() => {
+      runner.catchUpDailySummary().catch((e) => console.error('[CheckQ] 汇总补发检查失败:', e.message));
+    }, 30000);
+    timer.unref?.();
   }).catch((err) => {
     console.error('[CheckQ] failed to start:', err);
     process.exit(1);

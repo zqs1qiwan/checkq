@@ -1,0 +1,23 @@
+{
+  "name": "站点侧 5xx",
+  "flow": { "name": "定时上报", "nodes": [] },
+  "run": {
+    "id": "run-5xx",
+    "status": "failed",
+    "finalMessage": "第 1 步「上报」失败",
+    "logs": [
+      {
+        "stepId": "n1",
+        "index": 1,
+        "name": "上报",
+        "type": "http",
+        "ok": false,
+        "message": "断言失败: last.status == 200 → 502 (期望 200)",
+        "errorType": "assert",
+        "asserts": [ { "expr": "last.status", "expect": 200, "actual": 502, "pass": false } ],
+        "detail": { "method": "POST", "url": "https://example.org/api/report", "response": { "status": 502, "headers": { "content-type": "text/html" }, "body": "Bad Gateway", "ms": 3200 } }
+      }
+    ]
+  },
+  "expect": { "rule": "server-error", "causeIncludes": ["502"] }
+}

@@ -1,0 +1,90 @@
+{
+  "version": 1,
+  "name": "CheckQ 随包示例索引",
+  "updatedAt": "2026-11-16",
+  "entries": [
+    {
+      "id": "example-site-alive",
+      "name": "示例：站点存活检查",
+      "desc": "GET 一个地址，断言 200 并记录耗时。只依赖公开地址，无凭据。",
+      "tags": [
+        "示例",
+        "监控"
+      ],
+      "nodes": 2,
+      "vars": [
+        {
+          "name": "baseUrl",
+          "label": "要检查的地址",
+          "required": true,
+          "sensitive": false
+        }
+      ],
+      "sha256": "76709c950bc74a44354751c47df9def539e6400c31cf970097c4dcf8a02e02da",
+      "source": "CheckQ 随包示例",
+      "template": {
+        "name": "示例：站点存活检查",
+        "desc": "GET 一个地址，断言 200 并记录耗时。只依赖公开地址，无凭据。",
+        "vars": {
+          "baseUrl": ""
+        },
+        "varNames": [
+          "baseUrl"
+        ],
+        "nodes": [
+          {
+            "id": "n0",
+            "type": "http",
+            "name": "请求首页",
+            "x": 80,
+            "y": 60,
+            "config": {
+              "method": "GET",
+              "url": "{{baseUrl}}",
+              "headers": [
+                {
+                  "name": "user-agent",
+                  "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                  "enabled": true
+                }
+              ],
+              "body": "",
+              "asserts": [
+                {
+                  "label": "状态码 200",
+                  "expr": "last.status == 200"
+                }
+              ]
+            }
+          },
+          {
+            "id": "n1",
+            "type": "log",
+            "name": "记录结果",
+            "x": 360,
+            "y": 60,
+            "config": {
+              "text": "状态 {{last.status}}，耗时 {{last.ms}}ms"
+            }
+          }
+        ],
+        "edges": [
+          {
+            "id": "e0",
+            "source": "n0",
+            "sourceHandle": "success",
+            "target": "n1"
+          }
+        ],
+        "log": {
+          "level": "all",
+          "include": {},
+          "keywords": []
+        },
+        "notify": {
+          "channels": []
+        }
+      }
+    }
+  ]
+}

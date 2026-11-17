@@ -4,13 +4,19 @@
  * 覆盖：9 视口 × 明暗主题；顶栏单行/等高、工具条分组、弹窗居中、
  * 设置分区、任务详情、模板页、移动端「更多」菜单、编辑器画布/面板/MiniMap。
  *
- * 用法：node tools/ui-interaction-audit.cjs [baseUrl]
+ * 用法：node tools/ui-interaction-audit.cjs [baseUrl] [--shots <dir>]
  * 默认 baseUrl = http://localhost:19998；需要先起一个本地/测试实例。
+ * 账号可用 CHECKQ_USER / CHECKQ_PASSWORD 覆盖（默认 admin/test1234）。
  * 只读：不创建、不修改、不删除任何任务或设置。
  */
+const path = require('path');
+const os = require('os');
 const { launch, CDP, newPage, sleep } = require('./cdp-lite.cjs');
-const BASE = process.argv[2] || 'http://localhost:19998';
-const OUT = 'C:/Users/Q/AppData/Local/Temp/opencode/shots-audit';
+const BASE = process.argv[2] && !process.argv[2].startsWith('--') ? process.argv[2] : 'http://localhost:19998';
+const shotsIdx = process.argv.indexOf('--shots');
+const OUT = shotsIdx > -1 ? process.argv[shotsIdx + 1] : path.join(os.tmpdir(), 'checkq-shots-audit');
+const USER = process.env.CHECKQ_USER || 'admin';
+const PASS = process.env.CHECKQ_PASSWORD || 'test1234';
 
 const VIEWPORTS = [
   [320, 568, 'mobile'], [360, 740, 'mobile'], [390, 844, 'mobile'],
@@ -30,7 +36,7 @@ const VIEWPORTS = [
 
   await page.setViewport(1440, 900);
   await page.goto(BASE + '/');
-  await page.eval("await fetch('/api/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({username:'admin',password:'test1234'})}); return 1;");
+  await page.eval(`await fetch('/api/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({username:${JSON.stringify(USER)},password:${JSON.stringify(PASS)}})}); return 1;`);
   await page.reload();
   await expandGroups();
   await sleep(900);
@@ -140,7 +146,7 @@ const VIEWPORTS = [
   await page.reload();
   await expandGroups(); await sleep(800);
   const modals = [
-    ['新建空白任务', `document.querySelector('.topbar .new-task-btn')?.click()`],
+    ['新建空白任务', `document.querySelector('.topbar .new-task-btn .dd-trigger')?.click(); await new Promise(r=>setTimeout(r,220)); [...document.querySelectorAll('.dd-pop:popover-open button')].find(b=>b.textContent.trim()==='空白流程')?.click()`],
     ['恢复', `[...document.querySelectorAll('.page button')].find(b=>b.textContent.trim()==='恢复')?.click()`],
     ['完整备份', `[...document.querySelectorAll('.page button')].find(b=>b.textContent.trim()==='完整备份')?.click()`],
     ['站内通知', `document.querySelector('.bell-btn')?.click()`],
@@ -231,10 +237,20 @@ const VIEWPORTS = [
   await page.eval(`document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true})); [...document.querySelectorAll('.big-tabs button')].find(b=>b.textContent.includes('任务'))?.click(); await new Promise(r=>setTimeout(r,300)); return 1;`);
 
   // G. 编辑器：画布/积木/参数/MiniMap/工具栏/更多菜单（只读，不保存）
+  const hasRow = await page.eval(`return !!document.querySelector('.flow-table tbody tr:not(.group-row)');`);
+  if (!hasRow) {
+    add('编辑器/1440', '任务列表为空，无法验证编辑器交互（请先在实例里建一个任务）');
+  } else {
   await page.eval(`
     const row=document.querySelector('.flow-table tbody tr:not(.group-row)');
-    row.querySelector('.dd-trigger').click(); await new Promise(r=>setTimeout(r,250));
-    [...document.querySelectorAll('.dd-pop:popover-open button')].find(b=>b.textContent.includes('编辑流程')).click();
+    // 行内第一个下拉是「运行 ▾」，编辑在「···」里，逐个试到含编辑流程的那个
+    for (const trig of row.querySelectorAll('.dd-trigger')) {
+      trig.click(); await new Promise(r=>setTimeout(r,260));
+      const b=[...document.querySelectorAll('.dd-pop:popover-open button')].find(x=>x.textContent.includes('编辑流程'));
+      if (b) { b.click(); break; }
+      document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+      await new Promise(r=>setTimeout(r,140));
+    }
     await new Promise(r=>setTimeout(r,1400)); return 1;
   `);
   const ed = await page.eval(`
@@ -264,6 +280,7 @@ const VIEWPORTS = [
   console.log('模板页:', tpl, 'tplMenu=', tplMenu);
   console.log('编辑器:', ed, 'edMenu=', edMenu);
   await page.shot(`${OUT}/editor-1440-final.png`);
+  }
 
   // H. 嵌套确认弹窗：设置 → API 密钥 → 立即回收 → 取消，确认框关闭但设置框仍在
   await page.reload();

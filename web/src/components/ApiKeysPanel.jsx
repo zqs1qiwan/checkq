@@ -3,7 +3,7 @@ import { api } from '../api.js';
 import { confirmDialog } from '../confirm.jsx';
 import Modal from './Modal.jsx';
 import Dropdown from './Dropdown.jsx';
-import { IconKey, IconCopy } from './Icons.jsx';
+import { IconKey, IconCopy, IconMore } from './Icons.jsx';
 
 const SCOPES = [
   ['read', '只读'],
@@ -114,7 +114,7 @@ export default function ApiKeysPanel({ onToast }) {
                 </div>
               </div>
               <div className="key-ops">
-                <Dropdown trigger="⋯" triggerClass="dd-row" align="right" width={150} ariaLabel={`${k.name} 更多操作`}>
+                <Dropdown trigger={<IconMore />} triggerClass="dd-row" align="right" width={150} ariaLabel={`${k.name} 更多操作`}>
                   <button onClick={() => { setEditing({ key: k, ips: (k.allowedIps || []).join('\n') }); }}>允许 IP</button>
                   <button onClick={() => onToast('请删除后重新生成')}>重新生成</button>
                   <button className="danger-text" onClick={() => revoke(k)}>立即回收</button>

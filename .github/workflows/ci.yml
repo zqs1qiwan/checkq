@@ -1,0 +1,41 @@
+name: 静态验收
+
+# 机械护栏的 CI 侧覆盖（不需要浏览器）：
+#   服务端全量单测 + 前端构建 + 文案/项目一致性审计。
+# 秘密扫描在 secret-scan.yml 独立跑（需要完整 git 历史）。
+# UI 冒烟 / 交互巡检需要真实 Chrome 与运行中的实例，由本地
+# `node tools/verify-round.cjs <baseUrl>` 覆盖（含本 workflow 的全部步骤）。
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            server/package-lock.json
+            web/package-lock.json
+      - name: 安装服务端依赖
+        run: npm ci --no-audit --fund=false
+        working-directory: server
+      - name: 服务端全量单测
+        run: node --test test/*.test.js
+        working-directory: server
+      - name: 前端依赖 + 构建
+        run: npm ci --no-audit --fund=false && npm run build
+        working-directory: web
+      - name: 文案金标准审计
+        run: node tools/copy-audit.cjs
+      - name: 项目一致性审计
+        run: node tools/project-audit.cjs

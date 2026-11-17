@@ -35,8 +35,9 @@ if (!newToken) {
   let updated = 0;
   for (const f of flows) {
     const d = await (await fetch(BASE + '/api/flows/' + f.id, { headers: { cookie } })).json();
-    const channels = (d.notify?.channels || []).map((c) => (c.type === 'telegram' ? { ...c, token: newToken, ...(chatId ? { chat: chatId } : {}) } : c));
-    if (!channels.some((c, i) => c !== (d.notify?.channels || [])[i])) continue;
+    const oldChannels = d.notify?.channels || [];
+    if (!oldChannels.some((c) => c.type === 'telegram')) continue;
+    const channels = oldChannels.map((c) => (c.type === 'telegram' ? { ...c, token: newToken, ...(chatId ? { chat: chatId } : {}) } : c));
     const up = await fetch(BASE + '/api/flows/' + f.id, { method: 'PUT', headers: H, body: JSON.stringify({ notify: { ...d.notify, channels } }) });
     if (!up.ok) { console.log('  ✗ 更新失败:', d.name, (await up.text()).slice(0, 120)); continue; }
     updated++;

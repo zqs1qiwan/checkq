@@ -1,0 +1,27 @@
+{
+  "name": "断言不匹配：期望值与实际值都在",
+  "flow": { "name": "签到结果校验", "nodes": [] },
+  "run": {
+    "id": "run-assert2",
+    "status": "failed",
+    "finalMessage": "第 2 步「校验签到结果」失败",
+    "logs": [
+      {
+        "stepId": "n2",
+        "index": 2,
+        "name": "校验签到结果",
+        "type": "http",
+        "ok": false,
+        "message": "断言失败: 含 /签到成功/ (content)",
+        "errorType": "assert",
+        "asserts": [ { "label": "含 /签到成功/ (content)", "pass": false } ],
+        "detail": {
+          "method": "POST",
+          "url": "https://example.org/api/checkin",
+          "response": { "status": 200, "headers": { "content-type": "text/html" }, "body": "<html><body>签到时间未到</body></html>", "ms": 100 }
+        }
+      }
+    ]
+  },
+  "expect": { "rule": "assert", "causeIncludes": ["没有通过"] }
+}

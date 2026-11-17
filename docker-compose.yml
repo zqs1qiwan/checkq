@@ -3,6 +3,9 @@ services:
     build: .
     container_name: checkq
     restart: unless-stopped
+    # 容器内服务默认监听 8888（server/src/index.js: PORT||8888）；
+    # 宿主 18888 只是本地测试用的映射，避免和本机其它 8888 服务冲突。
+    # 生产直连请用 docker-compose.prod.yml（8888:8888）。
     ports:
       - "18888:8888"
     environment:

@@ -6,14 +6,15 @@
 <meta name="color-scheme" content="dark light" />
 <title>概览 · CheckQ 文档</title>
 <meta name="description" content="CheckQ 能做什么" />
+<link rel="icon" href="./assets/brand/checkq-mark.svg" type="image/svg+xml" />
 <link rel="stylesheet" href="./assets/style.css" />
 
 </head>
 <body>
 <div class="wrap">
   <aside>
-    <div class="brand">Check<span>Q</span></div>
-    <div class="brand-sub">自动化签到引擎 · 文档</div>
+    <div class="brand"><img src="./assets/brand/checkq-mark.svg" width="24" height="24" alt="" /><span class="brand-word">Check<em>Q</em></span></div>
+    <div class="brand-sub">开源可视化自动挂机与签到 · 文档</div>
     <input id="search" type="search" placeholder="搜索文档…" autocomplete="off" />
     <div id="results"></div>
     <nav>
@@ -35,11 +36,12 @@
   </aside>
   <main>
 <h1 id="checkq-概览">CheckQ 概览</h1>
+<blockquote>开源的可视化自动挂机、签到框架。</blockquote>
 <p>CheckQ 是一个<strong>可视化 HTTP 自动化流程引擎</strong>（框架 / 平台）：把「每天要做的签到、监控、定时请求」做成可编辑、可复用、可被外部程序驱动的流程。</p>
 <h2 id="核心能力">核心能力</h2>
 <div class="table-wrap"><table><thead><tr><th>能力</th><th>说明</th></tr></thead><tbody><tr><td>积木式流程</td><td>HTTP / 条件 / 赋值 / 提取 / 延迟 / 日志 / 通知 / 脚本 / 遍历 节点，拖拽连线即成流程</td></tr><tr><td>点选生成逻辑</td><td>运行后点响应里的任意值 → 一键生成提取 / 断言 / 关键字 / 通知 节点</td></tr><tr><td>导入</td><td>浏览器 HAR、cURL 命令、JSON 模板导入，自动生成流程图</td></tr><tr><td>调度</td><td>每个任务独立 cron + 时区 + 抖动；支持手动运行与「调试运行」；<strong>失败按退避策略自动重试，跑满次数才判定最终失败</strong></td></tr><tr><td>日志</td><td>默认只输出人话日志，可开调试模式看每步请求与响应；运行记录含逐次尝试与等待时长</td></tr><tr><td>通知</td><td>12 种渠道：站内通知、Webhook、Bark、Telegram、Server酱、PushPlus、钉钉、企业微信、飞书、Gotify、ntfy、邮件 SMTP</td></tr><tr><td>模板</td><td>调试好的流程存为模板，一份模板派生多份任务；<strong>模板一改，派生任务立刻跟随，零同步操作</strong></td></tr><tr><td>账号安全</td><td>多用户 + 角色、TOTP 两步验证、会话吊销、凭据静态加密、API Key 作用域与 IP 名单</td></tr><tr><td>开放接口</td><td>REST（OpenAPI 3.1）+ MCP（20 个工具），外部 Agent 可直接操作</td></tr><tr><td>任务分组</td><td>任务可归属分组，列表按组折叠；组头显示任务数、启用数、今日成功/失败/成功率、下次调度</td></tr></tbody></table></div>
 <h2 id="接下来去哪">接下来去哪</h2>
-<div class="table-wrap"><table><thead><tr><th>我想…</th><th>去哪</th></tr></thead><tbody><tr><td>跑通第一个任务</td><td><a href="/quickstart.html">快速开始</a></td></tr><tr><td>了解节点、变量、分组</td><td><a href="/tasks.html">任务与流程</a></td></tr><tr><td>配置日志与通知</td><td><a href="/logs.html">日志与通知</a></td></tr><tr><td>给外部程序开接口</td><td><a href="/api.html">API 与 MCP</a></td></tr><tr><td>部署 / 备份 / 迁移</td><td><a href="/deploy.html">部署与备份</a></td></tr><tr><td>排查问题</td><td><a href="/faq.html">常见问题</a></td></tr></tbody></table></div>
+<div class="table-wrap"><table><thead><tr><th>我想…</th><th>去哪</th></tr></thead><tbody><tr><td>跑通第一个任务</td><td><a href="quickstart.html">快速开始</a></td></tr><tr><td>了解节点、变量、分组</td><td><a href="tasks.html">任务与流程</a></td></tr><tr><td>配置日志与通知</td><td><a href="logs.html">日志与通知</a></td></tr><tr><td>给外部程序开接口</td><td><a href="api.html">API 与 MCP</a></td></tr><tr><td>部署 / 备份 / 迁移</td><td><a href="deploy.html">部署与备份</a></td></tr><tr><td>排查问题</td><td><a href="faq.html">常见问题</a></td></tr></tbody></table></div>
     <div class="foot">CheckQ 文档 · 由 <code>tools/build-wiki.cjs</code> 生成 · <a href="https://github.com/zqs1qiwan/checkq/issues">反馈问题</a></div>
   </main>
 </div>

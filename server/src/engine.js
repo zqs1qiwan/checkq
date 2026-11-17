@@ -6,6 +6,7 @@
 
 import { renderTemplate, resolvePath, evalExpr } from './render.js';
 import { CookieJar, mergeCookieHeader } from './cookiejar.js';
+import { sendToChannels } from './notify.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -287,8 +288,9 @@ export class Engine {
     let status, statusText, text, respHeaders, setCookies;
     try {
       if ((c.backend || 'fetch') === 'curl') {
+        // c.timeout 单位是秒（与 fetch 路径一致），httpViaCurl 内部按毫秒处理
         ({ status, statusText, headers: respHeaders, text, setCookies } = await httpViaCurl(
-          url, method, headers, body, c.timeout || HTTP_TIMEOUT / 1000, (c.redirect || 'follow') !== 'manual', proxyUrl));
+          url, method, headers, body, c.timeout ? Math.max(1000, Number(c.timeout) * 1000) : HTTP_TIMEOUT, (c.redirect || 'follow') !== 'manual', proxyUrl));
       } else {
         const dispatcher = proxyUrl ? getProxyAgent(proxyUrl) : undefined;
         const controller = new AbortController();
@@ -572,7 +574,7 @@ export class Engine {
         }
         // 先按模板渲染，允许 {{var}} 占位
         const rendered = renderTemplate(code, vars, missing);
-        const snapshot = JSON.parse(JSON.stringify({ vars, last: state.last, steps: state.steps }, (_k, v) => (typeof v === 'object' && v !== null && v.__proto__ !== undefined ? v : v)));
+        const snapshot = JSON.parse(JSON.stringify({ vars, last: state.last, steps: state.steps }));
         let out;
         try {
           const ctx = {
@@ -679,34 +681,16 @@ export class Engine {
         const c = node.config || {};
         const text = renderTemplate(String(c.text ?? ''), vars, missing);
         const targets = [];
-        if (c.webhookUrl) targets.push({ kind: 'webhook', url: renderTemplate(c.webhookUrl, vars, missing) });
-        if (c.tgToken && c.tgChat) targets.push({ kind: 'telegram', token: c.tgToken, chat: c.tgChat });
-        if (c.barkUrl) targets.push({ kind: 'bark', url: renderTemplate(c.barkUrl, vars, missing) });
+        if (c.webhookUrl) targets.push({ type: 'webhook', url: renderTemplate(c.webhookUrl, vars, missing) });
+        if (c.tgToken && c.tgChat) targets.push({ type: 'telegram', token: c.tgToken, chat: c.tgChat });
+        if (c.barkUrl) targets.push({ type: 'bark', url: renderTemplate(c.barkUrl, vars, missing) });
         if (!targets.length) {
           stepLog.message = '未配置通知渠道，跳过';
           return { handle: 'next' };
         }
-        const errors = [];
-        let sent = false;
-        for (const t of targets) {
-          try {
-            if (t.kind === 'webhook') {
-              await fetch(t.url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: text });
-            } else if (t.kind === 'telegram') {
-              await fetch(`https://api.telegram.org/bot${t.token}/sendMessage`, {
-                method: 'POST',
-                headers: { 'content-type': 'application/json' },
-                body: JSON.stringify({ chat_id: t.chat, text }),
-              });
-            } else if (t.kind === 'bark') {
-              const sep = t.url.endsWith('/') ? '' : '/';
-              await fetch(`${t.url}${sep}${encodeURIComponent(text)}`, { method: 'GET' });
-            }
-            sent = true;
-          } catch (err) {
-            errors.push(`${t.kind}: ${err.message}`);
-          }
-        }
+        const results = await sendToChannels(targets, text, { flowName: '通知节点' });
+        const errors = results.filter((r) => !r.ok).map((r) => `${r.type}: ${r.error}`);
+        const sent = results.some((r) => r.ok);
         stepLog.message = errors.length
           ? (sent ? `通知部分失败: ${errors.join('; ')}` : `通知失败: ${errors.join('; ')}`)
           : `已推送: ${text.slice(0, 100)}`;

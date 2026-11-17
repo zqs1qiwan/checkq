@@ -37,6 +37,7 @@ const step = (label, cmd, args, opts) => {
 };
 
 const build = step('前端构建', NPM, ['run', 'build'], { cwd: path.join(ROOT, 'web') });
+step('前端产物同步', NODE, ['tools/copy-web.cjs']);
 step('服务端全量单测', NODE, ['--test', 'test/*.test.js'], { cwd: path.join(ROOT, 'server') });
 step('文案审计', NODE, ['tools/copy-audit.cjs']);
 step('秘密扫描', NODE, ['tools/secret-scan.cjs']);

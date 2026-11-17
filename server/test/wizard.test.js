@@ -1,39 +1,13 @@
 /**
- * 菜单式向导生成（FlowList.buildWizardFlow 的服务端对位单测）：
- * 输入 URL/事件/关键词 → 标准流程（http 断言 + 日志），name 按 hostname 派生。
- * 前端函数与此处等价逻辑保持一致（web 不能直接 import server 测，vite 外部引用 Digest 已在 CI 跑过）。
+ * 菜单式向导生成：直接 import 前端 shipped 的纯逻辑（wizard-logic.js），
+ * 不再抄副本，保证测的就是线上代码。
  */
 import assert from 'node:assert';
 import { Engine } from '../src/engine.js';
+import { buildWizardFlow, parseNatural } from '../../web/src/components/flow-list/wizard-logic.js';
 
 let passed = 0, failed = 0;
 function check(n, c) { if (c) { passed++; console.log(`  PASS ${n}`); } else { failed++; console.log(`  FAIL ${n}`); } }
-
-/**
- * 自然语言解析（对话生成原型）：一句话 → {url, method, keyword, eventLabel}
- * 例："每天8点去 https://ex.com/sign 签到，看到签到成功算成功"
- */
-export function parseNatural(text) {
-  const t = String(text || '');
-  const urlM = t.match(/https?:\/\/[^\s"'）)]+/);
-  const url = urlM ? urlM[0] : '';
-  const method = /\bPOST\b/i.test(t) ? 'POST' : 'GET';
-  const kwM = t.match(/看到(.{2,12}?)算?成功/) || t.match(/成功词[是:：](.{2,12})/);
-  const keyword = kwM ? kwM[1].replace(/算?成功$/,'').trim() : '';
-  const events = ['签到', '抽卡', '库存监控', '信息查询'];
-  const eventLabel = events.find((e) => t.includes(e)) || (t.includes('签到') ? '签到' : '其他');
-  return { url, method, keyword, eventLabel };
-}
-
-function buildWizardFlow({ url, method, keyword, eventLabel }) {
-  const hostname = (() => { try { return new URL(url).hostname; } catch { return '自定义任务'; } })();
-  const nodes = [
-    { id: 'n0', type: 'http', name: `${method} ${hostname}`, x: 80, y: 60, config: { method, url, headers: [{ name: 'user-agent', value: 'Mozilla/5.0', enabled: true }], body: '', asserts: keyword ? [{ res: [keyword], from: 'content' }] : [] } },
-    { id: 'n1', type: 'log', name: '记录结果', x: 360, y: 60, config: { text: `${eventLabel}完成：{{last.status}}` } },
-  ];
-  const edges = [{ id: 'e0', source: 'n0', sourceHandle: 'success', target: 'n1' }];
-  return { name: `${hostname} · ${eventLabel}`, nodes, edges, vars: {}, cron: '0 8 * * *', timezone: 'Asia/Shanghai', enabled: false };
-}
 
 {
   const f = buildWizardFlow({ url: 'https://example.com/api/sign', method: 'POST', keyword: '签到成功', eventLabel: '签到' });

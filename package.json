@@ -1,7 +1,12 @@
 {
   "name": "checkq",
-  "version": "0.3.17",
+  "version": "0.6.2",
   "private": true,
   "description": "Visual HTTP automation flow engine — docker-deployable",
-  "license": "MIT"
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test server/test/*.test.js",
+    "build": "npm run build --prefix web",
+    "audit": "node tools/project-audit.cjs && node tools/copy-audit.cjs && node tools/secret-scan.cjs"
+  }
 }

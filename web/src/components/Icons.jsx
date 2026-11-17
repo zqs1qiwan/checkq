@@ -35,7 +35,7 @@ export function IconBell({ size = 16, ...rest }) {
 export function IconHelp({ size = 16, ...rest }) {
   return (
     <S size={size} {...rest}>
-      <circle cx="12" cy="12" r="9" />
+      <circle cx="12" cy="12" r="8.2" />
       <path d="M9.6 9a2.5 2.5 0 1 1 3.4 2.3c-.7.4-1 .9-1 1.7v.3" />
       <path d="M12 17h.01" />
     </S>
@@ -62,25 +62,8 @@ export function IconMoon({ size = 16, ...rest }) {
 export function IconAuto({ size = 16, ...rest }) {
   return (
     <S size={size} {...rest}>
-      <circle cx="12" cy="12" r="8.5" />
-      <path d="M12 3.5v17" />
-      <path d="M12 3.5a8.5 8.5 0 0 1 0 17" fill="currentColor" stroke="none" />
-    </S>
-  );
-}
-
-export function IconClose({ size = 16, ...rest }) {
-  return (
-    <S size={size} {...rest}>
-      <path d="M6 6l12 12M18 6L6 18" />
-    </S>
-  );
-}
-
-export function IconPlay({ size = 16, ...rest }) {
-  return (
-    <S size={size} {...rest}>
-      <path d="M7 4.5v15l12-7.5-12-7.5Z" />
+      <circle cx="12" cy="12" r="8.2" />
+      <path d="M12 3.8a8.2 8.2 0 0 1 0 16.4" fill="currentColor" stroke="none" opacity="0.55" />
     </S>
   );
 }
@@ -103,27 +86,6 @@ export function IconDownload({ size = 16, ...rest }) {
     </S>
   );
 }
-
-export function IconTrash({ size = 16, ...rest }) {
-  return (
-    <S size={size} {...rest}>
-      <path d="M4 7h16" />
-      <path d="M9 7V5h6v2" />
-      <path d="M6 7l1 12h10l1-12" />
-    </S>
-  );
-}
-
-export function IconMore({ size = 16, ...rest }) {
-  return (
-    <S size={size} {...rest}>
-      <circle cx="5" cy="12" r="1.6" fill="currentColor" stroke="none" />
-      <circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none" />
-      <circle cx="19" cy="12" r="1.6" fill="currentColor" stroke="none" />
-    </S>
-  );
-}
-
 
 export function IconBook({ size = 16, ...rest }) {
   return (
@@ -185,9 +147,36 @@ export function IconGear({ size = 16, ...rest }) {
 export function IconGlobe({ size = 16, ...rest }) {
   return (
     <S size={size} {...rest}>
-      <circle cx="12" cy="12" r="9" />
-      <path d="M3.5 9h17M3.5 15h17" />
-      <path d="M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18Z" />
+      <circle cx="12" cy="12" r="8.2" />
+      <path d="M3.8 9h16.4M3.8 15h16.4" />
+      <path d="M12 3.8a13 13 0 0 1 0 16.4 13 13 0 0 1 0-16.4Z" />
+    </S>
+  );
+}
+
+/** 更多操作：三点，和线性图标同视窗同描边 */
+export function IconMore({ size = 16, ...rest }) {
+  return (
+    <S size={size} {...rest}>
+      <circle cx="5.5" cy="12" r="1.35" fill="currentColor" stroke="none" />
+      <circle cx="12" cy="12" r="1.35" fill="currentColor" stroke="none" />
+      <circle cx="18.5" cy="12" r="1.35" fill="currentColor" stroke="none" />
+    </S>
+  );
+}
+
+export function IconChevronDown({ size = 16, ...rest }) {
+  return (
+    <S size={size} {...rest}>
+      <path d="m6.5 10 5.5 5.5L17.5 10" />
+    </S>
+  );
+}
+
+export function IconClose({ size = 16, ...rest }) {
+  return (
+    <S size={size} {...rest}>
+      <path d="M6 6l12 12M18 6L6 18" />
     </S>
   );
 }

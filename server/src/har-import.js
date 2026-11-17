@@ -14,7 +14,8 @@
 /**
  * QD 任务级 retry → 节点重试（QIANDAO-COMPAT §7 遗留）：
  * QD 的 retry_count/retry_interval 是任务级 env 变量，语义为"整个任务失败后隔 N 秒再试"。
- * CheckQ 无任务级整流重试，映射为每个 http 节点的 retry（times/backoffMs/retryOn=both），
+ * CheckQ 已有自己的任务级重试（server/src/retry.js，由调度/运行器统一执行），
+ * 这里把 QD 的任务级 retry 映射为每个 http 节点的 retry（times/backoffMs/retryOn=both），
  * 即"每步失败都按任务级次数与间隔重试"。来源优先级：显式 opts > 顶层字段 > task/env 嵌套。
  */
 function resolveRetry(har, opts = {}) {

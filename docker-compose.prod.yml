@@ -3,6 +3,8 @@ services:
     build: .
     container_name: checkq
     restart: unless-stopped
+    # 生产口径：宿主与容器都用服务端默认端口 8888（server/src/index.js: PORT||8888）。
+    # 本地测试若需要避开 8888，用 docker-compose.yml（18888:8888）。
     ports:
       - "8888:8888"
     environment:

@@ -21,8 +21,8 @@ r = await app.inject({ method: 'POST', url: '/api/flows', cookies: ck, payload: 
 const fid = r.json().id;
 r = await app.inject({ method: 'POST', url: `/api/flows/${fid}/notify-test`, cookies: ck, payload: {} });
 check('通知测试打到不可达 webhook → 502 带结果', r.statusCode === 502 && r.json().results?.[0]?.ok === false);
-r = await app.inject({ method: 'POST', url: '/api/system/daily-summary', cookies: ck, payload: {} });
-check('每日汇总预览返回 stats', r.json().ok === true && typeof r.json().stats?.flows === 'number');
+r = await app.inject({ method: 'POST', url: '/api/system/notify/preview', cookies: ck, payload: {} });
+check('每日汇总预览返回 text/window/counts', typeof r.json().text === 'string' && r.json().text.startsWith('每日汇总 · ') && typeof r.json().counts?.runs === 'number');
 r = await app.inject({ method: 'POST', url: `/api/flows/${fid}/run`, cookies: ck, payload: {} });
 check('run 触发后 webhook 失败不影响主流程', r.json().status === 'success');
 

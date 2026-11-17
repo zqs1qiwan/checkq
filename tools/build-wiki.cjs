@@ -118,6 +118,8 @@ const PAGES = [
 const SOURCES = {
   'index.md': `# CheckQ 概览
 
+> 开源的可视化自动挂机、签到框架。
+
 CheckQ 是一个**可视化 HTTP 自动化流程引擎**（框架 / 平台）：把「每天要做的签到、监控、定时请求」做成可编辑、可复用、可被外部程序驱动的流程。
 
 ## 核心能力
@@ -139,12 +141,12 @@ CheckQ 是一个**可视化 HTTP 自动化流程引擎**（框架 / 平台）：
 
 | 我想… | 去哪 |
 |---|---|
-| 跑通第一个任务 | [快速开始](/quickstart.html) |
-| 了解节点、变量、分组 | [任务与流程](/tasks.html) |
-| 配置日志与通知 | [日志与通知](/logs.html) |
-| 给外部程序开接口 | [API 与 MCP](/api.html) |
-| 部署 / 备份 / 迁移 | [部署与备份](/deploy.html) |
-| 排查问题 | [常见问题](/faq.html) |
+| 跑通第一个任务 | [快速开始](quickstart.html) |
+| 了解节点、变量、分组 | [任务与流程](tasks.html) |
+| 配置日志与通知 | [日志与通知](logs.html) |
+| 给外部程序开接口 | [API 与 MCP](api.html) |
+| 部署 / 备份 / 迁移 | [部署与备份](deploy.html) |
+| 排查问题 | [常见问题](faq.html) |
 `,
   'quickstart.md': `# 快速开始
 
@@ -172,7 +174,7 @@ CheckQ 是一个**可视化 HTTP 自动化流程引擎**（框架 / 平台）：
 
 - **调试运行**：编辑器顶栏「调试运行」记录每步请求/响应并展开过程窗口；日常「运行」只输出配置好的日志。
 - **连续日志流**：任务行「日志」→ 多次运行滚动在一起，可上翻历史、导出。
-- **外部 Agent**：设置 → API 密钥 → 生成（只读 + 可运行）→ 配合 [API 与 MCP](/api.html)。
+- **外部 Agent**：设置 → API 密钥 → 生成（只读 + 可运行）→ 配合 [API 与 MCP](api.html)。
 - **窄屏**：顶栏「+ / ⋯ / 设置」三个图标按钮；主题、站内通知、文档中心、登录身份都在「⋯」里。
 `,
   'tasks.md': `# 任务与流程
@@ -316,7 +318,7 @@ CSP / X-Frame-Options / nosniff / Referrer-Policy；写操作校验 Origin 同�
 | 模板 | GET | /api/templates |
 | 运维统计 | GET | /api/system/stats |
 
-任务对象含 \`retry = { enabled, maxAttempts, backoff, baseDelayMs, maxDelayMs, jitter }\`（默认开启 / 3 次 / 指数 / 5s / 5min / 抖动）；运行对象含 \`attempts[]\`、\`attempt\`、\`maxAttempts\`。完整字段见 [API 参考](/reference-api.html)。
+任务对象含 \`retry = { enabled, maxAttempts, backoff, baseDelayMs, maxDelayMs, jitter }\`（默认开启 / 3 次 / 指数 / 5s / 5min / 抖动）；运行对象含 \`attempts[]\`、\`attempt\`、\`maxAttempts\`。完整字段见 [API 参考](reference-api.html)。
 
 ## MCP
 
@@ -332,7 +334,7 @@ CSP / X-Frame-Options / nosniff / Referrer-Policy；写操作校验 Origin 同�
 
 ## 给外部 Agent 的东西
 
-只有**基址 + 一把 Key**；建议只勾「只读 + 可运行」，把「可修改」留给人工。详见 [Agent 接入指南](/reference-agent.html)。
+只有**基址 + 一把 Key**；建议只勾「只读 + 可运行」，把「可修改」留给人工。详见 [Agent 接入指南](reference-agent.html)。
 `,
   'deploy.md': `# 部署与备份
 
@@ -397,8 +399,10 @@ body { margin:0; background: var(--bg); color: var(--text); font: 14px/1.65 "Seg
 a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
 .wrap { display: flex; min-height: 100vh; }
 aside { width: 272px; flex: none; border-right: 1px solid var(--border); background: var(--panel); padding: 20px 14px; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
-.brand { display: flex; align-items: center; gap: 9px; font-weight: 700; font-size: 17px; margin-bottom: 4px; }
-.brand span { color: var(--accent); }
+.brand { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 17px; margin-bottom: 4px; }
+.brand img { flex: none; border-radius: 5px; }
+.brand-word { letter-spacing: -.02em; }
+.brand-word em { color: var(--accent); font-style: normal; }
 .brand-sub { color: var(--muted); font-size: 12.5px; margin-bottom: 14px; }
 #search { width: 100%; height: 32px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--input-bg, var(--panel2)); color: var(--text); font-size: 13px; margin-bottom: 12px; }
 #search:focus { outline: none; border-color: var(--accent); }
@@ -478,14 +482,15 @@ function page({ file, title, desc, body, extraHead = '' }) {
 <meta name="color-scheme" content="dark light" />
 <title>${title} · CheckQ 文档</title>
 <meta name="description" content="${desc}" />
+<link rel="icon" href="./assets/brand/checkq-mark.svg" type="image/svg+xml" />
 <link rel="stylesheet" href="./assets/style.css" />
 ${extraHead}
 </head>
 <body>
 <div class="wrap">
   <aside>
-    <div class="brand">Check<span>Q</span></div>
-    <div class="brand-sub">自动化签到引擎 · 文档</div>
+    <div class="brand"><img src="./assets/brand/checkq-mark.svg" width="24" height="24" alt="" /><span class="brand-word">Check<em>Q</em></span></div>
+    <div class="brand-sub">开源可视化自动挂机与签到 · 文档</div>
     <input id="search" type="search" placeholder="搜索文档…" autocomplete="off" />
     <div id="results"></div>
     <nav>
@@ -520,6 +525,8 @@ function changelogHtml() {
 
 fs.rmSync(OUT, { recursive: true, force: true });
 fs.mkdirSync(path.join(OUT, 'assets'), { recursive: true });
+fs.mkdirSync(path.join(OUT, 'assets', 'brand'), { recursive: true });
+fs.copyFileSync(path.join(ROOT, 'web', 'public', 'brand', 'checkq-mark.svg'), path.join(OUT, 'assets', 'brand', 'checkq-mark.svg'));
 fs.writeFileSync(path.join(OUT, 'assets', 'style.css'), CSS, 'utf8');
 
 const searchIndex = [];

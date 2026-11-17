@@ -19,12 +19,15 @@ const EXPLAIN_WORDS = ['说明', '建议', '例如', '例：', '请先', '可以
 // 空态 / 状态反馈（允许常驻）
 const EMPTY_STATE = /暂无|还没有|没有可推送|^—$|未设置|未启用|未配置/;
 const files = new Set();
-for (const d of DIRS) {
-  if (!fs.existsSync(d)) continue;
-  for (const f of fs.readdirSync(d)) {
-    if (/\.jsx$/.test(f)) files.add(path.join(d, f));
+function collect(dir) {
+  if (!fs.existsSync(dir)) return;
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) collect(p);              // 拆分出的 flow-list/ editor/ 子目录也要纳入
+    else if (e.isFile() && /\.jsx$/.test(e.name)) files.add(p);
   }
 }
+for (const d of DIRS) collect(d);
 
 const findings = [];
 for (const file of files) {

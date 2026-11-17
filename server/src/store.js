@@ -8,8 +8,9 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { Cron } from 'croner';
 import { hashPwd, checkPassword } from './auth.js';
-import { secretKey, encryptSecrets, decryptSecrets, maskSecrets } from './secret.js';
+import { secretKey, encryptSecrets, decryptSecrets, maskSecrets, encryptChannels, decryptChannels, maskChannels, encryptMeta, decryptMeta } from './secret.js';
 import { normalizeRetry, DEFAULT_RETRY } from './retry.js';
+import { normalizeRecovery, nextProbeTime } from './recovery.js';
 
 /**
  * 稳定序列化（对象键排序）：比较流程图时忽略 JSON 键顺序，避免「同内容不同顺序」被误判为改动
@@ -64,6 +65,7 @@ export class Store {
     this.metaFile = path.join(dataDir, 'meta.json');
     this.templatesFile = path.join(dataDir, 'templates.json');
     this.notificationsFile = path.join(dataDir, 'notifications.json');
+    this.channelsFile = path.join(dataDir, 'channels.json');
     // 敏感凭据静态加密密钥（CHECKQ_SECRET 或 data/.secret）
     this.secretKey = secretKey(dataDir);
     // 磁盘上可能是密文（旧版本是明文），读入时统一解密到内存
@@ -71,7 +73,17 @@ export class Store {
     this.runs = this.#load(this.runsFile, []);
     this.templates = this.#load(this.templatesFile, []).map((x) => decryptSecrets(this.secretKey, x));
     this.notifications = this.#load(this.notificationsFile, []);
-    this.meta = this.#load(this.metaFile, {});
+    this.meta = decryptMeta(this.secretKey, this.#load(this.metaFile, {}));
+
+    // ---- 系统通知渠道（v0.5.3）：channels.json 与 flows 同加密策略 ----
+    const hasChannelsFile = fs.existsSync(this.channelsFile);
+    if (hasChannelsFile) {
+      const raw = this.#load(this.channelsFile, { version: 1, system: [] });
+      this.channels = { version: 1, system: this.#normalizeChannels(decryptChannels(this.secretKey, raw.system || [])) };
+    } else {
+      this.channels = { version: 1, system: [] };
+      this.#migrateChannelsFromLegacy();
+    }
 
     // ---- 账号体系（v0.4.3）：多用户 + 角色 + 2FA + 审计 ----
     this.meta.users = Array.isArray(this.meta.users) ? this.meta.users : [];
@@ -127,12 +139,12 @@ export class Store {
         createdAt: Date.now(),
         lastLoginAt: null,
       });
-      this.meta.firstRunPassword = pwd;   // 仅本次进程内打印一次，不写盘
-      this.#save(this.metaFile, this.meta);
+      // 初始密码只打印一次，绝不写入 meta（日志本身就是唯一交付渠道）
+      this.#save(this.metaFile, encryptMeta(this.secretKey, this.meta));
       console.log(`[CheckQ] 初始账号 admin，初始密码: ${pwd}（仅显示一次，请立即登录后修改）`);
     } else {
       delete this.meta.firstRunPassword;
-      this.#save(this.metaFile, this.meta);
+      this.#save(this.metaFile, encryptMeta(this.secretKey, this.meta));
     }
   }
 
@@ -156,7 +168,8 @@ export class Store {
     this.#save(this.runsFile, this.runs);
     this.#save(this.templatesFile, this.templates.map((x) => encryptSecrets(this.secretKey, x)));
     this.#save(this.notificationsFile, this.notifications);
-    this.#save(this.metaFile, this.meta);
+    this.#save(this.channelsFile, { version: 1, system: encryptChannels(this.secretKey, this.channels.system) });
+    this.#save(this.metaFile, encryptMeta(this.secretKey, this.meta));
   }
 
   /** 导出/备份用：脱敏后的 flow（敏感值替换为 *** / 空） */
@@ -166,6 +179,60 @@ export class Store {
 
   maskedTemplate(t) {
     return maskSecrets(t);
+  }
+
+  /** 系统通知渠道：内存为明文，落盘时加密；inbox 恒有且排第一 */
+  #normalizeChannels(list) {
+    const arr = Array.isArray(list) ? list : [];
+    const existingInbox = arr.find((c) => c && c.type === 'inbox');
+    const inbox = { id: existingInbox?.id || 'ch_inbox', type: 'inbox', title: '每日汇总' };
+    const external = arr
+      .filter((c) => c && typeof c === 'object' && c.type && c.type !== 'inbox')
+      .slice(0, 10)
+      .map((c) => ({ ...c, id: c.id || `ch_${crypto.randomUUID()}` }));
+    return [inbox, ...external];
+  }
+
+  /** 首次启动：把旧「推送单位」中第一个仍启用任务的渠道复制成系统渠道（只做一次） */
+  #migrateChannelsFromLegacy() {
+    const cfg = this.meta.dailySummary || {};
+    // 迁移只执行一次：channels.json 被删但 migratedAt 还在时，不再从任务复制
+    if (cfg.migratedAt) {
+      this.channels = { version: 1, system: this.#normalizeChannels([]) };
+      this.#save(this.channelsFile, { version: 1, system: encryptChannels(this.secretKey, this.channels.system) });
+      return;
+    }
+    const ids = Array.isArray(cfg.targetFlowIds) && cfg.targetFlowIds.length
+      ? cfg.targetFlowIds
+      : (cfg.targetFlowId ? [cfg.targetFlowId] : []);
+    let source = null;
+    for (const id of ids) {
+      const f = this.flows.find((x) => x.id === id);
+      if (f && f.enabled && f.notify?.channels?.length) { source = f; break; }
+    }
+    const external = source
+      ? source.notify.channels.filter((c) => c && c.type !== 'inbox').slice(0, 10).map((c) => ({ ...c, id: c.id || `ch_${crypto.randomUUID()}` }))
+      : [];
+    this.channels = { version: 1, system: this.#normalizeChannels(external) };
+    if (source) {
+      this.meta.dailySummary = { ...cfg, migratedFrom: source.id, migratedAt: Date.now() };
+      console.log(`[CheckQ] 系统通知渠道已从任务「${source.name}」迁移（${external.length} 条外部渠道 + 站内通知）`);
+    }
+    this.#save(this.channelsFile, { version: 1, system: encryptChannels(this.secretKey, this.channels.system) });
+  }
+
+  getSystemChannels() {
+    return this.channels.system.map((c) => ({ ...c }));
+  }
+
+  setSystemChannels(list) {
+    this.channels = { version: 1, system: this.#normalizeChannels(list) };
+    this.flush();
+    return this.getSystemChannels();
+  }
+
+  maskedSystemChannels() {
+    return maskChannels(this.channels.system);
   }
 
   /** 立即落盘（跳过 400ms 节流窗口）；进程退出前调用，避免重启丢配置 */
@@ -248,6 +315,10 @@ export class Store {
         enabled: f.enabled, jitterMinutes: f.jitterMinutes || 0, varsCount: Object.keys(f.vars || {}).length,
         group: f.group || '',                  // 分组名（空 = 未分组）
         retry: normalizeRetry(f.retry),       // 失败重试策略（列表/详情展示用）
+        recovery: normalizeRecovery(f.recovery), // 自动恢复探测配置与运行态
+        isDemo: f.isDemo === true,            // 内置演练任务（P0-1）：界面标记「演示」，不参与导出
+        pausedAt: f.pausedAt || null,          // 连续失败自动停用的时间
+        pausedReason: f.pausedReason || '',    // 自动停用的原因（最后一次失败结论）
         nodesCount: (resolved.nodes || []).length, tplId: f.tplId || null,
         template: this.templateInfo(f),        // { id, name } —— 来源模板标注
         lastRun,
@@ -306,6 +377,11 @@ export class Store {
       log: data.log || null,
       // 任务级失败重试：默认开启（3 次、指数退避），用户可在「调度」里关闭
       retry: normalizeRetry(data.retry),
+      // 自动停用后的恢复探测：默认关闭；开启后由 scheduler 按间隔静默探测
+      recovery: normalizeRecovery(data.recovery),
+      isDemo: data.isDemo === true,
+      pausedAt: data.pausedAt || null,
+      pausedReason: data.pausedReason || '',
       tplId: data.tplId || null,
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -318,7 +394,7 @@ export class Store {
   updateFlow(id, patch) {
     const f = this.getFlowRaw(id);
     if (!f) return null;
-    const allowed = ['name', 'note', 'cron', 'timezone', 'enabled', 'vars', 'nodes', 'edges', 'notify', 'log', 'jitterMinutes', 'retry', 'group', 'tplId'];
+    const allowed = ['name', 'note', 'cron', 'timezone', 'enabled', 'vars', 'nodes', 'edges', 'notify', 'log', 'jitterMinutes', 'retry', 'recovery', 'group', 'tplId', 'isDemo', 'pausedAt', 'pausedReason'];
     // 派生任务改了「脚本内容」→ 自动转成独立任务（否则模板下次更新会把用户的改动覆盖掉）
     let detached = null;
     if (f.tplId && (patch.nodes !== undefined || patch.edges !== undefined)) {
@@ -335,6 +411,34 @@ export class Store {
     if (patch.group !== undefined) f.group = normalizeGroup(patch.group);
     // 重试配置始终收敛成合法值（手写 API / 旧前端都不会把引擎搞崩）
     if (patch.retry !== undefined) f.retry = normalizeRetry(patch.retry);
+    // 恢复探测配置与运行态一起收敛；前端只传 enabled/interval/maxAttempts 时保留已有时刻
+    if (patch.recovery !== undefined) {
+      const merged = normalizeRecovery({ ...(f.recovery || {}), ...patch.recovery });
+      // 刚给一个已暂停任务打开探测：从「现在 + 间隔」开始，不立刻打站点
+      if (merged.enabled && f.pausedAt && !merged.nextProbeAt && !merged.exhausted) {
+        merged.nextProbeAt = nextProbeTime(merged);
+      }
+      f.recovery = merged;
+    }
+    // 重新启用即视为用户主动恢复：清掉自动停用的标记
+    if (patch.enabled === true) {
+      f.pausedAt = null;
+      f.pausedReason = '';
+      const rec = normalizeRecovery(f.recovery);
+      // 手动重新启用保留「上次探测结果」；探测成功则带上 success 结果一起落库
+      f.recovery = {
+        ...rec,
+        attempts: 0,
+        nextProbeAt: null,
+        exhausted: false,
+        lastProbeAt: patch.recovery?.lastProbeAt ?? null,
+        lastResult: patch.recovery?.lastResult ?? null,
+      };
+    }
+    // 兜底：任何写入路径（包括手写 API）让「已暂停 + 已开启探测」但没有下一次时间时补齐
+    if (f.recovery?.enabled && f.pausedAt && !f.recovery.nextProbeAt && !f.recovery.exhausted) {
+      f.recovery.nextProbeAt = nextProbeTime(f.recovery);
+    }
     f.updatedAt = Date.now();
     this.flush();
     const out = this.resolveFlow(f);
@@ -361,6 +465,7 @@ export class Store {
       nodesCount: (t.nodes || []).length,
       taskCount: this.flows.filter((f) => f.tplId === t.id).length,
       updatedAt: t.updatedAt || t.createdAt || 0,
+      market: t.market || null,   // 市场来源 { sourceId, sourceUrl, sha256, importedAt }
     }));
   }
 
@@ -383,6 +488,7 @@ export class Store {
       log: data.log || null,
       // 模板携带通知渠道（带通知的模板实例自动带上通知）：flow.notify 经模板边界不丢失
       notify: data.notify || {},
+      market: data.market || null,   // 模板市场来源（导入时写入，用于重复导入判定）
       createdAt: now,
       updatedAt: now,
     };
@@ -394,7 +500,7 @@ export class Store {
   updateTemplate(id, patch) {
     const t = this.getTemplate(id);
     if (!t) return null;
-    for (const k of ['name', 'desc', 'vars', 'varNames', 'log', 'nodes', 'edges', 'notify']) {
+    for (const k of ['name', 'desc', 'vars', 'varNames', 'log', 'nodes', 'edges', 'notify', 'market']) {
       if (patch[k] !== undefined) t[k] = patch[k];
     }
     // varNames 与 vars 保持一致：显式传 varNames 时以它为准补齐 vars；只改 vars 时同步 varNames
@@ -707,6 +813,56 @@ export class Store {
     return this.meta.audit.slice(0, Math.min(Math.max(1, limit), 500));
   }
 
+  /** 指定时间窗内的运行统计（每日汇总用；窗口按服务器本地自然日） */
+  statsForRange(startMs, endMs) {
+    const inWindow = this.runs.filter((r) => (r.startedAt || 0) >= startMs && (r.startedAt || 0) <= endMs);
+    const success = inWindow.filter((r) => r.status === 'success').length;
+    const failed = inWindow.filter((r) => r.status === 'failed').length;
+    const names = new Map(this.flows.map((f) => [f.id, f.name]));
+
+    // 每个任务取窗口内最后一条失败，作为“需要你看一眼”的条目
+    const latestFailure = new Map();
+    for (const r of inWindow) {
+      if (r.status !== 'failed' || latestFailure.has(r.flowId)) continue;
+      latestFailure.set(r.flowId, r);
+    }
+    const consecutiveFailures = (flowId) => {
+      const list = this.runs
+        .filter((r) => r.flowId === flowId && (r.startedAt || 0) <= endMs)
+        .sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0));
+      let n = 0;
+      for (const r of list) {
+        if (r.status === 'failed') n += 1;
+        else if (r.status === 'success') break;
+      }
+      return n;
+    };
+    const failures = [...latestFailure.entries()].map(([flowId, r]) => ({
+      flowName: names.get(flowId) || r.flowName || '已删除任务',
+      at: r.startedAt || 0,
+      message: String(r.finalMessage || r.summary || '').split('\n')[0].slice(0, 160),
+      consecutive: consecutiveFailures(flowId),
+    }));
+
+    const paused = this.flows
+      .filter((f) => f.pausedAt && f.pausedAt >= startMs && f.pausedAt <= endMs)
+      .map((f) => ({ flowName: f.name || '', at: f.pausedAt, reason: f.pausedReason || '' }));
+
+    const base = this.stats();
+    return {
+      window: { startMs, endMs },
+      enabledFlows: this.flows.filter((f) => f.enabled).length,
+      runs: inWindow.length,
+      success,
+      failed,
+      rate: inWindow.length ? Math.round((success / inWindow.length) * 100) : null,
+      failures,
+      paused,
+      next: { flowName: base.nextFlowName || '', at: base.nextRunAt || null },
+      empty: inWindow.length === 0,
+    };
+  }
+
   stats() {
     const start = new Date();
     start.setHours(0, 0, 0, 0);
@@ -718,15 +874,12 @@ export class Store {
     let nextRunAt = null;
     let nextFlowName = null;
     for (const f of enabled) {
-      try {
-        const job = new Cron(f.cron, { timezone: f.timezone || 'Asia/Shanghai' });
-        const next = job.nextRun()?.getTime() || null;
-        job.stop();
-        if (next && (nextRunAt === null || next < nextRunAt)) {
-          nextRunAt = next;
-          nextFlowName = f.name || '';
-        }
-      } catch { /* 无效 cron 忽略 */ }
+      // 复用 nextRunAt 的 cron|时区缓存，避免每次统计都为每个任务新建 Cron 对象
+      const next = this.nextRunAt(f);
+      if (next && (nextRunAt === null || next < nextRunAt)) {
+        nextRunAt = next;
+        nextFlowName = f.name || '';
+      }
     }
     return {
       flows: this.flows.length,

@@ -9,12 +9,6 @@
 import React, { useMemo, useState } from 'react';
 import { generalizeSelection, textExtractRegex } from '../../../server/src/text-regex.js';
 
-let genSeq = 0;
-export function genId(prefix = 'pick') {
-  genSeq += 1;
-  return `${prefix}-${Date.now().toString(36)}-${genSeq}`;
-}
-
 /** 猜变量名：英文键名 / 中文小词表 / 退化为 varN */
 export function suggestVarName(context, fallbackSeq) {
   const m = /([A-Za-z_][A-Za-z0-9_]{2,})\s*[:：=]\s*$/.exec(context || '');

@@ -1,0 +1,27 @@
+{
+  "name": "断言不匹配：json code 不为 0",
+  "flow": { "name": "查询余额", "nodes": [] },
+  "run": {
+    "id": "run-assert",
+    "status": "failed",
+    "finalMessage": "第 1 步「查询」失败",
+    "logs": [
+      {
+        "stepId": "n1",
+        "index": 1,
+        "name": "查询",
+        "type": "http",
+        "ok": false,
+        "message": "断言失败: last.json.code → 401 (期望 0)",
+        "errorType": "assert",
+        "asserts": [ { "expr": "last.json.code", "expect": 0, "actual": 401, "pass": false } ],
+        "detail": {
+          "method": "GET",
+          "url": "https://example.org/api/balance",
+          "response": { "status": 200, "headers": { "content-type": "application/json" }, "body": "{\"code\":401,\"msg\":\"请先登录\"}", "ms": 60 }
+        }
+      }
+    ]
+  },
+  "expect": { "rule": "credential", "causeIncludes": ["登录提示"] }
+}

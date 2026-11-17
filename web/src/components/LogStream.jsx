@@ -15,7 +15,7 @@ function fmtClock(ts) {
   return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
-export default function LogStream({ flowId, flowName, onClose, live = false }) {
+export default function LogStream({ flowId, flowName, onClose }) {
   const [entries, setEntries] = useState([]);
   const [hasMore, setHasMore] = useState(false);
   const [nextBefore, setNextBefore] = useState(null);
@@ -39,21 +39,6 @@ export default function LogStream({ flowId, flowName, onClose, live = false }) {
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, [flowId]);
-
-  // 实时模式：把新推送的日志追加到流末尾
-  useEffect(() => {
-    if (!live) return;
-    const onLog = (e) => {
-      const l = e.detail;
-      if (!l || !l.stepId) return;
-      setEntries((prev) => [...prev, {
-        runId: l.runId || 'live', startedAt: l.startedAt || Date.now(), status: 'running',
-        index: l.index, name: l.name, message: l.message || '', type: l.type, ok: l.ok !== false, ms: l.ms || 0,
-      }]);
-    };
-    window.addEventListener('checkq-log', onLog);
-    return () => window.removeEventListener('checkq-log', onLog);
-  }, [live]);
 
   // 默认滚到底部（最新在最下面，像终端）
   useEffect(() => {

@@ -10,6 +10,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { isSensitiveName } from './sensitive-name.js';
+
+export { isSensitiveName };
 
 const PREFIX = 'enc:v1:';
 const IV_LEN = 12;
@@ -76,11 +79,6 @@ export function decryptValue(key, stored) {
   }
 }
 
-/** 变量名是否敏感 */
-export function isSensitiveName(name) {
-  return /cookie|token|sess|auth|password|passwd|secret|api[_-]?key|credential|jwt|bearer|refresh/i.test(String(name || ''));
-}
-
 /** 值是否长得像凭据（cookie / JWT / 长 base64） */
 export function looksSensitiveValue(v) {
   const s = String(v || '');
@@ -95,6 +93,69 @@ export function looksSensitiveValue(v) {
 /** 渠道里需要加密的字段 */
 export const SENSITIVE_CHANNEL_FIELDS = new Set(['token', 'key', 'pass', 'password', 'secret', 'url', 'user', 'chat_id', 'chatid']);
 
+/** 加密一组通知渠道（系统渠道 channels.json 与任务渠道共用） */
+export function encryptChannels(key, channels) {
+  if (!Array.isArray(channels)) return channels;
+  return channels.map((c) => {
+    const cc = { ...c };
+    for (const [k, v] of Object.entries(cc)) {
+      if (SENSITIVE_CHANNEL_FIELDS.has(String(k).toLowerCase()) && typeof v === 'string' && v) {
+        cc[k] = encryptValue(key, v);
+      }
+    }
+    return cc;
+  });
+}
+
+/** 解密一组通知渠道 */
+export function decryptChannels(key, channels) {
+  if (!Array.isArray(channels)) return channels;
+  return channels.map((c) => {
+    const cc = { ...c };
+    for (const [k, v] of Object.entries(cc)) {
+      if (isEncrypted(v)) cc[k] = decryptValue(key, v);
+    }
+    return cc;
+  });
+}
+
+/** 脱敏一组通知渠道（备份导出用） */
+export function maskChannels(channels) {
+  if (!Array.isArray(channels)) return channels;
+  return channels.map((c) => {
+    const cc = { ...c };
+    for (const f of SENSITIVE_CHANNEL_FIELDS) {
+      if (cc[f]) cc[f] = '***';
+    }
+    return cc;
+  });
+}
+
+/**
+ * meta.json 里需要静态加密的凭据：
+ * - ai.apiKey：AI 助手的模型密钥
+ * - apiKey：旧版单条 API Key（兼容字段，实际值等同管理员令牌）
+ */
+export function encryptMeta(key, meta) {
+  if (!meta || typeof meta !== 'object') return meta;
+  const out = { ...meta };
+  if (out.apiKey) out.apiKey = encryptValue(key, out.apiKey);
+  if (out.ai && typeof out.ai === 'object' && out.ai.apiKey) {
+    out.ai = { ...out.ai, apiKey: encryptValue(key, out.ai.apiKey) };
+  }
+  return out;
+}
+
+export function decryptMeta(key, meta) {
+  if (!meta || typeof meta !== 'object') return meta;
+  const out = { ...meta };
+  if (isEncrypted(out.apiKey)) out.apiKey = decryptValue(key, out.apiKey);
+  if (out.ai && typeof out.ai === 'object' && isEncrypted(out.ai.apiKey)) {
+    out.ai = { ...out.ai, apiKey: decryptValue(key, out.ai.apiKey) };
+  }
+  return out;
+}
+
 /** 加密一个 flow/template 的敏感部分（返回新对象，不改原对象） */
 export function encryptSecrets(key, obj) {
   if (!obj || typeof obj !== 'object') return obj;
@@ -108,18 +169,7 @@ export function encryptSecrets(key, obj) {
     out.vars = vars;
   }
   if (out.notify && Array.isArray(out.notify.channels)) {
-    out.notify = {
-      ...out.notify,
-      channels: out.notify.channels.map((c) => {
-        const cc = { ...c };
-        for (const [k, v] of Object.entries(cc)) {
-          if (SENSITIVE_CHANNEL_FIELDS.has(String(k).toLowerCase()) && typeof v === 'string' && v) {
-            cc[k] = encryptValue(key, v);
-          }
-        }
-        return cc;
-      }),
-    };
+    out.notify = { ...out.notify, channels: encryptChannels(key, out.notify.channels) };
   }
   return out;
 }
@@ -136,16 +186,7 @@ export function decryptSecrets(key, obj) {
     out.vars = vars;
   }
   if (out.notify && Array.isArray(out.notify.channels)) {
-    out.notify = {
-      ...out.notify,
-      channels: out.notify.channels.map((c) => {
-        const cc = { ...c };
-        for (const [k, v] of Object.entries(cc)) {
-          if (isEncrypted(v)) cc[k] = decryptValue(key, v);
-        }
-        return cc;
-      }),
-    };
+    out.notify = { ...out.notify, channels: decryptChannels(key, out.notify.channels) };
   }
   return out;
 }
@@ -162,16 +203,7 @@ export function maskSecrets(obj) {
     out.vars = vars;
   }
   if (out.notify && Array.isArray(out.notify.channels)) {
-    out.notify = {
-      ...out.notify,
-      channels: out.notify.channels.map((c) => {
-        const cc = { ...c };
-        for (const f of SENSITIVE_CHANNEL_FIELDS) {
-          if (cc[f]) cc[f] = '***';
-        }
-        return cc;
-      }),
-    };
+    out.notify = { ...out.notify, channels: maskChannels(out.notify.channels) };
   }
   return out;
 }

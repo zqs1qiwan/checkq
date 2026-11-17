@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { IconChevronDown } from './Icons.jsx';
 
 /**
  * 浮层操作菜单（Popover API + fixed 定位）
@@ -25,7 +26,6 @@ export default function Dropdown({
   caret = false,
   triggerClass = '',
   width,
-  title,
   ariaLabel,
 }) {
   const [open, setOpen] = useState(false);
@@ -111,11 +111,11 @@ export default function Dropdown({
         className={`dd-trigger${open ? ' open' : ''}`}
         aria-expanded={open}
         aria-controls={popId}
-        title={title || ariaLabel}
+        title={ariaLabel}
         aria-label={ariaLabel}
       >
         {trigger}
-        {caret ? <span className="dd-caret" aria-hidden="true">▾</span> : null}
+        {caret ? <span className="dd-caret" aria-hidden="true"><IconChevronDown size={12} /></span> : null}
       </button>
       {createPortal(
         <div

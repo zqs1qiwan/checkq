@@ -10,12 +10,7 @@ const LEVELS = ['error', 'success', 'all'];
 const KEY = 'checkq-toast-level';
 
 let level = (typeof localStorage !== 'undefined' && localStorage.getItem(KEY)) || 'error';
-const listeners = new Set();
 const queue = [];
-
-function notify() {
-  for (const fn of listeners) fn(level);
-}
 
 export function getToastLevel() {
   return level;
@@ -24,13 +19,7 @@ export function getToastLevel() {
 export function setToastLevel(next) {
   level = LEVELS.includes(next) ? next : 'error';
   try { localStorage.setItem(KEY, level); } catch { /* ignore */ }
-  notify();
   return level;
-}
-
-export function onToastLevelChange(fn) {
-  listeners.add(fn);
-  return () => listeners.delete(fn);
 }
 
 /** 是否应当显示该类型的提示 */
@@ -47,7 +36,6 @@ export function toast(text, kind = 'info') {
   if (!shouldShow(kind)) return;
   const item = { id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, text: String(text), kind };
   queue.push(item);
-  notify();
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('checkq-toast', { detail: item }));
     // 自动消失：否则提示条会一直挂在页面上，只能手动点掉
@@ -62,7 +50,6 @@ export function toastQueue() {
 export function dismissToast(id) {
   const i = queue.findIndex((t) => t.id === id);
   if (i >= 0) queue.splice(i, 1);
-  notify();
 }
 
 // 供 UI 冒烟测试触发一条提示（不改变服务端设置、不产生任何数据）

@@ -1,7 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import PickPanel from './PickPanel.jsx';
+import DiagnosisCard from './DiagnosisCard.jsx';
 import { toast } from '../toast.js';
+import { IconClose } from './Icons.jsx';
 
 function fmtTime(ts) {
   const d = new Date(ts);
@@ -9,7 +11,7 @@ function fmtTime(ts) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
-export default function RunDrawer({ run, flowId, onClose, onPickResponse, onRepPick, debug: debugProp, onDebugChange, focusStepId, onFocusStep }) {
+export default function RunDrawer({ run, flowId, onClose, onPickResponse, onRepPick, debug: debugProp, onDebugChange, focusStepId, onFocusStep, onEditVars, onEditAssert }) {
   const [tab, setTab] = useState('logs');
   const [hist, setHist] = useState(null);
   const [expanded, setExpanded] = useState(null); // log index
@@ -23,6 +25,7 @@ export default function RunDrawer({ run, flowId, onClose, onPickResponse, onRepP
   const dragRef = useRef(null);
   const bodyRef = useRef(null);
   const [harBusy, setHarBusy] = useState(false);
+  const [errFilter, setErrFilter] = useState('all'); // all | network | assert | engine
 
   // 拖拽调整日志坞高度（25% ~ 92%）
   const onDragStart = (e) => {
@@ -112,14 +115,22 @@ export default function RunDrawer({ run, flowId, onClose, onPickResponse, onRepP
 
   const statusLabel = shown.status === 'success' ? '执行成功' : shown.status === 'failed' ? '执行失败' : '执行中';
   const failLog = shown.logs?.find((l) => !l.ok);
-  const [errFilter, setErrFilter] = useState('all'); // all | network | assert | engine
   // 日常只看「人话」：log 节点输出 + 失败步骤 + 重试分隔；调试模式才展开全部步骤
   // 流程里没有 log 节点时退回全部步骤，避免「成功但日志空白」
   const allLogs = shown.logs || [];
   const cleanLogs = allLogs.filter((l) => l.type === 'log' || l.type === 'system' || !l.ok);
   const hasLogNode = allLogs.some((l) => l.type === 'log');
   const baseLogs = (debug || !hasLogNode) ? allLogs : cleanLogs;
-  const visibleLogs = baseLogs.filter((l) => errFilter === 'all' || l.errorType === errFilter || (errFilter === 'network' && l.errorType === 'network'));
+  const visibleLogs = baseLogs.filter((l) => errFilter === 'all' || l.errorType === errFilter);
+
+  // 诊断卡的「看响应」：展开对应步骤，并把画布定位过去
+  const showResponseFor = (stepId) => {
+    setTab('logs');
+    setDebug(true);
+    const i = visibleLogs.findIndex((l) => l.stepId === stepId);
+    setExpanded(i >= 0 ? i : null);
+    if (stepId && onFocusStep) onFocusStep(stepId);
+  };
 
   return (
     <div className="run-drawer" style={{ height: `${height}vh` }}>
@@ -133,6 +144,20 @@ export default function RunDrawer({ run, flowId, onClose, onPickResponse, onRepP
           {shown.summary && (
             <div style={{ fontSize: 12, color: 'var(--muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={shown.summary}>
               摘要：<span style={{ color: 'var(--ok)' }}>{shown.summary}</span>
+            </div>
+          )}
+          {shown.notify && (
+            <div style={{ fontSize: 12, color: 'var(--muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+              title={(shown.notify.failed || []).map((f) => `${f.type}: ${f.error}`).join('\n')}>
+              通知：<span style={{ color: shown.notify.failed?.length ? 'var(--fail)' : 'var(--ok)' }}>{shown.notify.ok}/{shown.notify.total} 渠道成功</span>
+            </div>
+          )}
+          {shown.trigger === 'probe' && (
+            <div style={{ fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap' }}>
+              恢复探测：<span style={{ color: shown.recovered ? 'var(--ok)' : 'var(--warn)' }}>
+                {shown.recovered ? '成功，已重新启用' : (shown.recovery?.exhausted ? '失败，已停止自动探测' : '失败，保持停用')}
+              </span>
+              {shown.recovery ? `（${shown.recovery.attempt}/${shown.recovery.maxAttempts} 次）` : ''}
             </div>
           )}
           {shown.attempts?.length > 1 && (
@@ -167,12 +192,21 @@ export default function RunDrawer({ run, flowId, onClose, onPickResponse, onRepP
             </>
           )}
         </div>
-        <button className="modal-close drawer-close" onClick={onClose} title="关闭（Esc）" aria-label="关闭">✕</button>
+        <button className="modal-close drawer-close" onClick={onClose} title="关闭（Esc）" aria-label="关闭"><IconClose size={14} /></button>
       </div>
 
       <div className="drawer-body" ref={bodyRef} style={{ fontFamily: 'inherit' }}>
         {tab === 'logs' && (
           <>
+            {shown.status === 'failed' && shown.diagnosis && (
+              <DiagnosisCard
+                diagnosis={shown.diagnosis}
+                onShowResponse={showResponseFor}
+                onEditVars={onEditVars}
+                onEditAssert={onEditAssert}
+                onToast={toast}
+              />
+            )}
             {!visibleLogs?.length ? (
               <div className="empty" style={{ padding: 30 }}>暂无日志（默认只显示 log 节点输出与失败步骤；勾选「调试」查看每步细节）</div>
             ) : (

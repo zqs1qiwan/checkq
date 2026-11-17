@@ -6,14 +6,15 @@
 <meta name="color-scheme" content="dark light" />
 <title>API 与 MCP · CheckQ 文档</title>
 <meta name="description" content="给外部程序/Agent 用的接口" />
+<link rel="icon" href="./assets/brand/checkq-mark.svg" type="image/svg+xml" />
 <link rel="stylesheet" href="./assets/style.css" />
 
 </head>
 <body>
 <div class="wrap">
   <aside>
-    <div class="brand">Check<span>Q</span></div>
-    <div class="brand-sub">自动化签到引擎 · 文档</div>
+    <div class="brand"><img src="./assets/brand/checkq-mark.svg" width="24" height="24" alt="" /><span class="brand-word">Check<em>Q</em></span></div>
+    <div class="brand-sub">开源可视化自动挂机与签到 · 文档</div>
     <input id="search" type="search" placeholder="搜索文档…" autocomplete="off" />
     <div id="results"></div>
     <nav>
@@ -41,7 +42,7 @@
 <p><code>x-api-key: &lt;key&gt;</code>（推荐，可按作用域发放）或登录会话 Cookie。</p>
 <h2 id="常用端点">常用端点</h2>
 <div class="table-wrap"><table><thead><tr><th>需求</th><th>方法</th><th>路径</th></tr></thead><tbody><tr><td>列任务</td><td>GET</td><td>/api/flows</td></tr><tr><td>任务详情</td><td>GET</td><td>/api/flows/:id</td></tr><tr><td>跑一次</td><td>POST</td><td>/api/flows/:id/run</td></tr><tr><td>实时日志（SSE）</td><td>POST</td><td>/api/flows/:id/run（<code>{"stream": true}</code>）</td></tr><tr><td>连续日志流</td><td>GET</td><td>/api/flows/:id/logs?limit=200</td></tr><tr><td>改变量 / 调度 / 重试</td><td>PUT</td><td>/api/flows/:id</td></tr><tr><td>历史运行（含逐次尝试）</td><td>GET</td><td>/api/runs?flowId=&amp;limit=30</td></tr><tr><td>模板</td><td>GET</td><td>/api/templates</td></tr><tr><td>运维统计</td><td>GET</td><td>/api/system/stats</td></tr></tbody></table></div>
-<p>任务对象含 <code>retry = { enabled, maxAttempts, backoff, baseDelayMs, maxDelayMs, jitter }</code>（默认开启 / 3 次 / 指数 / 5s / 5min / 抖动）；运行对象含 <code>attempts[]</code>、<code>attempt</code>、<code>maxAttempts</code>。完整字段见 <a href="/reference-api.html">API 参考</a>。</p>
+<p>任务对象含 <code>retry = { enabled, maxAttempts, backoff, baseDelayMs, maxDelayMs, jitter }</code>（默认开启 / 3 次 / 指数 / 5s / 5min / 抖动）；运行对象含 <code>attempts[]</code>、<code>attempt</code>、<code>maxAttempts</code>。完整字段见 <a href="reference-api.html">API 参考</a>。</p>
 <h2 id="mcp">MCP</h2>
 <p><code>mcp/checkq-mcp.cjs</code>（stdio，零依赖）暴露 20 个工具：health、whoami、stats、notifications_list、flows_list、flow_get、flow_run、flow_logs、flow_update_vars、flow_update、flow_toggle、flow_create、flow_delete、flow_notify_test、templates_list、template_get、template_instantiate、import_curl、runs_list、run_get。</p>
 <p>配置：</p>
@@ -49,7 +50,7 @@
   "args": ["/path/CheckQ/mcp/checkq-mcp.cjs"],
   "env": { "CHECKQ_URL": "http://checkq.local:18888", "CHECKQ_API_KEY": "cq_xxx" } } } }</code></pre>
 <h2 id="给外部-agent-的东西">给外部 Agent 的东西</h2>
-<p>只有<strong>基址 + 一把 Key</strong>；建议只勾「只读 + 可运行」，把「可修改」留给人工。详见 <a href="/reference-agent.html">Agent 接入指南</a>。</p>
+<p>只有<strong>基址 + 一把 Key</strong>；建议只勾「只读 + 可运行」，把「可修改」留给人工。详见 <a href="reference-agent.html">Agent 接入指南</a>。</p>
     <div class="foot">CheckQ 文档 · 由 <code>tools/build-wiki.cjs</code> 生成 · <a href="https://github.com/zqs1qiwan/checkq/issues">反馈问题</a></div>
   </main>
 </div>

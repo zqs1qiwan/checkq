@@ -4,7 +4,7 @@
  */
 
 import { Cron } from 'croner';
-import { Engine } from './engine.js';
+import { recoveryAction, nextProbeTime } from './recovery.js';
 
 export class Scheduler {
   constructor(store, runner) {
@@ -12,18 +12,23 @@ export class Scheduler {
     this.runner = runner; // { runFlow(flow, trigger) }
     this.jobs = new Map(); // flowId -> Cron
     this.interval = null;
+    this.recoveryInterval = null;
   }
 
   start() {
     this.rebuild();
     // 每 60s 对账一次（外部改动 flow 后自动重建任务）
     this.interval = setInterval(() => this.rebuild(), 60_000);
+    // 恢复探测独立对账：只扫「自动停用且开启 recovery」的任务
+    this.recoveryInterval = setInterval(() => this.#tickRecovery(), 60_000);
+    this.#tickRecovery();
   }
 
   stop() {
     for (const job of this.jobs.values()) job.stop();
     this.jobs.clear();
     if (this.interval) clearInterval(this.interval);
+    if (this.recoveryInterval) clearInterval(this.recoveryInterval);
   }
 
   rebuild() {
@@ -67,6 +72,36 @@ export class Scheduler {
       }
     }
     this.#syncDailySummary();
+  }
+
+  /**
+   * 自动恢复探测：只处理「自动停用 + recovery.enabled」的任务。
+   * 先写下一次时间再启动，避免运行期间 60s 对账重复触发；
+   * probe 失败由 api.runFlow 计数，调度器只负责按时发起。
+   */
+  #tickRecovery() {
+    const now = Date.now();
+    for (const f of this.store.flows) {
+      const plan = recoveryAction(f, now);
+      if (plan.action === 'init') {
+        const rec = { ...plan.recovery, nextProbeAt: plan.nextProbeAt };
+        this.store.updateFlow(f.id, { recovery: rec });
+        continue;
+      }
+      if (plan.action !== 'probe') continue;
+      if (this.runner.isBusy && this.runner.isBusy(f.id)) {
+        console.log(`[CheckQ] 跳过恢复探测 ${f.name}：任务仍在运行`);
+        continue;
+      }
+      const rec = { ...plan.recovery, nextProbeAt: nextProbeTime(plan.recovery, now), lastProbeAt: now };
+      this.store.updateFlow(f.id, { recovery: rec });
+      const cur = this.store.getFlow(f.id);
+      if (!cur) continue;
+      console.log(`[CheckQ] 恢复探测 ${cur.name}（第 ${rec.attempts + 1}/${rec.maxAttempts} 次）`);
+      Promise.resolve(this.runner.runFlow(cur, 'probe', { notify: false }).catch((err) => {
+        console.error(`[CheckQ] 恢复探测异常 ${cur.name}: ${err.message}`);
+      }));
+    }
   }
 
   #syncDailySummary() {

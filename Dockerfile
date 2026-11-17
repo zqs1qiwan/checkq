@@ -4,8 +4,10 @@ WORKDIR /web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci --no-audit --fund=false
 COPY web/ ./
-# PickPanel 引用共享的 text-regex 模块（仓库根/server/src），web 目录内需可解析
+# web 引用仓库根的共享纯逻辑模块，web 构建上下文内需可解析
 COPY server/src/text-regex.js /server/src/text-regex.js
+COPY server/src/sensitive-name.js /server/src/sensitive-name.js
+COPY server/src/model.js /server/src/model.js
 RUN npm run build
 
 # ---- server ----

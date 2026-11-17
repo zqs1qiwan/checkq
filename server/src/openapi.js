@@ -3,6 +3,8 @@
  * 暴露：GET /api/openapi.json
  */
 
+import { VERSION } from './version.js';
+
 const scopes = {
   read: '查看任务、运行记录、日志、统计、模板',
   run: '触发任务运行（跑签到）',
@@ -40,14 +42,17 @@ export function buildOpenApi() {
     openapi: '3.1.0',
     info: {
       title: 'CheckQ 开放 API',
-      version: '0.3.17',
+      version: VERSION,
       description:
         'CheckQ 自动化签到引擎的对外接口。认证二选一：① 请求头 `x-api-key: <key>`（推荐，可按作用域发放）；② 浏览器会话 Cookie（登录后自动带上）。\n' +
         'API Key 作用域：' + Object.entries(scopes).map(([k, v]) => `\`${k}\` = ${v}`).join('；') + '。\n' +
         '写操作需 `write`，运行任务需 `run`，只读操作用 `read`。过期 Key 会被自动回收。',
-      contact: { name: 'CheckQ', url: 'http://checkq.local:18888/' },
+      contact: { name: 'CheckQ', url: 'http://localhost:8888/' },
     },
-    servers: [{ url: 'http://checkq.local:18888', description: '生产实例（局域网）' }],
+    servers: [
+      { url: 'http://localhost:8888', description: '服务端默认端口（容器内 / docker-compose.prod.yml）' },
+      { url: 'http://localhost:18888', description: '本地测试宿主映射（docker-compose.yml：18888 → 容器 8888）' },
+    ],
     security: [{ apiKeyAuth: [] }, { cookieAuth: [] }],
     components: {
       securitySchemes: {
@@ -66,15 +71,19 @@ export function buildOpenApi() {
             edges: { type: 'array', items: { type: 'object' } },
             log: { type: 'object' },
             notify: { type: 'object' },
+            retry: { type: 'object', description: '任务级失败重试策略' },
+            recovery: { type: 'object', description: '自动停用后的恢复探测（默认关闭）' },
           },
         },
         Run: {
           type: 'object',
           properties: {
-            id: { type: 'string' }, flowId: { type: 'string' }, status: { type: 'string', enum: ['success', 'failed', 'running'] },
+            id: { type: 'string' }, flowId: { type: 'string' }, trigger: { type: 'string', enum: ['manual', 'cron', 'debug', 'probe'] },
+            status: { type: 'string', enum: ['success', 'failed', 'running'] },
             startedAt: { type: 'integer' }, durationMs: { type: 'integer' },
             finalMessage: { type: 'string' }, summary: { type: 'string' },
             logs: { type: 'array', items: { type: 'object', description: '步骤日志（人话日志）' } },
+            recovery: { type: 'object', description: 'trigger=probe 时的探测结果' },
           },
         },
         LogEntry: {
@@ -149,6 +158,32 @@ export function buildOpenApi() {
       '/api/system/apikeys/{id}': { delete: op('吊销 API Key（立即失效）', { tags: ['keys'], scope: 'write', parameters: [idParam('id', 'API Key ID')], errors: [401, 403] }) },
       '/api/system/users': { get: op('用户列表（管理员）', { tags: ['admin'], errors: [401, 403] }) },
       '/api/system/audit': { get: op('审计日志（管理员）', { tags: ['admin'], errors: [401, 403] }) },
+      // ---- v0.5 ----
+      '/api/system/features': { get: op('功能开关（演练场是否可用）', { tags: ['meta'], schema: { type: 'object', properties: { demo: { type: 'boolean' }, version: { type: 'string' } } } }) },
+      '/api/system/metrics': { get: op('本机度量（运行/成功率/首跑与修复耗时/模板复用）', { tags: ['meta'], parameters: [{ name: 'days', in: 'query', schema: { type: 'integer', default: 7 } }], schema: { type: 'object' } }) },
+      '/api/system/events': {
+        get: op('本地事件计数（只存本机）', { tags: ['meta'], schema: { type: 'object' } }),
+        post: op('记录本地界面事件（白名单 5 个名字）', {
+          tags: ['meta'],
+          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { name: { type: 'string', enum: ['wizard_open', 'pick_apply', 'diag_action', 'guide_step', 'run_quick'] } }, required: ['name'] } } } },
+          errors: [400],
+        }),
+      },
+      '/api/market/subscriptions': { get: op('已订阅的模板索引', { tags: ['market'], schema: { type: 'object' } }) },
+      '/api/market/index': { get: op('解析模板索引（version=1 / sha256 / ≤500 条）', { tags: ['market'], parameters: [{ name: 'url', in: 'query', required: true, schema: { type: 'string' } }], errors: [400, 502] }) },
+      '/api/market/preview': { post: op('预览某个条目（服务端重算 sha256）', { tags: ['market'], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { url: { type: 'string' }, id: { type: 'string' } }, required: ['url', 'id'] } } } }, errors: [400, 404, 502] }) },
+      '/api/market/import': { post: op('导入条目（409 需 mode=overwrite|copy）', { tags: ['market'], scope: 'write', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { url: { type: 'string' }, id: { type: 'string' }, mode: { type: 'string', enum: ['overwrite', 'copy'] } }, required: ['url', 'id'] } } } }, errors: [400, 404, 409, 502] }) },
+      '/api/market/subscribe': {
+        get: op('（同 /api/market/subscriptions）', { tags: ['market'] }),
+        post: op('订阅索引地址', { tags: ['market'], scope: 'write', errors: [400, 502] }),
+        delete: op('取消订阅', { tags: ['market'], scope: 'write', parameters: [{ name: 'url', in: 'query', required: true, schema: { type: 'string' } }] }),
+      },
+      '/api/market/ack': { post: op('记录已看到的条目数（不再提示新增）', { tags: ['market'], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { url: { type: 'string' }, count: { type: 'integer' } }, required: ['url'] } } } } }) },
+      '/api/demo/flow': { post: op('创建或复用演练任务（只指向本机演示站点）', { tags: ['demo'], scope: 'write', requestBody: { content: { 'application/json': { schema: { type: 'object', properties: { origin: { type: 'string' } } } } } } }) },
+      '/api/demo/profile': { get: op('演示站点：个人资料', { tags: ['demo'] }) },
+      '/api/demo/checkin': { post: op('演示站点：签到（code=0 成功）', { tags: ['demo'] }) },
+      '/api/demo/items': { get: op('演示站点：条目列表（foreach 示例）', { tags: ['demo'] }) },
+      '/api/demo/reset': { post: op('演示站点：清空内存状态', { tags: ['demo'], scope: 'write' }) },
     },
   };
 }

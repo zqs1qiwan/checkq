@@ -341,17 +341,19 @@ async function checkModal(page, where, openExpr, opts = {}) {
     /* 2) 底部行内菜单（最容易出界的一处） */
     await page.eval(WAIT + `
       const rows = [...document.querySelectorAll('.flow-table tbody tr:not(.group-row)')];
-      const last = rows[rows.length - 1];
-      last.scrollIntoView({ block: 'end' });
-      await new Promise(r => setTimeout(r, 200));
-      const trig = await waitFor('details.row-menu > summary, .dd-trigger');
-      if (trig) trig.click();
-      await new Promise(r => setTimeout(r, 260));
+      if (rows.length) {
+        const last = rows[rows.length - 1];
+        last.scrollIntoView({ block: 'end' });
+        await new Promise(r => setTimeout(r, 200));
+        const trig = await waitFor('.dd-trigger');
+        if (trig) trig.click();
+        await new Promise(r => setTimeout(r, 260));
+      }
     `);
     await checkDropdown(page, '首页/1440', `return 1;`, '底部行');
     await page.eval(`document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true})); await new Promise(r=>setTimeout(r,150));`);
 
-    /* 2b) 交互契约：点任务名 = 任务详情；「更多」里才是「编辑流程」，且没有单独的基础信息入口 */
+    /* 2b) 交互契约：点任务名 = 任务详情；行内菜单里才有「编辑流程」，且没有单独的基础信息入口 */
     const contract = await page.eval(WAIT + `
       const rows=[...document.querySelectorAll('.flow-table tbody tr:not(.group-row)')];
       const row=rows[0];
@@ -363,24 +365,34 @@ async function checkModal(page, where, openExpr, opts = {}) {
       const title=m?(m.querySelector('.modal-title')||{}).textContent:'';
       const cells=m?[...m.querySelectorAll('.detail-k')].map(e=>e.textContent):[];
       const hasNote=m?!!m.querySelector('textarea'):false;
+      // 分组必须能从下拉里选已有分组（而不是只有自由输入）
+      const gp=m?m.querySelector('.group-picker-btn'):null;
+      gp?.click(); await new Promise(r=>setTimeout(r,220));
+      const groupChoices=m?[...m.querySelectorAll('.group-list button[role="option"]')].map(b=>b.textContent.trim()):[];
       document.querySelector('.modal-close,[aria-label="关闭"]')?.click();
       await new Promise(r=>setTimeout(r,300));
       row.scrollIntoView({block:'center'}); await new Promise(r=>setTimeout(r,250));
-      row.querySelector('.dd-trigger').click(); await new Promise(r=>setTimeout(r,320));
-      const items=[...document.querySelectorAll('.dd-pop:popover-open button')].map(b=>b.textContent.trim());
-      document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
-      await new Promise(r=>setTimeout(r,200));
-      return { ok:true, title, cells, hasNote, items };
+      // 行内可能有多个下拉（运行 ▾ / ···），逐个打开收集条目
+      const items=[];
+      for (const trig of row.querySelectorAll('.dd-trigger')) {
+        trig.click(); await new Promise(r=>setTimeout(r,280));
+        items.push(...[...document.querySelectorAll('.dd-pop:popover-open button')].map(b=>b.textContent.trim()));
+        document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+        await new Promise(r=>setTimeout(r,160));
+      }
+      return { ok:true, title, cells, hasNote, items, groupChoices };
     `);
     if (!contract.ok) fail('交互契约', contract.why);
     else {
       if (contract.title !== '任务详情') fail('交互契约', `点任务名打开的不是「任务详情」而是「${contract.title}」`);
       else ok('交互契约', '点任务名打开任务详情（含备注、调度、变量等信息）');
       if (!contract.hasNote) fail('交互契约', '任务详情里没有备注输入框');
-      if (!contract.items.some((x) => x.startsWith('编辑'))) fail('交互契约', `「更多」菜单里没有编辑流程入口：${contract.items.join('/')}`);
-      if (contract.items.some((x) => x.includes('任务信息'))) fail('交互契约', '「更多」菜单里仍有重复的基础信息入口');
+      if (!contract.items.some((x) => x.startsWith('编辑'))) fail('交互契约', `任务行菜单里没有编辑流程入口：${contract.items.join('/')}`);
+      if (contract.items.some((x) => x.includes('任务信息'))) fail('交互契约', '任务行菜单里仍有重复的基础信息入口');
       if (contract.cells.length < 6) fail('交互契约', `任务详情信息项太少：${contract.cells.join('/')}`);
-      else ok('交互契约', `更多菜单 = ${contract.items.join(' / ')}（无重复入口）`);
+      else ok('交互契约', `任务行菜单 = ${contract.items.join(' / ')}（无重复入口）`);
+      if (!contract.groupChoices?.length) fail('交互契约', '任务详情的分组没有可选列表');
+      else ok('交互契约', `分组下拉可选：${contract.groupChoices.join(' / ')}`);
     }
 
     /* 3) 顶栏「更多」菜单 */
@@ -462,7 +474,7 @@ async function checkModal(page, where, openExpr, opts = {}) {
       ['完整备份', `[...document.querySelectorAll('.page button')].find(b=>b.textContent.trim()==='完整备份')?.click()`],
       ['导入 cURL', `document.querySelector('.topbar .dd-trigger').click(); await new Promise(r=>setTimeout(r,220)); [...document.querySelectorAll('.dd-pop:popover-open button')].find(b=>b.textContent.includes('cURL'))?.click()`],
       ['导入 HAR/JSON', `document.querySelector('.topbar .dd-trigger').click(); await new Promise(r=>setTimeout(r,220)); [...document.querySelectorAll('.dd-pop:popover-open button')].find(b=>b.textContent.includes('HAR'))?.click()`],
-      ['快速组装', `document.querySelector('.topbar .dd-trigger').click(); await new Promise(r=>setTimeout(r,220)); [...document.querySelectorAll('.dd-pop:popover-open button')].find(b=>b.textContent.includes('快速组装'))?.click()`],
+      ['快速组装', `for (const t of document.querySelectorAll('.topbar .dd-trigger')) { t.click(); await new Promise(r=>setTimeout(r,220)); const b=[...document.querySelectorAll('.dd-pop:popover-open button')].find(x=>x.textContent.includes('快速组装')); if (b) { b.click(); break; } document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true})); await new Promise(r=>setTimeout(r,120)); }`],
     ];
     for (const [label, expr] of homeModals) {
       await checkModal(page, '首页弹窗', `${expr}; await new Promise(r=>setTimeout(r,380));`, { label });
@@ -475,11 +487,18 @@ async function checkModal(page, where, openExpr, opts = {}) {
 
     /* 8) 编辑器 */
     const openEditor = await page.eval(WAIT + `
-      const btn = [...document.querySelectorAll('.flow-table tbody tr:not(.group-row) td button')].find(b => b.textContent.trim().startsWith('编辑'));
-      if (btn) { btn.click(); return true; }
+      const direct = [...document.querySelectorAll('.flow-table tbody tr:not(.group-row) td button')].find(b => b.textContent.trim().startsWith('编辑'));
+      if (direct) { direct.click(); return true; }
+      // 行内可能有多个下拉（运行 ▾ / ···），逐个试到含「编辑」的那个
       const row = await waitFor('.flow-table tbody tr:not(.group-row)');
-      if (row) { const m = row.querySelector('.dd-trigger'); m.click(); await new Promise(r=>setTimeout(r,250));
-        const e = [...document.querySelectorAll('.dd-pop:popover-open button')].find(b=>b.textContent.trim().startsWith('编辑')); if (e) { e.click(); return true; } }
+      if (!row) return false;
+      for (const trig of row.querySelectorAll('.dd-trigger')) {
+        trig.click(); await new Promise(r=>setTimeout(r,240));
+        const e = [...document.querySelectorAll('.dd-pop:popover-open button')].find(b=>b.textContent.trim().startsWith('编辑'));
+        if (e) { e.click(); return true; }
+        document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+        await new Promise(r=>setTimeout(r,120));
+      }
       return false;
     `);
     if (openEditor) {
@@ -590,9 +609,15 @@ async function checkModal(page, where, openExpr, opts = {}) {
     await expandGroups(page);
     const openConfirm = `
       const row=document.querySelector('.flow-table tbody tr:not(.group-row)');
-      row.querySelector('.dd-trigger').click();
-      await new Promise(r=>setTimeout(r,300));
-      const b=[...document.querySelectorAll('.dd-pop:popover-open button')].find(x=>x.textContent.trim()==='删除');
+      // 行内第一个下拉现在是「运行 ▾」，删除在「···」里，逐个试到含删除的那个
+      let b=null;
+      for (const trig of row.querySelectorAll('.dd-trigger')) {
+        trig.click(); await new Promise(r=>setTimeout(r,280));
+        b=[...document.querySelectorAll('.dd-pop:popover-open button')].find(x=>x.textContent.trim()==='删除');
+        if (b) break;
+        document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+        await new Promise(r=>setTimeout(r,140));
+      }
       if (b) b.click();
       await new Promise(r=>setTimeout(r,400));
       return !!document.querySelector('dialog.modal[open]');
@@ -623,8 +648,13 @@ async function checkModal(page, where, openExpr, opts = {}) {
       const before = await page.eval(`return document.querySelectorAll('.flow-table tbody tr:not(.group-row)').length;`);
       await page.eval(`
         const row=[...document.querySelectorAll('.flow-table tbody tr:not(.group-row)')].find(r=>r.innerText.includes('冒烟临时任务'));
-        row.querySelector('.dd-trigger').click(); await new Promise(r=>setTimeout(r,300));
-        [...document.querySelectorAll('.dd-pop:popover-open button')].find(x=>x.textContent.trim()==='删除')?.click();
+        for (const trig of row.querySelectorAll('.dd-trigger')) {
+          trig.click(); await new Promise(r=>setTimeout(r,280));
+          const b=[...document.querySelectorAll('.dd-pop:popover-open button')].find(x=>x.textContent.trim()==='删除');
+          if (b) { b.click(); break; }
+          document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+          await new Promise(r=>setTimeout(r,140));
+        }
         await new Promise(r=>setTimeout(r,400)); return 1;
       `);
       await page.eval(`[...document.querySelectorAll('dialog.modal[open] .modal-foot button')].find(b=>b.textContent.includes('删除'))?.click(); return 1;`);
@@ -647,22 +677,28 @@ async function checkModal(page, where, openExpr, opts = {}) {
 
     // 4b) 提交型弹窗：保存成功后必须关闭（本地实例才做，避免写生产数据）
     if (tempRow) {
-      await page.eval(`
-        const row=document.querySelector('.flow-table tbody tr:not(.group-row)');
-        row.querySelector('.dd-trigger').click(); await new Promise(r=>setTimeout(r,250));
-        [...document.querySelectorAll('.dd-pop:popover-open button')].find(b=>b.textContent.includes('编辑流程')).click();
-        await new Promise(r=>setTimeout(r,1300));
-        document.querySelector('.editor-topbar .dd-trigger').click(); await new Promise(r=>setTimeout(r,250));
-        [...document.querySelectorAll('.dd-pop:popover-open button')].find(b=>b.textContent.includes('通知渠道')).click();
-        await new Promise(r=>setTimeout(r,500)); return 1;
-      `);
-      const opened = await page.eval(`return !!document.querySelector('dialog.modal[open]');`);
-      if (!opened) fail('提交型弹窗/1440', '通知渠道弹窗没有打开');
-      await page.eval(`[...document.querySelectorAll('dialog.modal[open] .modal-foot button')].find(b=>b.textContent.trim()==='保存')?.click(); await new Promise(r=>setTimeout(r,900)); return 1;`);
-      const closed = await page.eval(`return !document.querySelector('dialog.modal[open]');`);
-      if (!closed) fail('提交型弹窗/1440', '点「保存」后通知渠道弹窗没有消失');
-      else ok('提交型弹窗/1440', '点「保存」后通知渠道弹窗关闭');
-      await page.eval(`[...document.querySelectorAll('.editor-topbar button')].find(b=>b.textContent.trim()==='返回')?.click(); await new Promise(r=>setTimeout(r,800)); return 1;`);
+      // 注意：上面 4) 可能已把唯一的临时任务删掉，列表可能为空（生产/多任务实例不受影响）
+      const hasRow = await page.eval(`return !!document.querySelector('.flow-table tbody tr:not(.group-row)');`);
+      if (!hasRow) {
+        ok('提交型弹窗/1440', '临时任务已删、列表为空：跳过提交型弹窗分支');
+      } else {
+        await page.eval(`
+          const row=document.querySelector('.flow-table tbody tr:not(.group-row)');
+          row.querySelector('.dd-trigger').click(); await new Promise(r=>setTimeout(r,250));
+          [...document.querySelectorAll('.dd-pop:popover-open button')].find(b=>b.textContent.includes('编辑流程')).click();
+          await new Promise(r=>setTimeout(r,1300));
+          document.querySelector('.editor-topbar .dd-trigger').click(); await new Promise(r=>setTimeout(r,250));
+          [...document.querySelectorAll('.dd-pop:popover-open button')].find(b=>b.textContent.includes('通知渠道')).click();
+          await new Promise(r=>setTimeout(r,500)); return 1;
+        `);
+        const opened = await page.eval(`return !!document.querySelector('dialog.modal[open]');`);
+        if (!opened) fail('提交型弹窗/1440', '通知渠道弹窗没有打开');
+        await page.eval(`[...document.querySelectorAll('dialog.modal[open] .modal-foot button')].find(b=>b.textContent.trim()==='保存')?.click(); await new Promise(r=>setTimeout(r,900)); return 1;`);
+        const closed = await page.eval(`return !document.querySelector('dialog.modal[open]');`);
+        if (!closed) fail('提交型弹窗/1440', '点「保存」后通知渠道弹窗没有消失');
+        else ok('提交型弹窗/1440', '点「保存」后通知渠道弹窗关闭');
+        await page.eval(`[...document.querySelectorAll('.editor-topbar button')].find(b=>b.textContent.trim()==='返回')?.click(); await new Promise(r=>setTimeout(r,800)); return 1;`);
+      }
     }
 
     // 5) 全局提示条自动消失（不能一直挂着）

@@ -4,6 +4,7 @@ import Login from './components/Login.jsx';
 import FlowList from './components/FlowList.jsx';
 import FlowEditor from './components/FlowEditor.jsx';
 import GlobalToast from './components/GlobalToast.jsx';
+import Logo from './components/Logo.jsx';
 import { ConfirmHost } from './confirm.jsx';
 import { setToastLevel } from './toast.js';
 
@@ -27,7 +28,7 @@ export default function App() {
 
   return (
     <>
-      {view === 'loading' && <div className="boot">CheckQ</div>}
+      {view === 'loading' && <div className="boot"><Logo size={30} wordSize={17} /><span>正在加载…</span></div>}
       {view === 'login' && <Login onOk={() => { setView('list'); api.uiSettings().then((s) => setToastLevel(s.toastLevel)).catch(() => {}); }} />}
       {view === 'list' && (
         <FlowList

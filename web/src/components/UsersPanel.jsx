@@ -1,8 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { confirmDialog } from '../confirm.jsx';
-
-const ROLE_LABEL = { admin: '管理员', operator: '操作员', viewer: '只读' };
+import { ROLE_LABELS } from '../util.js';
 
 /** 用户管理（仅管理员）：账号 CRUD + 角色 + 停用 + 重置密码/2FA + 审计 */
 export default function UsersPanel({ onToast }) {
@@ -81,7 +80,7 @@ export default function UsersPanel({ onToast }) {
           </div>
           <div className="field"><label>角色</label>
             <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
-              {roles.map((r) => <option key={r} value={r}>{ROLE_LABEL[r] || r}</option>)}
+              {roles.map((r) => <option key={r} value={r}>{ROLE_LABELS[r] || r}</option>)}
             </select>
           </div>
         </div>
@@ -103,7 +102,7 @@ export default function UsersPanel({ onToast }) {
               </span>
               <span>
                 <select value={u.role} onChange={(e) => patch(u, { role: e.target.value })} disabled={u.disabled}>
-                  {roles.map((r) => <option key={r} value={r}>{ROLE_LABEL[r] || r}</option>)}
+                  {roles.map((r) => <option key={r} value={r}>{ROLE_LABELS[r] || r}</option>)}
                 </select>
               </span>
               <span>{u.disabled ? <span className="badge fail">已停用</span> : <span className="badge ok">启用</span>}</span>

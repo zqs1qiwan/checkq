@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
+import { ROLE_LABELS } from '../util.js';
 
 /** 账号安全：修改密码 + 两步验证(TOTP) + 我的会话 */
 export default function AccountPanel({ onToast }) {
@@ -122,7 +123,7 @@ export default function AccountPanel({ onToast }) {
           <div className="acc-card-head">我的账号</div>
           <div className="acc-row"><span>用户名</span><b>{me.user.username}</b></div>
           <div className="acc-row"><span>显示名</span><b>{me.user.displayName}</b></div>
-          <div className="acc-row"><span>角色</span><b>{me.user.role === 'admin' ? '管理员' : me.user.role === 'operator' ? '操作员' : '只读'}</b></div>
+          <div className="acc-row"><span>角色</span><b>{ROLE_LABELS[me.user.role] || me.user.role}</b></div>
           <div className="acc-row"><span>两步验证</span><b>{me.user.totpEnabled ? `已启用（恢复码剩 ${me.user.recoveryCodesLeft} 个）` : '未启用'}</b></div>
           <div className="acc-row"><span>最后登录</span><b>{fmt(me.user.lastLoginAt)}</b></div>
         </div>

@@ -4,7 +4,8 @@ import {
   useNodesState, useEdgesState, MarkerType, useReactFlow,
 } from '@xyflow/react';
 import { api } from '../api.js';
-import { STEP_TYPES, OUTPUT_LABELS, defaultConfig } from '../stepTypes.js';
+import { STEP_TYPES, defaultConfig } from '../stepTypes.js';
+import { structureSignature, defaultHandle } from '../../../server/src/structure.js';
 import { currentMode, onMode } from '../theme.js';
 import ThemeToggle from './ThemeToggle.jsx';
 import ConfigPanel from './ConfigPanel.jsx';
@@ -15,17 +16,20 @@ import Dropdown from './Dropdown.jsx';
 import TaskDetailModal from './TaskDetailModal.jsx';
 import { IconHelp, IconBug } from './Icons.jsx';
 import { toast as globalToast } from '../toast.js';
-import { fmtClock } from '../util.js';
+import { recordEvent, EVENTS } from '../events.js';
 import { autoLayout } from '../layout.js';
 import StepNode from './editor/StepNode.jsx';
+import LoopFrame from './editor/LoopFrame.jsx';
+import OutlinePanel from './editor/OutlinePanel.jsx';
+import StructureModal from './editor/StructureModal.jsx';
+import { useStructure } from '../hooks/useStructure.js';
+import { useGraphHistory } from '../hooks/useGraphHistory.js';
+import { useRunStream } from '../hooks/useRunStream.js';
 import { CookieHelpModal, NotifyModal, LogConfigModal, VarsEditor, ScheduleModal } from './editor/modals.jsx';
 
 const COLOR = Object.fromEntries(Object.entries(STEP_TYPES).map(([k, v]) => [k, v.color]));
 const nodeTypes = { step: StepNode };
-
-function fmtTime(ts) {
-  return fmtClock(ts);
-}
+const AUTO_FOLD_AT = 60;   // 节点数到 60 起，循环体默认折叠，只显示遍历节点本身
 
 export default function FlowEditor({ flowId, onBack }) {
   return (
@@ -43,18 +47,17 @@ function FlowEditorInner({ flowId, onBack }) {
   const [selectedId, setSelectedId] = useState(null);
   const [selectedIds, setSelectedIds] = useState([]);
   const [focusStepId, setFocusStepId] = useState(null);
-  const [hasClipboard, setHasClipboard] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [runResult, setRunResult] = useState(null);
-  const [drawerOpen, setDrawerOpen] = useState(false);
   const [showPalette, setShowPalette] = useState(() => (typeof window === 'undefined' ? true : window.innerWidth > 900));
   const [showConfig, setShowConfig] = useState(() => (typeof window === 'undefined' ? true : window.innerWidth > 900));
+  const [outlineOpen, setOutlineOpen] = useState(false);   // 大纲视图（P0-2）
+  const [structOpen, setStructOpen] = useState(false);     // 结构检查清单（P0-2）
+  const [foldedLoops, setFoldedLoops] = useState({});      // 循环体手动展开/折叠覆盖（P0-2）
   const [logOpen, setLogOpen] = useState(false);
   const [notifyOpen, setNotifyOpen] = useState(false);
   const [guideOpen, setGuideOpen] = useState(false);
   const [scheduleOpen, setScheduleOpen] = useState(false); // 调度弹窗
-  const [debugView, setDebugView] = useState(false); // 当前运行结果是否展开每步细节
   const [cookieOpen, setCookieOpen] = useState(false);
   const [tplOpen, setTplOpen] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false); // 任务详情弹窗
@@ -62,63 +65,54 @@ function FlowEditorInner({ flowId, onBack }) {
   const [tplErr, setTplErr] = useState('');
   const saveTimer = useRef(null);
   const stateRef = useRef({});
-  const historyRef = useRef({ past: [], future: [] });
-  const clipboardRef = useRef(null);
-  const [canUndo, setCanUndo] = useState(false);
-  const [canRedo, setCanRedo] = useState(false);
+  const structureRef = useRef(null);
+  const dismissedStructRef = useRef('');   // 已被用户忽略的结构问题签名（同一批不重复弹）
   const [themeMode, setThemeMode] = useState(currentMode()); // 'dark' | 'light'（画布 attr 需要解析色值）
   const { screenToFlowPosition, fitView, setCenter } = useReactFlow();
 
   useEffect(() => onMode(setThemeMode), []);
 
-  // 面板/日志坞开合后重排视口：58 节点也能一屏看全，不用来回拖拽
+  stateRef.current = { nodes, edges, flow, dirty };
+
+  // 结构事实（P0-2）：与服务端同一个 analyzeStructure，画布标注、大纲、检查清单共用
+  const structure = useStructure(nodes, edges);
+  structureRef.current = structure;
+
+  // 画布上的节点额外带上"这个出口有没有接线"（只用于渲染，保存时不会写进流程）
+  // ≥60 节点时循环体默认折叠（只影响画布显示，数据与大纲不变）
+  const autoFold = nodes.length >= AUTO_FOLD_AT;
+  const isFolded = useCallback((foreachId) => (
+    Object.prototype.hasOwnProperty.call(foldedLoops, foreachId) ? foldedLoops[foreachId] : autoFold
+  ), [foldedLoops, autoFold]);
+  const hiddenIds = useMemo(() => {
+    const hidden = new Set();
+    for (const l of structure.loops || []) {
+      if (!isFolded(l.foreachId)) continue;
+      for (const id of l.nodeIds || []) hidden.add(id);
+    }
+    return hidden;
+  }, [structure, isFolded]);
+  const displayNodes = useMemo(
+    () => nodes
+      .filter((n) => !hiddenIds.has(n.id))
+      .map((n) => ({
+        ...n,
+        data: { ...n.data, exits: structure.exitsByNode[n.id] || {}, loopFolded: (structure.loops || []).some((l) => l.foreachId === n.id && isFolded(l.foreachId)) },
+      })),
+    [nodes, structure, hiddenIds, isFolded],
+  );
+  const displayEdges = useMemo(
+    () => edges.filter((e) => !hiddenIds.has(e.source) && !hiddenIds.has(e.target)),
+    [edges, hiddenIds],
+  );
+
+  // 折叠后若选中的节点被藏起来了，把选择与配置面板一并清掉，免得对着空白面板改配置
   useEffect(() => {
-    const t = setTimeout(() => fitView({ padding: 0.12, duration: 220 }), 90);
-    return () => clearTimeout(t);
-  }, [drawerOpen, showPalette, showConfig, fitView]);
-
-  const snapshotGraph = useCallback(() => ({
-    nodes: stateRef.current.nodes.map((n) => ({ id: n.id, type: 'step', position: { ...n.position }, data: JSON.parse(JSON.stringify(n.data)) })),
-    edges: stateRef.current.edges.map((e) => ({ ...e, style: e.style ? { ...e.style } : undefined })),
-  }), []);
-
-  const pushHistory = useCallback(() => {
-    historyRef.current.past.push(snapshotGraph());
-    if (historyRef.current.past.length > 50) historyRef.current.past.shift();
-    historyRef.current.future = [];
-    setCanUndo(true);
-    setCanRedo(false);
-  }, [snapshotGraph]);
-
-  const undo = useCallback(() => {
-    const h = historyRef.current;
-    if (!h.past.length) return;
-    h.future.push(snapshotGraph());
-    const prev = h.past.pop();
-    setNodes(prev.nodes);
-    setEdges(prev.edges);
-    setCanUndo(h.past.length > 0);
-    setCanRedo(true);
-    setDirty(true);
-    if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => save(), 800);
-  }, [snapshotGraph, setNodes, setEdges]);
-
-  const redo = useCallback(() => {
-    const h = historyRef.current;
-    if (!h.future.length) return;
-    h.past.push(snapshotGraph());
-    const nxt = h.future.pop();
-    setNodes(nxt.nodes);
-    setEdges(nxt.edges);
-    setCanRedo(h.future.length > 0);
-    setCanUndo(true);
-    setDirty(true);
-    if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => save(), 800);
-  }, [snapshotGraph, setNodes, setEdges]);
-
-  stateRef.current = { nodes, edges, flow };
+    if (selectedId && hiddenIds.has(selectedId)) {
+      setSelectedId(null);
+      setSelectedIds([]);
+    }
+  }, [hiddenIds, selectedId]);
 
   useEffect(() => {
     api.flow(flowId).then((f) => {
@@ -132,12 +126,20 @@ function FlowEditorInner({ flowId, onBack }) {
     }).catch((e) => setLoadErr(e.message));
   }, [flowId]);
 
-  const decorateEdge = (e) => ({
-    ...e,
-    animated: false,
-    style: { stroke: '#2a3245', strokeWidth: 1.5 },
-    markerEnd: { type: MarkerType.ArrowClosed, color: '#2a3245' },
-  });
+  /**
+   * 连线的样子就说明结构：失败出口用虚线 + 失败色，其余实线。
+   * 只在创建/连接时计算，不改 edges 语义。
+   */
+  const decorateEdge = (e) => {
+    const isFail = (e.sourceHandle || '') === 'failed';
+    const stroke = isFail ? 'var(--fail)' : 'var(--edge, #2a3245)';
+    return {
+      ...e,
+      animated: false,
+      style: { stroke, strokeWidth: isFail ? 1.2 : 1.5, strokeDasharray: isFail ? '5 4' : undefined },
+      markerEnd: { type: MarkerType.ArrowClosed, color: stroke },
+    };
+  };
 
   const showToast = (text, kind = 'fail') => {
     globalToast(text, kind === 'ok' ? 'ok' : 'fail');
@@ -165,6 +167,14 @@ function FlowEditorInner({ flowId, onBack }) {
         showToast(`已转为独立任务，不再跟随模板「${updated.detached}」`, 'ok');
       }
       setDirty(false);
+      // 保存后结构有问题 → 弹一次检查清单（只提示、可忽略，同一批不重复打扰）
+      const s = structureRef.current;
+      const sig = structureSignature(s);
+      const serious = (s?.issues || []).some((i) => i.level === 'error' || i.level === 'warn');
+      if (serious && sig && sig !== dismissedStructRef.current) {
+        dismissedStructRef.current = sig;
+        setStructOpen(true);
+      }
     } catch (e) {
       showToast(`保存失败: ${e.message}`);
     } finally {
@@ -195,6 +205,27 @@ function FlowEditorInner({ flowId, onBack }) {
     markDirty();
   }, [setNodes, markDirty]);
 
+  // 编辑历史 + 内部剪贴板（抽到 hooks/useGraphHistory.js）
+  const {
+    pushHistory, undo, redo, canUndo, canRedo, copySelected: copyNodes,
+    pasteClipboard: pasteNodeClipboard, hasClipboard, resetClipboard,
+  } = useGraphHistory({
+    stateRef,
+    setNodes,
+    setEdges,
+    decorateEdge,
+    markDirty,
+    showToast,
+    getSelectedIds: () => (selectedIds.length ? selectedIds : (selectedId ? [selectedId] : [])),
+  });
+
+  // 选中节点后复制/粘贴：粘贴完顺带选中新节点
+  const copySelected = useCallback(() => copyNodes(), [copyNodes]);
+  const pasteClipboard = useCallback(() => {
+    const added = pasteNodeClipboard();
+    if (added?.length) { setSelectedIds(added.map((n) => n.id)); setSelectedId(added[0].id); }
+  }, [pasteNodeClipboard]);
+
   const onConnect = useCallback((c) => {
     pushHistory();
     setEdges((es) => addEdge(decorateEdge({ ...c, id: `e${Date.now()}` }), es));
@@ -211,6 +242,28 @@ function FlowEditorInner({ flowId, onBack }) {
     markDirty();
   }, [setNodes, markDirty, pushHistory]);
 
+  /** 大纲里"在这一步后面加一步"：接在该节点的默认出口（失败出口除外） */
+  const addAfter = useCallback((nodeId, type) => {
+    const node = stateRef.current.nodes.find((n) => n.id === nodeId);
+    if (!node) return;
+    pushHistory();
+    const id = `n${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
+    const out = defaultHandle(node.data?.type);
+    const nx = (node.position?.x || 0) + 240;
+    const ny = (node.position?.y || 0) + 40;
+    setNodes((ns) => [...ns, { id, type: 'step', position: { x: nx, y: ny }, data: { id, type, name: STEP_TYPES[type].label, config: defaultConfig(type) } }]);
+    setEdges((es) => {
+      // 该出口已有连线时，新节点插在中间（原目标改接到新节点上），保持单链语义
+      const existing = es.find((e) => e.source === nodeId && (e.sourceHandle || '') === out);
+      const kept = existing ? es.filter((e) => e.id !== existing.id) : es;
+      const mid = decorateEdge({ id: `e${id}`, source: nodeId, sourceHandle: out, target: id });
+      const tail = existing ? decorateEdge({ ...existing, id: `e${id}b`, source: id, sourceHandle: defaultHandle(type), target: existing.target }) : null;
+      return [...kept, mid, ...(tail ? [tail] : [])];
+    });
+    markDirty();
+    setOutlineOpen(true);
+  }, [pushHistory, setNodes, setEdges, markDirty]);
+
   const onDrop = useCallback((e) => {
     e.preventDefault();
     const type = e.dataTransfer.getData('application/checkq-step');
@@ -226,6 +279,25 @@ function FlowEditorInner({ flowId, onBack }) {
     setNodes((ns) => ns.map((n) => ({ ...n, data: { ...n.data, runStatus: status } })));
   }, [setNodes]);
 
+  // 运行 / 调试运行 / 断点调试：统一走 hooks/useRunStream.js（日志唯一入口）
+  const {
+    drawerOpen, setDrawerOpen, debugView, setDebugView, runResult,
+    runNow, runDebug, debugTo,
+  } = useRunStream({
+    flowId,
+    saveIfDirty: () => (stateRef.current.dirty ? save() : null),
+    setRunStatus,
+    setRunStatusAll,
+    showToast,
+  });
+
+  // 面板/日志坞开合后重排视口：节点多也能一屏看全，不用来回拖拽
+  // （必须放在 useRunStream 之后：drawerOpen 由它提供，早引用会触发 TDZ）
+  useEffect(() => {
+    const t = setTimeout(() => fitView({ padding: 0.12, duration: 220 }), 90);
+    return () => clearTimeout(t);
+  }, [drawerOpen, showPalette, showConfig, outlineOpen, fitView]);
+
   const deleteNode = useCallback((id) => {
     pushHistory();
     setNodes((ns) => ns.filter((n) => n.id !== id));
@@ -233,44 +305,7 @@ function FlowEditorInner({ flowId, onBack }) {
     if (selectedId === id) setSelectedId(null);
     setSelectedIds((ids) => ids.filter((x) => x !== id));
     markDirty();
-  }, [setNodes, setEdges, selectedId, markDirty]);
-
-  /** 复制选中节点（含两端都在选区内的连线） */
-  const copySelected = useCallback(() => {
-    const ids = selectedIds.length ? selectedIds : (selectedId ? [selectedId] : []);
-    if (!ids.length) { showToast('先选中节点再复制', 'fail'); return; }
-    const ns = stateRef.current.nodes.filter((n) => ids.includes(n.id));
-    const es = stateRef.current.edges.filter((e) => ids.includes(e.source) && ids.includes(e.target));
-    clipboardRef.current = {
-      nodes: ns.map((n) => ({ ...n, position: { ...n.position }, data: JSON.parse(JSON.stringify(n.data)) })),
-      edges: es.map((e) => ({ ...e })),
-    };
-    setHasClipboard(true);
-    showToast(`已复制 ${ns.length} 个节点${es.length ? ` / ${es.length} 条连线` : ''}`, 'ok');
-  }, [selectedIds, selectedId, showToast]);
-
-  /** 粘贴：重新生成 id、整体偏移 24px，并选中新节点 */
-  const pasteClipboard = useCallback(() => {
-    const clip = clipboardRef.current;
-    if (!clip?.nodes?.length) { showToast('剪贴板为空', 'fail'); return; }
-    pushHistory();
-    const stamp = Date.now().toString(36);
-    const idMap = new Map();
-    const added = clip.nodes.map((n, i) => {
-      const id = `n${stamp}${i}`;
-      idMap.set(n.id, id);
-      return { ...n, id, position: { x: (n.position?.x || 0) + 24, y: (n.position?.y || 0) + 24 }, data: { ...n.data, id } };
-    });
-    const newEdges = (clip.edges || []).map((e, i) => decorateEdge({
-      ...e, id: `e${stamp}${i}`, source: idMap.get(e.source), target: idMap.get(e.target),
-    }));
-    setNodes((ns) => [...ns, ...added]);
-    setEdges((es) => [...es, ...newEdges]);
-    setSelectedIds(added.map((n) => n.id));
-    setSelectedId(added[0].id);
-    markDirty();
-    showToast(`已粘贴 ${added.length} 个节点`, 'ok');
-  }, [pushHistory, setNodes, setEdges, markDirty, showToast]);
+  }, [setNodes, setEdges, selectedId, markDirty, pushHistory]);
 
   /** 按连线层级左→右自动排列，并 fitView */
   const layoutNow = useCallback(() => {
@@ -298,39 +333,12 @@ function FlowEditorInner({ flowId, onBack }) {
       const mod = e.ctrlKey || e.metaKey;
       if (mod && e.key.toLowerCase() === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
       else if (mod && (e.key.toLowerCase() === 'y' || (e.key.toLowerCase() === 'z' && e.shiftKey))) { e.preventDefault(); redo(); }
-      else if (mod && e.key.toLowerCase() === 'c' && !typing) { e.preventDefault(); copySelected(); }
-      else if (mod && e.key.toLowerCase() === 'v' && !typing) { e.preventDefault(); pasteClipboard(); }
+      else if (mod && e.key.toLowerCase() === 'c') { e.preventDefault(); copySelected(); }
+      else if (mod && e.key.toLowerCase() === 'v') { e.preventDefault(); pasteClipboard(); }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [undo, redo, copySelected, pasteClipboard]);
-
-  const runNow = useCallback(async () => {
-    if (dirty) await save();
-    setDrawerOpen(true);
-    setRunResult({ id: 'pending', status: 'running', logs: [] });
-    try {
-      const r = await api.runFlowStream(flow.id, {
-        onStart: () => {
-          setRunResult({ id: 'pending', status: 'running', logs: [] });
-          setRunStatusAll(null);
-        },
-        onLog: (log) => {
-          setRunResult((cur) => ({ ...cur, status: 'running', logs: [...(cur.logs || []), log] }));
-          setRunStatus(log.stepId, log.ok === false ? 'failed' : 'running');
-        },
-      });
-      setRunResult(r);
-      // 最终状态回显: running → ok/failed
-      for (const log of r.logs || []) {
-        if (log.ok === false) setRunStatus(log.stepId, 'failed');
-        else setRunStatus(log.stepId, 'ok');
-      }
-      // 完成后保留最终态(成功绿/失败红), 下次运行 onStart 时清除
-    } catch (e) {
-      setRunResult({ id: 'err', status: 'failed', logs: [], finalMessage: e.message, durationMs: 0 });
-    }
-  }, [dirty, save, flow?.id]);
 
   const testNotify = async () => {
     try {
@@ -363,68 +371,16 @@ function FlowEditorInner({ flowId, onBack }) {
     }
   };
 
-  // 调试运行：记录每一步的请求/响应，并自动展开运行过程窗口
-  const runDebug = useCallback(async () => {
-    if (dirty) await save();
-    setDrawerOpen(true);
-    setDebugView(true);
-    setRunResult({ id: 'pending', status: 'running', logs: [] });
-    try {
-      const r = await api.runFlowStream(flow.id, {
-        debug: true,
-        onStart: () => {
-          setRunResult({ id: 'pending', status: 'running', logs: [] });
-          setRunStatusAll(null);
-        },
-        onLog: (log) => {
-          setRunResult((cur) => ({ ...cur, status: 'running', logs: [...(cur.logs || []), log] }));
-          setRunStatus(log.stepId, log.ok === false ? 'failed' : 'running');
-        },
-      });
-      setRunResult(r);
-      for (const log of r.logs || []) {
-        if (log.ok === false) setRunStatus(log.stepId, 'failed');
-        else setRunStatus(log.stepId, 'ok');
-      }
-      showToast(`调试运行完成（${r.logs?.length || 0} 步）`, r.status === 'success' ? 'ok' : 'fail');
-    } catch (e) {
-      setRunResult({ id: 'err', status: 'failed', logs: [], finalMessage: e.message, durationMs: 0 });
-      showToast(`调试运行失败: ${e.message}`);
-    }
-  }, [dirty, save, flow?.id]);
-
-  const debugTo = useCallback(async (nodeId) => {
-    if (dirty) await save();
-    const node = stateRef.current.nodes.find((n) => n.id === nodeId);
-    setDrawerOpen(true);
-    setRunResult({ id: 'pending', status: 'running', logs: [] });
-    try {
-      setDebugView(true);
-      const r = await api.runFlowStream(flow.id, {
-        debugStopId: nodeId,
-        debug: true,
-        onStart: () => {
-          setRunResult({ id: 'pending', status: 'running', logs: [] });
-          setRunStatusAll(null);
-        },
-        onLog: (log) => {
-          setRunResult((cur) => ({ ...cur, status: 'running', logs: [...(cur.logs || []), log] }));
-          setRunStatus(log.stepId, log.ok === false ? 'failed' : 'running');
-        },
-      });
-      setRunResult(r);
-      for (const log of r.logs || []) {
-        if (log.ok === false) setRunStatus(log.stepId, 'failed');
-        else setRunStatus(log.stepId, 'ok');
-      }
-    } catch (e) {
-      setRunResult({ id: 'err', status: 'failed', logs: [], finalMessage: e.message, durationMs: 0 });
-    }
-  }, [dirty, save, flow?.id]);
-
   const toggleEnabled = async () => {
     const f = await api.updateFlow(flow.id, { enabled: !flow.enabled });
     setFlow(f);
+  };
+
+  /** 演练任务 → 自己的任务：去掉演示标记，之后就能存为模板 / 正常调度 */
+  const adoptDemo = async () => {
+    const f = await api.updateFlow(flow.id, { isDemo: false, name: flow.name.replace(/演练任务 · 演示数据/, '我的任务') });
+    setFlow(f);
+    showToast('已转为自己的任务，把地址和凭据换成你的即可', 'ok');
   };
 
   // 失败重选：原位替换失败节点的提取/断言配置（PRD §4.0.5）
@@ -449,6 +405,7 @@ function FlowEditorInner({ flowId, onBack }) {
   const handlePickResponse = useCallback(async (picked, log) => {
     const { nodes: ns, edges: es, flow: f } = stateRef.current;
     if (!f) return;
+    recordEvent(EVENTS.pickApply);
 
     // 1. 新增节点：接到产生该响应的 http 节点的下游链尾（引擎是单链执行器，
     //    同一出口多条边只走第一条，所以必须接在链尾而非另开分支）
@@ -539,6 +496,19 @@ function FlowEditorInner({ flowId, onBack }) {
             模板 {flow.template.name}
           </span>
         )}
+        {flow.isDemo && (
+          <button className="chip chip-demo" onClick={adoptDemo} title="演示数据只用来试跑；点一下换成你自己的站点">
+            演示 · 换成我的站点
+          </button>
+        )}
+        <button
+          className={`small structure-btn${structure.issues?.length ? ' has-issue' : ''}`}
+          onClick={() => setStructOpen(true)}
+          title="检查断头出口、孤岛步骤、多起点"
+        >
+          结构{structure.issues?.length ? ` · ${structure.issues.length}` : ''}
+        </button>
+        <button className={`small${outlineOpen ? ' active' : ''}`} onClick={() => setOutlineOpen((v) => !v)} title="把流程图拍成能读的清单">大纲</button>
         <button className="small" onClick={() => setScheduleOpen(true)} title="cron / 时区 / 抖动 / 启用调度">调度</button>
         <button className={`small${showPalette ? ' active' : ''}`} onClick={() => setShowPalette((v) => !v)} title="显示/收起步骤积木">积木</button>
         <button className={`small${showConfig ? ' active' : ''}`} onClick={() => setShowConfig((v) => !v)} title="显示/收起参数面板">参数</button>
@@ -598,10 +568,21 @@ function FlowEditorInner({ flowId, onBack }) {
           <VarsEditor flow={flow} onVars={(vars) => api.updateFlow(flow.id, { vars }).then(setFlow)} />
         </div>
 
-        <div className="canvas-wrap">
-          <ReactFlow
+        {outlineOpen && (
+          <OutlinePanel
             nodes={nodes}
             edges={edges}
+            structure={structure}
+            onFocus={focusNode}
+            onAddAfter={addAfter}
+            onClose={() => setOutlineOpen(false)}
+          />
+        )}
+
+        <div className="canvas-wrap">
+          <ReactFlow
+            nodes={displayNodes}
+            edges={displayEdges}
             onNodesChange={(chg) => { onNodesChange(chg); if (chg.some((c) => c.type === 'position' || c.type === 'remove')) markDirty(); }}
             onEdgesChange={(chg) => { onEdgesChange(chg); if (chg.some((c) => c.type === 'remove')) markDirty(); }}
             onConnect={onConnect}
@@ -621,6 +602,13 @@ function FlowEditorInner({ flowId, onBack }) {
               nodeColor={(n) => COLOR[n.data.type] || '#666'}
               maskColor={themeMode === 'dark' ? 'rgba(15,17,21,.7)' : 'rgba(244,242,237,.72)'}
               style={{ background: themeMode === 'dark' ? '#161a20' : '#fffefa' }}
+            />
+            <LoopFrame
+              loops={structure.loops}
+              nodes={nodes}
+              isFolded={isFolded}
+              onToggle={(id) => setFoldedLoops((m) => ({ ...m, [id]: !isFolded(id) }))}
+              onFocus={focusNode}
             />
           </ReactFlow>
 
@@ -650,7 +638,19 @@ function FlowEditorInner({ flowId, onBack }) {
         </div>
 
         {drawerOpen && (
-          <RunDrawer run={runResult} flowId={flow.id} onClose={() => setDrawerOpen(false)} onPickResponse={handlePickResponse} onRepPick={replaceFailedNode} debug={debugView} onDebugChange={setDebugView} focusStepId={focusStepId} onFocusStep={focusNode} />
+          <RunDrawer
+            run={runResult}
+            flowId={flow.id}
+            onClose={() => setDrawerOpen(false)}
+            onPickResponse={handlePickResponse}
+            onRepPick={replaceFailedNode}
+            debug={debugView}
+            onDebugChange={setDebugView}
+            focusStepId={focusStepId}
+            onFocusStep={focusNode}
+            onEditVars={() => { setShowPalette(true); showToast('变量在左侧展开', 'ok'); }}
+            onEditAssert={(stepId) => { setShowConfig(true); focusNode(stepId); }}
+          />
         )}
       </div>
 
@@ -712,6 +712,9 @@ function FlowEditorInner({ flowId, onBack }) {
           </div>
           {tplErr && <p style={{ color: 'var(--fail)', fontSize: 12 }}>{tplErr}</p>}
         </Modal>
+      )}
+      {structOpen && (
+        <StructureModal structure={structure} onClose={() => setStructOpen(false)} onFocus={focusNode} />
       )}
 
     </>

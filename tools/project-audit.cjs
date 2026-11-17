@@ -75,7 +75,9 @@ good(`文档相对链接检查：${mdFiles.length} 个文档 / ${links} 条链�
 
 /* ---------- 3) wiki 页面来源 ---------- */
 const wiki = read(path.join(ROOT, 'tools/build-wiki.cjs'));
-const pageDefs = [...wiki.matchAll(/\{\s*file:\s*'([^']+\.md)'[^}]*\}/g)];
+// 只数 PAGES 清单里的页面：404.html 复用了 page({ file:'index.md' ...}) 占位，不应算作一个页面
+const pagesBlock = wiki.slice(wiki.indexOf('const PAGES = ['), wiki.indexOf('const SOURCES = {'));
+const pageDefs = [...pagesBlock.matchAll(/\{\s*file:\s*'([^']+\.md)'[^}]*\}/g)];
 const srcBlock = wiki.slice(wiki.indexOf('const SOURCES = {'), wiki.indexOf('// ---------- 静态资源'));
 const sourceKeys = new Set([...srcBlock.matchAll(/^\s*'([a-z-]+\.md)'\s*:/gm)].map((m) => m[1]));
 for (const m of pageDefs) {
@@ -179,9 +181,54 @@ const CSS_RULES = [
   [/\.topbar:not\(\.editor-topbar\)\s*\{[^}]*flex-wrap:\s*nowrap/, '窄屏顶栏单行'],
   [/\.mobile-only/, '移动端动作收进菜单'],
   [/\.attempt-pill/, '重试尝试条样式'],
+  [/\.brand-logo/, '品牌标志组件样式'],
+  [/\.login-shell[\s\S]{0,120}grid-template-columns/, '登录页品牌双列布局'],
 ];
 for (const [re, label] of CSS_RULES) if (!re.test(css)) bad('CSS', `缺少契约: ${label}`);
 else good(`CSS 契约: ${label}`);
+
+/* ---------- 8.1 品牌资产与页面入口 ---------- */
+const BRAND_FILES = [
+  'web/public/brand/checkq-mark.svg',
+  'web/public/brand/checkq-mark-mono.svg',
+  'web/public/favicon.ico',
+  'web/public/favicon-16x16.png',
+  'web/public/favicon-32x32.png',
+  'web/public/apple-touch-icon.png',
+  'docs/assets/social-preview.png',
+];
+for (const f of BRAND_FILES) {
+  if (!fs.existsSync(path.join(ROOT, f))) bad(f, '缺少品牌资产');
+}
+const indexHtml = read(path.join(ROOT, 'web/index.html'));
+const FAVICON_LINKS = [
+  [/rel="icon"[^>]*href="\/favicon\.ico"/, 'favicon.ico 兜底'],
+  [/rel="icon"[^>]*type="image\/svg\+xml"[^>]*href="\/brand\/checkq-mark\.svg"/, 'SVG favicon'],
+  [/rel="apple-touch-icon"[^>]*href="\/apple-touch-icon\.png"/, 'apple-touch-icon'],
+  [/name="theme-color"/, 'theme-color'],
+];
+for (const [re, label] of FAVICON_LINKS) if (!re.test(indexHtml)) bad('web/index.html', `缺少品牌入口: ${label}`);
+else good(`品牌入口: ${label}`);
+if (!fs.existsSync(path.join(ROOT, 'docs/BRAND.md'))) bad('docs/BRAND.md', '缺少品牌指南');
+else good('品牌指南: docs/BRAND.md');
+
+/* ---------- 9) 版本号：根 / 服务端 / 前端三处必须一致 ---------- */
+const versions = ['package.json', 'server/package.json', 'web/package.json']
+  .map((f) => ({ f, v: JSON.parse(read(path.join(ROOT, f))).version }));
+const uniq = new Set(versions.map((x) => x.v));
+if (uniq.size !== 1) bad('版本', `三处 package.json 版本不一致: ${versions.map((x) => `${x.f}=${x.v}`).join(', ')}`);
+// 服务端运行时版本取自 server/package.json（version.js），文档里不能残留旧版本号
+else {
+  const v = versions[1].v;
+  good(`版本一致性检查：三处 package.json 均为 ${v}`);
+  const sources = ['server/src/api.js', 'server/src/openapi.js', 'server/src/har-export.js', 'server/src/version.js'];
+  for (const f of sources) {
+    // openapi: '3.1.0' 是规范版本，不是产品版本，不参与比对
+    const text = read(path.join(ROOT, f)).split(/\r?\n/).filter((line) => !/^\s*openapi:\s*/.test(line)).join('\n');
+    const stale = [...text.matchAll(/['"`](\d+\.\d+\.\d+)['"`]/g)].map((m) => m[1]).filter((x) => x !== v);
+    if (stale.length) bad(f, `运行时代码里残留硬编码版本号 ${stale.join(', ')}（应从 version.js 取）`);
+  }
+}
 
 /* ---------- 汇总 ---------- */
 console.log('===== 项目一致性检查 =====');

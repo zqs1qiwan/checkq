@@ -1,3 +1,10 @@
+"""
+一次性迁移工具（历史参考，不属于运行时代码）：
+把 qiandao 的 database.db 里的 tpl/task/env 转成 CheckQ 的 flows JSON。
+真实任务已完成迁移，保留此脚本仅作数据结构对照；无自动化调用方，也不进容器镜像。
+
+用法（本地）：python server/scripts/migrate-from-qd.py
+"""
 import json
 import re
 import sqlite3

@@ -9,12 +9,16 @@
 ├── flows.json      任务定义（含 nodes/edges/vars/log/notify）
 ├── runs.json       运行记录（每 flow 最近 500 条）
 ├── templates.json  模板
-└── meta.json       密码 hash / API Key / AI 配置 / 每日汇总配置
+├── notifications.json 站内通知
+├── channels.json   系统通知渠道（敏感字段加密）
+├── meta.json       密码 hash / API Key（加密）/ AI Key（加密）/ 每日汇总配置
+└── .secret         凭据加密密钥（600；**必须与上面的 JSON 一起备份**）
 ```
 
 - 写入：`#persist` 400ms 节流 → 原子写（tmp + rename）；
 - 读取：启动时全量载入内存，运行期内存操作；
 - 备份：`GET /api/system/backup` 导出全部 JSON；`POST /api/system/restore` 以新 ID 导入（停用）；
+- ⚠️ 直接复制 `/data` 目录做冷备份时，必须同时复制 `.secret`（或用同一个 `CHECKQ_SECRET`），否则密文无法解密；网页备份是脱敏导出，不含 `.secret`，恢复后需要重新填敏感值。
 - 恢复：前端「恢复」弹窗，支持选择文件。
 
 ## 2. 成熟度评估
@@ -26,7 +30,7 @@
 | 持久性 | ⚠️ 中 | 400ms 节流窗口内被 SIGKILL 会丢最近变更；已加 SIGTERM/SIGINT flush |
 | 容量 | ⚠️ 中 | runs.json 每 flow 500 条上限，长期仍会增长；flows/templates 无上限 |
 | 备份 | ⚠️ 中 | 手动导出，无自动定时备份 |
-| 加密 | ✅ 良 | 密码 scrypt；API Key 明文存 meta（本地可信目录） |
+| 加密 | ✅ 良 | 密码 scrypt；API Key 只存 sha256 摘要；旧 `meta.apiKey` 与 `meta.ai.apiKey` 密文落盘；敏感凭据（cookie/token）用 AES-256-GCM 静态加密 |
 | 迁移 | ❌ 弱 | 无版本号/迁移脚本，结构变更靠兼容读取 |
 
 ## 3. 已实施改进（2026-11-10）
@@ -48,7 +52,7 @@
 
 ```bash
 # 手动备份（在容器内）
-docker exec checkq tar -czf /data/backup-$(date +%F).tgz -C /data flows.json runs.json templates.json meta.json
+docker exec checkq tar -czf /data/backup-$(date +%F).tgz -C /data flows.json runs.json templates.json notifications.json channels.json meta.json
 # 复制到宿主机
 docker cp checkq:/data/backup-2026-11-10.tgz /mnt/nvme0n1-4/checkq/backups/
 

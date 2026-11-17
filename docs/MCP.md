@@ -2,6 +2,7 @@
 
 > MCP (Model Context Protocol) 服务端：`mcp/checkq-mcp.cjs`，零依赖，Node 18+，stdio JSON-RPC 2.0。
 > 任何支持 MCP 的 Agent（Claude Desktop / Cursor / OpenCode / 自研 Agent）都能直接接入。
+> 端口口径：服务端默认监听 `8888`；下文示例的 `18888` 是 `docker-compose.yml` 为本地测试方便设的宿主映射，生产直连请用 `8888`。
 
 ## 1. 快速启动
 

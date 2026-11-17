@@ -1,38 +1,43 @@
 /**
- * 每日总推送「推送单位」测试（v0.4.2）：
- *  - GET /api/system/push-targets 只返回带通知渠道的任务
- *  - PUT/GET daily-summary-config 支持 targetFlowIds（多选）
- *  - POST /api/system/daily-summary 按勾选的多个任务推送
- *  - stats() 带 nextFlowName（首页健康条提示「下一次是哪个任务」）
+ * 每日汇总与任务解耦后的兼容测试（v0.5.3）
+ *  - push-targets 返回系统渠道摘要（不再列任务）
+ *  - daily-summary-config 的 targetFlowIds 只读
+ *  - 旧 POST /api/system/daily-summary { flowIds } 仍按任务渠道发送
+ *  - 新系统汇总与任务渠道无关
  */
 process.env.ADMIN_PASSWORD = 'test1234';
 import assert from 'node:assert';
 import fs from 'node:fs';
 import os from 'node:os';
+import { buildServer } from '../src/api.js';
 
 const dir = fs.mkdtempSync(os.tmpdir() + '/cq-push-');
-const { buildServer } = await import('../src/api.js');
 const server = buildServer({ dataDir: dir, port: 0 });
 const { app, scheduler } = server;
 await app.ready();
 
-let passed = 0, failed = 0;
-function check(name, cond, extra = '') {
-  if (cond) { passed++; console.log(`  PASS ${name}`); }
-  else { failed++; console.log(`  FAIL ${name} ${extra}`); }
+let passed = 0;
+let failed = 0;
+async function check(name, fn) {
+  try {
+    assert.ok(await fn(), '断言未通过');
+    passed += 1;
+    console.log(`  PASS ${name}`);
+  } catch (e) {
+    failed += 1;
+    console.log(`  FAIL ${name}：${e.message}`);
+  }
 }
 
 const calls = [];
-globalThis.fetch = async (url, opts) => {
-  calls.push({ url: String(url), opts: opts || {} });
+globalThis.fetch = async (url) => {
+  calls.push(String(url));
   return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'content-type': 'application/json' } });
 };
 
 const login = await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'test1234' } });
-const cookie = (login.headers['set-cookie'] || '').split(';')[0];
-const H = { cookie };
+const H = { cookie: (login.headers['set-cookie'] || '').split(';')[0] };
 
-// 两个带渠道的任务 + 一个没有渠道的
 const mk = async (name, channels, extra = {}) => {
   const r = await app.inject({
     method: 'POST', url: '/api/flows', headers: H,
@@ -45,55 +50,54 @@ const a = await mk('推送甲', [{ type: 'webhook', url: 'http://127.0.0.1:9/a' 
 const b = await mk('推送乙', [{ type: 'webhook', url: 'http://127.0.0.1:9/b' }, { type: 'telegram', token: '1:x', chat: '2' }]);
 const c = await mk('没有渠道', []);
 
-await check('GET /api/system/push-targets 只返回带渠道的任务', async () => {
-  const r = await app.inject({ method: 'GET', url: '/api/system/push-targets', headers: H });
-  const j = r.json();
-  const ids = j.map((x) => x.id);
-  return j.length === 2 && ids.includes(a.id) && ids.includes(b.id) && !ids.includes(c.id);
+await check('push-targets 返回系统渠道摘要（内置站内通知）', async () => {
+  const j = (await app.inject({ method: 'GET', url: '/api/system/push-targets', headers: H })).json();
+  return Array.isArray(j) && j.some((x) => x.type === 'inbox') && !j.some((x) => x.id === a.id || x.id === b.id);
 });
 
-await check('push-targets 带上渠道类型', async () => {
-  const r = await app.inject({ method: 'GET', url: '/api/system/push-targets', headers: H });
-  const j = r.json();
-  const bj = j.find((x) => x.id === b.id);
-  return bj && bj.channels.join(',') === 'webhook,telegram';
-});
-
-await check('PUT daily-summary-config 支持 targetFlowIds 多选', async () => {
-  const put = await app.inject({
-    method: 'PUT', url: '/api/system/daily-summary-config', headers: H,
-    payload: { enabled: true, time: '09:30', timezone: 'Asia/Shanghai', targetFlowIds: [a.id, b.id] },
-  });
+await check('daily-summary-config 的 targetFlowIds 只读', async () => {
+  server.store.meta.dailySummary = { ...(server.store.meta.dailySummary || {}), targetFlowIds: [a.id], targetFlowId: a.id };
+  server.store.flush();
+  const put = await app.inject({ method: 'PUT', url: '/api/system/daily-summary-config', headers: H, payload: { enabled: true, time: '09:30', timezone: 'Asia/Shanghai', targetFlowIds: [b.id, c.id] } });
   assert.strictEqual(put.statusCode, 200, put.body);
-  const get = await app.inject({ method: 'GET', url: '/api/system/daily-summary-config', headers: H });
-  const j = get.json();
-  return j.enabled === true && j.time === '09:30' && j.targetFlowIds.length === 2 && j.targetFlowIds.includes(b.id);
+  const j = (await app.inject({ method: 'GET', url: '/api/system/daily-summary-config', headers: H })).json();
+  return j.enabled === true && j.time === '09:30' && j.targetFlowIds.length === 1 && j.targetFlowIds[0] === a.id;
 });
 
-await check('POST /api/system/daily-summary 向多个推送单位发送', async () => {
+await check('旧端点按任务渠道发送（兼容一版）', async () => {
   calls.length = 0;
   const r = await app.inject({ method: 'POST', url: '/api/system/daily-summary', headers: H, payload: { flowIds: [a.id, b.id] } });
   assert.strictEqual(r.statusCode, 200, r.body);
   const j = r.json();
-  const urls = calls.map((x) => x.url);
-  return j.groups.length === 2 && j.results.length === 3 && urls.some((u) => u.includes('/a')) && urls.some((u) => u.includes('/b')) && urls.some((u) => u.includes('api.telegram.org'));
+  return j.groups.length === 2 && j.results.length === 3 && calls.some((u) => u.includes('/a')) && calls.some((u) => u.includes('api.telegram.org'));
 });
 
-await check('汇总文案含今日运行统计', async () => {
+await check('旧端点文案保持「每日汇总：今日」', async () => {
   const r = await app.inject({ method: 'POST', url: '/api/system/daily-summary', headers: H, payload: { flowIds: [a.id] } });
   return /每日汇总：今日 \d+ 次/.test(r.json().text || '');
 });
 
-await check('未选推送单位时拒绝推送', async () => {
-  const r = await app.inject({ method: 'POST', url: '/api/system/daily-summary', headers: H, payload: { flowIds: [] } });
-  return r.statusCode === 200 && r.json().ok === true && !r.json().groups;
+await check('所选任务都没有渠道时 400', async () => {
+  const r = await app.inject({ method: 'POST', url: '/api/system/daily-summary', headers: H, payload: { flowIds: [c.id] } });
+  return r.statusCode === 400;
 });
 
-await check('stats 带 nextFlowName（下一次调度属于哪个任务）', async () => {
-  const withCron = await mk('有调度的任务', [], { cron: '0 3 * * *', enabled: true });
-  const r = await app.inject({ method: 'GET', url: '/api/system/stats', headers: H });
-  const j = r.json();
-  return j.nextRunAt && j.nextFlowName === '有调度的任务';
+await check('stats 带 nextFlowName', async () => {
+  await mk('有调度的任务', [], { cron: '0 3 * * *', enabled: true });
+  const j = (await app.inject({ method: 'GET', url: '/api/system/stats', headers: H })).json();
+  return !!j.nextRunAt && j.nextFlowName === '有调度的任务';
+});
+
+await check('系统汇总不借任务渠道：只走 channels.json', async () => {
+  await app.inject({ method: 'PUT', url: '/api/system/notify', headers: H, payload: { daily: { enabled: true, time: '09:30', skipEmpty: false }, channels: [{ type: 'inbox', id: 'ch_inbox' }, { type: 'webhook', url: 'http://127.0.0.1:9/system' }] } });
+  calls.length = 0;
+  const out = await server.runner.sendDailySummary('manual');
+  return out.ok === true && out.results.length === 2 && out.results.some((x) => x.type === 'webhook') && calls.length === 1 && calls[0].includes('/system');
+});
+
+await check('站内汇总标题固定、不挂任务名', async () => {
+  const item = server.store.listNotifications(5).items.find((x) => x.title === '每日汇总');
+  return !!item && item.flowId === null && item.flowName === '' && item.content.startsWith('每日汇总 · ');
 });
 
 await app.close();

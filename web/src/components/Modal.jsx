@@ -1,4 +1,5 @@
 import React, { useEffect, useId, useRef } from 'react';
+import { IconClose } from './Icons.jsx';
 
 /**
  * 统一弹窗骨架 —— 原生 <dialog> + showModal()
@@ -20,7 +21,6 @@ export default function Modal({
   width,
   className = '',
   bodyClassName = '',
-  closeOnMask = true,
 }) {
   const ref = useRef(null);
   const titleId = useId();
@@ -54,9 +54,9 @@ export default function Modal({
       return e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom;
     };
     const supportsClosedBy = 'closedBy' in HTMLDialogElement.prototype;
-    const onDown = (e) => { if (!supportsClosedBy && closeOnMask) pressedOutside = outside(e); };
+    const onDown = (e) => { if (!supportsClosedBy) pressedOutside = outside(e); };
     const onUp = (e) => {
-      if (supportsClosedBy || !closeOnMask) return;
+      if (supportsClosedBy) return;
       if (pressedOutside && outside(e)) closeRef.current?.();
       pressedOutside = false;
     };
@@ -70,7 +70,7 @@ export default function Modal({
       d.removeEventListener('pointerup', onUp);
       if (d.open) d.close();
     };
-  }, [closeOnMask]);
+  }, []);
 
   return (
     <dialog
@@ -79,7 +79,7 @@ export default function Modal({
       style={width ? { width } : undefined}
       aria-labelledby={titleId}
       tabIndex={-1}
-      closedby={closeOnMask ? 'any' : 'closerequest'}
+      closedby="any"
     >
       <div className="modal-head">
         <div className="modal-title" id={titleId}>
@@ -87,7 +87,7 @@ export default function Modal({
           {subtitle && <p className="modal-sub">{subtitle}</p>}
         </div>
         {onClose && (
-          <button type="button" className="modal-close" onClick={onClose} title="关闭（Esc）" aria-label="关闭">✕</button>
+          <button type="button" className="modal-close" onClick={onClose} title="关闭（Esc）" aria-label="关闭"><IconClose size={14} /></button>
         )}
       </div>
       <div className={`modal-body ${bodyClassName}`}>{children}</div>
