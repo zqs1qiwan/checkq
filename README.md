@@ -1,87 +1,34 @@
-<p align="center"><a href="https://zqs1qiwan.github.io/checkq/"><img src="web/public/brand/checkq-mark.svg" width="76" height="76" alt="CheckQ 标志" /></a></p>
+<p align="center"><a href="https://zqs1qiwan.github.io/checkq/"><img src="web/public/brand/checkq-mark.svg" width="100" height="100" alt="CheckQ 标志" /></a></p>
 
 <h1 align="center">CheckQ</h1>
 
-<p align="center"><strong>开源的可视化自动挂机、签到框架。</strong></p>
+<p align="center"><strong>开源的可视化自动挂机、签到框架</strong></p>
 
-<p align="center">拖拽积木式搭建 · Docker 一行部署 · HAR / cURL 导入 · 失败可解释 · 日志完整可见</p>
+<p align="center"><a href="https://zqs1qiwan.github.io/checkq/">文档</a> · <a href="#快速开始">快速开始</a> · <a href="https://github.com/zqs1qiwan/checkq/issues">Issues</a></p>
 
 <p align="center"><img src="docs/assets/social-preview.png" width="880" alt="CheckQ — 开源的可视化自动挂机、签到框架" /></p>
 
-CheckQ 是一个零依赖单容器的自动化框架：把每天重复的签到、打卡、查询、监控和上报，做成一条看得见、跑得稳、能复用的流程。浏览器里拖拽积木即可搭建，导入 HAR 自动生成流程；条件分支、变量提取、失败重试全可视化，运行日志完整可见（请求、响应、每一步耗时）。
+CheckQ 把签到、打卡、查询、监控、上报这类重复 HTTP 操作做成可视化流程：拖拽积木搭建，导入 HAR 自动生成，定时执行，失败能看到原因。Docker 单容器部署，数据落在本地 `/data`。不内置浏览器渲染、验证码识别、多语言运行时与集群能力；需要时请用外部服务。
 
-## 产品方向
+## 文档
 
-CheckQ 是一个**看得见、说得清、拿得走**的开源可视化自动挂机、签到框架：零依赖单容器、流程等于真实执行、失败能给出原因与下一步、模板可复用可分发。
-
-**明确不做**：浏览器渲染与验证码识别、Python/Shell/TypeScript 多语言运行时、集群与多租户。需要这些能力时请用外部服务，本项目不把它们做成内置能力。
-
-- 产品定义、需求与发展路线：`docs/PRD.md`（一页结论在 §0）
-- 架构、模块职责与扩展点：`docs/ARCHITECTURE.md`
-- 界面与交互金标准：`docs/UI-STANDARDS.md`
-- 品牌标志、色彩与资产：`docs/BRAND.md`
-- 接口：`docs/API.md` / `docs/MCP.md`；竞品事实：`docs/COMPETITIVE-ANALYSIS.md`
-
-
-## 📖 文档中心（GitHub Pages）
-
-完整文档站：**<https://zqs1qiwan.github.io/checkq/>**
-
-- 入口：面板顶栏「文档中心」图标 → 文档站（面板不再内置重复引导）
-- 站点只讲**框架功能**（不含任何具体签到脚本 —— 那属于模板市场）；`tools/build-wiki.cjs` 从 `docs/` 自动生成，带站内搜索与更新日志（`push` 到 main 时由 `.github/workflows/pages.yml` 自动发布）
-- 品牌与标志：`docs/BRAND.md`；GitHub 仓库社交预览图：`docs/assets/social-preview.png`（Settings → Social preview 上传）
-- 本地预览：`node tools/build-wiki.cjs` → 打开 `wiki/index.html`
-- 本地测试案例（具体站点的流程 / 模板 / 实例笔记）**仅供本地使用**：按 `.gitignore` 与本地 `.git/info/exclude` 留在工作区，不进公开仓库；`secret-scan` / `project-audit` 会在误提交时拦下
-
-> 首次启用需在仓库 **Settings → Pages → Source** 选 **GitHub Actions**（之后每次 push 自动发布）。
-
-## 品牌资产
-
-| 标准标志 | 单色标志 | 浏览器图标 |
-| --- | --- | --- |
-| <img src="web/public/brand/checkq-mark.svg" width="44" alt="CheckQ 标准标志" /> | <img src="web/public/brand/checkq-mark-mono.svg" width="44" alt="CheckQ 单色标志" /> | <img src="web/public/favicon-32x32.png" width="32" alt="CheckQ favicon" /> |
-
-品牌规范、色值与使用边界见 [`docs/BRAND.md`](docs/BRAND.md)；GitHub 社交预览图见 [`docs/assets/social-preview.png`](docs/assets/social-preview.png)（Settings → Social preview 上传）。
+- 文档站：<https://zqs1qiwan.github.io/checkq/>
+- 开发文档：`docs/ARCHITECTURE.md`、`docs/UI-STANDARDS.md`、`docs/API.md`、`docs/MCP.md`
+- 更新日志：`docs/CHANGELOG.md`
+- 仓库只放框架，具体站点流程 / 模板不入库
 
 ## 特性
 
-- **模板系统** — 调试好的流程一键「存为模板」，列表管理变量名与任务数；从模板创建任务自动克隆节点图，变量（cookie 等）各任务独立填写
-- **模板联动** — 派生任务 = 模板 + 各自的参数：模板一改，所有派生任务立刻跟着变（无需任何同步操作）；任务里改了脚本内容会自动转成独立任务
-- **积木式流程编辑器** — 类似苹果捷径。HTTP 请求、条件分支、变量赋值、正则提取、延迟、随机延迟、循环（对每一项）、脚本、日志、通知，拖拽连线即成流程
-- **点选生成逻辑** — 运行后点击响应中的任意 JSON 值或划选文字，一键生成提取/断言/关键字/通知节点，自动接入流程链尾；生成物是标准节点配置，可继续编辑（见 `docs/PRD.md` §2.1）
-- **HAR / cURL 导入** — 浏览器 DevTools 的 HAR、qiandao(QD) 框架模板、cURL 命令均可导入，自动识别生成流程图；QD 模板的 `api://util/delay` 转 delay 节点、`util/unicode|urldecode` 转 log 节点、变量 URL 放行（兼容性实测矩阵见 docs/QIANDAO-COMPAT.md）
-- **关键字提取与日志三档** — flow 级配置 keywords 正则规则（如提取标题），每次运行自动汇总到运行摘要；日志按 all / failure / summary 三档记录，记录内容四开关（请求头/请求体/响应体/变量快照）与响应体截断长度可配，编辑器顶栏「日志配置」可编辑；敏感头（cookie/authorization）自动脱敏
-- **调度抖动** — 流级 `jitterMinutes`（0-30，编辑器顶栏可设）：cron 触发后随机延迟 0-N 分钟，避免整点风控指纹；模板管理弹窗可编辑默认变量值
-- **条件分支** — jexl 表达式，如 `last.json.code == 0`，按响应内容决定走向
-- **run 级 Cookie 罐** — 一次运行内响应 Set-Cookie 自动入罐，后续同域请求自动携带（登录→签到链开箱即用），显式 Cookie 头同名键优先，节点可退出
-- **函数式模板表达式** — `{{md5("f=1&s="+id)|upper}}`、`{{x|default('兜底')}}`、`{{multiply(timestamp('float'),1000)|int}}`，对齐 QD jinja 常用写法，白名单求值无 eval
-- **错误可见** — 每一步的请求、响应、断言结果、耗时全部落日志，失败时直接看到原始响应内容
-- **调试** — 编辑器内「调试到此为止」：从头执行到选中节点即停；「单步运行」逐节点验证
-- **cron 调度** — 每个流程独立 cron 表达式，支持时区；任务列表直接显示下次运行时间，支持搜索与筛选（全部 / 已启用调度 / 最近失败）
-- **账号与安全** — 用户名 + 密码登录（多用户 / admin·operator·viewer 角色）、TOTP 两步验证 + 一次性恢复码、会话可吊销、scrypt 加盐哈希（明文不落盘）、API Key 只存摘要、审计日志
-- **通知** — 12 种渠道原生集成（站内 / Webhook / Bark / Telegram / Server酱 / PushPlus / 钉钉 / 企业微信 / 飞书 / Gotify / ntfy / 邮件SMTP），钉钉/飞书支持加签；首页 🔔 站内通知中心
-- **模板导出与批量创建** — 模板导出为 JSON（敏感变量脱敏）；CSV 批量导入一键创建多份任务
-- **日/夜/自动 主题** — 顶栏三段切换，「自动」跟随系统即时刻切换；批量操作默认收起（列表页「批量管理」按需开启），按钮/标题不再折行压缩
-- **任务分组 / 折叠** — 每个任务可归属分组（`group`，留空=未分组）；列表按组折叠，组头显示任务数、启用数、今日成功/失败/成功率、下次调度；大分组默认收起，搜索/筛选时自动展开；支持批量「分组…」一次归入
-- **编辑器效率** — 撤销/重做（Ctrl+Z / Ctrl+Y）、节点复制粘贴（Ctrl+C / Ctrl+V，含内部连线）、MiniMap、按连线层级「整理」布局；点击日志步骤 ↔ 画布节点双向定位
-- **单次运行导出 HAR** — 运行抽屉一键导出，默认脱敏（cookie/token/密码替换为 `***`），可直接拖进浏览器 DevTools 复现
-- **失败自动重试** — 任务级退避重试：默认最多 3 次、指数退避 5 秒起、随机抖动、单次等待上限 5 分钟；**跑满次数仍失败才判定真正失败**，每次尝试与等待时长都写进运行记录、日志与通知。调试运行不重试，调度不会在重试期间重复触发
-- **结构可见（v0.5）** — 画布标出每个出口是否接线（未接=空心点，`http` 失败出口未接时节点带「失败未接」角标、连线走虚线）；`foreach` 循环体有虚线容器，流程到 60 个节点时循环体默认折叠，点「展开」逐个放开；「大纲」视图按执行顺序列出步骤；保存后结构有隐患时弹「结构检查」清单——**只提示，不改执行语义**
-- **创建入口四分支（v0.5）** — 顶栏「+ 新建」直接给：空白流程 / 从模板 / 导入 HAR·JSON / 导入 cURL；「更多」只留进阶动作
-- **可解释失败（v0.5）** — 失败时先给原因与下一步：缺变量 / 凭据失效 / 风控页 / 断言不符 / 网络 / 5xx / 4xx / 引擎 / 未知九条规则，卡片上直接可点「看该步响应 / 改变量 / 调断言 / 复制排障摘要」
-- **修改即重跑（v0.5）** — 任务行「运行 ▾」：立即运行 / 带改变量运行 / 只看日志 / 调试运行；改 cookie 这类参数不必进画布，同一任务重复点击自动去重
-- **演练场（v0.5）** — 空实例「先演练一遍」：内置本机演示站点，零站点零凭据就能跑通一次成功；之后一键换成自己的站点（`CHECKQ_DEMO=0` 可关）
-- **模板市场（v0.5）** — 首页「市场」页签：填索引地址即可订阅、搜索、按标签筛选、预览（变量清单 + 哈希校验 + 含脚本提示）、导入；协议见 `docs/TEMPLATE-MARKET.md`，随包示例 `docs/template-index.example.json`
-- **本机统计（v0.5）** — 设置「统计」：近 N 天运行量与成功率、首跑耗时中位/p90、失败后修复耗时、模板复用；只算本机、不外传、不随备份导出
-- **稳定与安全（v0.6.0）** — AI 助手 Key 与旧 API Key 落盘加密；12 类通知统一出口、15 秒超时、并行发送；每次运行记录通知成功/失败，外部渠道全失败时站内告警；跨任务并发默认上限 4，排期洪峰不会同时打满出口（`CHECKQ_MAX_CONCURRENCY` 可调）
-- **自动恢复探测（v0.6.1）** — 任务因调度失败被自动停用后，可选开启“恢复探测”：按至少 30 分钟的间隔静默重跑，成功自动重新启用，失败最多 5 次后停止并留站内记录；默认关闭，避免失败账号反复触发站点风控
-- **现代 Web 原生能力** — 弹窗用原生 `<dialog>`（焦点管理 / Esc / 背景 inert / 顶层渲染），菜单用 Popover API，明暗主题声明 `color-scheme`，表格 sticky 表头 + 容器查询，长日志 `content-visibility`；UI 决策依据 [Modern Web Guidance 1.0](https://developer.chrome.com/docs/modern-web-guidance)
-- **基础信息可改** — 点任务名打开任务详情（备注、调度、重试策略、变量、通知渠道…），名字与备注当场就能改；进画布是「更多 → 编辑流程」这样的显式动作
-- **下拉不丢** — 所有菜单以浮层渲染并自动避让边界，表格底部那几行的「···」也点得到；弹窗内的菜单挂到该弹窗内部，不会被模态遮罩拦住
-- **窄屏不挤** — 小屏顶栏只留「品牌 / 新建 / 更多 / 设置」四个等高控件，主题、通知、文档、身份收进「更多」；工具条左右分组各自不拆散，弹窗显式居中不会贴到左上角
-- **文档与护栏齐全** — PRD / API / MCP / 安全 / 存储文档 + 自动生成的纯用户视角文档站；`ui-smoke` / `ui-interaction-audit` / `copy-audit` / `secret-scan` / `project-audit` 五个机械护栏（命中即 exit 1），`verify-round` 串起一轮全量验收
-- **单容器部署** — 无原生编译依赖，`docker compose up -d` 即用
-- **框架即框架** — 不内置任何业务模板；只会给你一条指向本机演示站点的演练任务。真实模板来自你自己创建 / JSON 导入 / 自填索引订阅（产品定义与路线见 `docs/PRD.md`）
+- **可视化流程** — HTTP、条件、赋值、提取、延迟、循环、脚本、日志、通知九类节点，拖拽连线即可搭建
+- **导入即用** — 支持浏览器 HAR、cURL 和 QD 模板导入，自动生成可编辑流程
+- **模板与批量** — 流程存为模板，变量各自填写；支持 JSON 导出、CSV 批量创建任务和模板市场索引
+- **调度与重试** — 每个任务独立 cron / 时区 / 抖动；失败按指数退避重试，连续失败自动停用，可选恢复探测
+- **失败可解释** — 九类诊断给出原因与下一步；日志完整记录请求、响应、断言、耗时和变量快照
+- **运行可见** — 实时运行抽屉、连续日志、日志与画布双向定位；单次运行可导出脱敏 HAR
+- **安全** — 多用户角色、TOTP 两步验证、会话吊销、API Key 只存摘要、敏感凭据加密落盘
+- **通知** — 12 种渠道（站内 / Webhook / Bark / Telegram / Server酱 / PushPlus / 钉钉 / 企业微信 / 飞书 / Gotify / ntfy / SMTP），支持任务通知与每日汇总
+- **任务管理** — 分组、折叠、批量操作、今日成功率、本机统计
+- **部署** — Docker 单容器，零数据库依赖，数据落在 `/data`
 
 ## 快速开始
 
