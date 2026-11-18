@@ -143,13 +143,14 @@ await check('GET /api/openapi.json 提供机器可读描述（免登录）', asy
   const paths = Object.keys(j.paths || {});
   return r.statusCode === 200 && j.openapi.startsWith('3.1')
     && paths.includes('/api/flows') && paths.includes('/api/flows/{id}/run') && paths.includes('/api/flows/{id}/logs')
+    && paths.includes('/api/runs/{id}/cancel')
     && paths.includes('/api/system/apikeys');
 });
 
 await check('OpenAPI 描述里标注了 API Key 认证与作用域', async () => {
   const r = await app.inject({ method: 'GET', url: '/api/openapi.json' });
   const j = r.json();
-  return !!j.components?.securitySchemes?.apiKeyAuth && !!j['x-scopes']?.read && !!j['x-scopes']?.run && !!j['x-scopes']?.write;
+  return !!j.components?.securitySchemes?.apiKeyAuth && !!j['x-scopes']?.read && !!j['x-scopes']?.run && !!j['x-scopes']?.write && !!j['x-scopes']?.secrets;
 });
 
 await check('MCP 工具覆盖 agent 需要的操作', async () => {

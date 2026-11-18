@@ -990,7 +990,7 @@ export function buildServer({ dataDir, port }) {
     agentGuide: '/api/openapi.json',
     endpoints: {
       flows: ['GET /api/flows', 'GET /api/flows/:id', 'PUT /api/flows/:id', 'POST /api/flows/:id/run', 'GET /api/flows/:id/logs', 'POST /api/flows/batch'],
-      runs: ['GET /api/runs?flowId=', 'GET /api/runs/:id'],
+      runs: ['GET /api/runs?flowId=', 'GET /api/runs/:id', 'POST /api/runs/:id/cancel'],
       templates: ['GET /api/templates', 'GET /api/templates/:id', 'POST /api/templates/:id/instantiate'],
       meta: ['GET /api/health', 'GET /api/me', 'GET /api/system/stats', 'GET /api/system/push-targets', 'GET /api/notifications'],
       keys: ['GET /api/system/apikeys', 'POST /api/system/apikeys', 'DELETE /api/system/apikeys/:id'],

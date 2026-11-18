@@ -6,9 +6,10 @@
 import { VERSION } from './version.js';
 
 const scopes = {
-  read: '查看任务、运行记录、日志、统计、模板',
+  read: '查看任务、运行记录、日志、统计、模板（凭据脱敏）',
   run: '触发任务运行（跑签到）',
   write: '修改变量 / 调度 / 新建任务 / 通知配置',
+  secrets: '读取任务与模板中的明文凭据（Cookie / Token / 密码）',
 };
 
 const errorResponses = {
@@ -134,6 +135,12 @@ export function buildOpenApi() {
         }),
       },
       '/api/runs/{id}': { get: op('某次运行详情（日志 + 变量快照，变量已脱敏）', { tags: ['runs'], parameters: [idParam()], schema: { $ref: '#/components/schemas/Run' } }) },
+      '/api/runs/{id}/cancel': {
+        post: op('取消排队中或运行中的一次运行；已结束返回 409', {
+          tags: ['runs'], scope: 'run', parameters: [idParam()], errors: [401, 403, 404, 409],
+          schema: { type: 'object', properties: { ok: { type: 'boolean' }, cancelling: { type: 'boolean' }, run: { $ref: '#/components/schemas/Run' } } },
+        }),
+      },
       '/api/runs/{id}/har': { get: op('导出单次运行的 HAR（默认脱敏；响应体沿用日志截断）', { tags: ['runs'], parameters: [idParam()], schema: { type: 'object' } }) },
       '/api/templates': { get: op('模板列表（含变量名）', { tags: ['templates'], schema: { type: 'array', items: { type: 'object' } } }) },
       '/api/templates/{id}': { get: op('模板详情（变量名 + 默认值，敏感项已脱敏）', { tags: ['templates'], parameters: [idParam()], schema: { type: 'object' } }) },
