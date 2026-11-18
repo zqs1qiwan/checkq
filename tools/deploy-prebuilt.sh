@@ -38,6 +38,20 @@ if ! docker ps --filter "name=^${CONTAINER}$" --filter status=running -q | grep 
   done
 fi
 
+echo "==> 数据目录预检"
+FLOW_BYTES_BEFORE="$(docker exec "$CONTAINER" sh -c 'wc -c < /data/flows.json 2>/dev/null' | tr -dc '0-9')"
+if [ -z "$FLOW_BYTES_BEFORE" ] || [ "$FLOW_BYTES_BEFORE" -le 2 ]; then
+  if [ "${CHECKQ_ALLOW_EMPTY_DATA:-0}" = "1" ]; then
+    echo "  ⚠ /data/flows.json 为空，按 CHECKQ_ALLOW_EMPTY_DATA=1 继续"
+  else
+    echo "数据目录异常：/data/flows.json 不存在或为空（可能是宿主机 bind 路径丢失，Docker 新建了空目录）。" >&2
+    echo "请先停止部署，恢复数据后再重试；确认是全新空实例时才设置 CHECKQ_ALLOW_EMPTY_DATA=1。" >&2
+    exit 1
+  fi
+else
+  echo "  /data/flows.json ${FLOW_BYTES_BEFORE} 字节"
+fi
+
 echo "==> 替换前端产物（/app/public）"
 docker exec "$CONTAINER" sh -c 'rm -rf /app/public.new && mkdir -p /app/public.new'
 docker cp "$WORK/web/." "$CONTAINER:/app/public.new/"
@@ -72,6 +86,15 @@ case "$HEALTH" in
      echo "备份镜像 ${TAG}.bak 尚未被覆盖；需要人工确认后手动重建容器再恢复。" >&2
      exit 1 ;;
 esac
+
+echo "==> 数据目录复检"
+FLOW_BYTES_AFTER="$(docker exec "$CONTAINER" sh -c 'wc -c < /data/flows.json 2>/dev/null' | tr -dc '0-9')"
+if [ -z "$FLOW_BYTES_AFTER" ] || [ "$FLOW_BYTES_AFTER" -le 2 ]; then
+  echo "重启后 /data/flows.json 变为空：bind 路径可能在重启时丢失。" >&2
+  echo "请立即用部署前的 tar 备份恢复 /data，确认后再启动；本次不提交镜像 $TAG。" >&2
+  exit 1
+fi
+echo "  /data/flows.json ${FLOW_BYTES_AFTER} 字节"
 
 echo "==> 提交为镜像 $TAG（容器重建后仍是新版本）"
 docker commit "$CONTAINER" "$TAG" >/dev/null
