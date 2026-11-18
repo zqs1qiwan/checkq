@@ -30,5 +30,34 @@ await ok('script 空代码失败', async () => {
   assert.strictEqual(r.ok, false);
   assert.strictEqual(r.finalMessage, '脚本为空');
 });
+await ok('script 在独立进程里拿不到 process/require', async () => {
+  const f = flow([scriptNode('return { process: typeof process, require: typeof require, module: typeof module };')]);
+  const r = await new Engine(f).run({});
+  assert.strictEqual(r.ok, true);
+  const line = r.logs.find((l) => l.type === 'script');
+  assert.ok(line && line.message.includes('脚本返回'), JSON.stringify(r.logs.map((l) => l.message)));
+  // 返回值在 vars 里可见，确认三个宿主对象均为 undefined
+  assert.equal(r.vars.process, 'undefined');
+  assert.equal(r.vars.require, 'undefined');
+  assert.equal(r.vars.module, 'undefined');
+});
+await ok('script 不能通过 Function 构造器逃逸', async () => {
+  const f = flow([scriptNode(`try {
+    return { escaped: String(globalThis.constructor.constructor('return process')().pid) };
+  } catch (err) {
+    return { escaped: 'blocked' };
+  }`)]);
+  const r = await new Engine(f).run({});
+  assert.strictEqual(r.ok, true);
+  assert.equal(r.vars.escaped, 'blocked');
+});
+await ok('script 死循环被超时截断', async () => {
+  const f = flow([scriptNode('while (true) {}')]);
+  const start = Date.now();
+  const r = await new Engine(f).run({});
+  assert.strictEqual(r.ok, false);
+  assert.ok(/超时/.test(r.finalMessage), r.finalMessage);
+  assert.ok(Date.now() - start < 7000);
+});
 console.log(`\n${passed}/${passed + failed} passed`);
 if (failed) process.exit(1);

@@ -49,6 +49,7 @@ function FlowEditorInner({ flowId, onBack }) {
   const [focusStepId, setFocusStepId] = useState(null);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
   const [showPalette, setShowPalette] = useState(() => (typeof window === 'undefined' ? true : window.innerWidth > 900));
   const [showConfig, setShowConfig] = useState(() => (typeof window === 'undefined' ? true : window.innerWidth > 900));
   const [outlineOpen, setOutlineOpen] = useState(false);   // 大纲视图（P0-2）
@@ -64,6 +65,8 @@ function FlowEditorInner({ flowId, onBack }) {
   const [tplName, setTplName] = useState('');
   const [tplErr, setTplErr] = useState('');
   const saveTimer = useRef(null);
+  const savePromiseRef = useRef(null);
+  const editSeqRef = useRef(0);
   const stateRef = useRef({});
   const structureRef = useRef(null);
   const dismissedStructRef = useRef('');   // 已被用户忽略的结构问题签名（同一批不重复弹）
@@ -145,44 +148,71 @@ function FlowEditorInner({ flowId, onBack }) {
     globalToast(text, kind === 'ok' ? 'ok' : 'fail');
   };
 
-  const save = useCallback(async () => {
-    const { nodes: ns, edges: es, flow: f } = stateRef.current;
-    if (!f) return;
-    setSaving(true);
-    try {
-      const updated = await api.updateFlow(f.id, {
-        nodes: ns.map((n) => ({
-          id: n.id, type: n.data.type, name: n.data.name,
-          x: Math.round(n.position.x), y: Math.round(n.position.y),
-          config: n.data.config,
-          genBy: n.data.genBy,
-        })),
-        edges: es.map((e) => ({
-          id: e.id, source: e.source, target: e.target, sourceHandle: e.sourceHandle,
-        })),
-      });
-      // 派生任务改了脚本内容 → 服务端自动转成独立任务，提示一次
-      if (updated && updated.detached) {
-        setFlow((cur) => ({ ...cur, template: null }));
-        showToast(`已转为独立任务，不再跟随模板「${updated.detached}」`, 'ok');
+  const save = useCallback(() => {
+    // 单写队列：同一时间只有一次保存请求；期间的新修改由保存完成后的补存逻辑处理
+    if (savePromiseRef.current) return savePromiseRef.current;
+    const task = (async () => {
+      const { nodes: ns, edges: es, flow: f } = stateRef.current;
+      if (!f) return true;
+      const seq = editSeqRef.current;
+      const baseRev = Number(f.rev) || 0;
+      setSaving(true);
+      setSaveError('');
+      try {
+        const updated = await api.updateFlow(f.id, {
+          baseRev,
+          nodes: ns.map((n) => ({
+            id: n.id, type: n.data.type, name: n.data.name,
+            x: Math.round(n.position.x), y: Math.round(n.position.y),
+            config: n.data.config,
+            genBy: n.data.genBy,
+          })),
+          edges: es.map((e) => ({
+            id: e.id, source: e.source, target: e.target, sourceHandle: e.sourceHandle,
+          })),
+        });
+        // 只更新版本/模板信息，不回滚保存期间用户继续输入的内容
+        setFlow((cur) => (cur ? {
+          ...cur,
+          ...(updated && Number.isFinite(updated.rev) ? { rev: updated.rev } : {}),
+          ...(updated?.detached ? { template: null } : {}),
+        } : cur));
+        if (updated && updated.detached) {
+          showToast(`已转为独立任务，不再跟随模板「${updated.detached}」`, 'ok');
+        }
+        if (editSeqRef.current === seq) {
+          setDirty(false);
+        } else {
+          // 保存期间又改了画布：保持未保存状态，稍后补存，避免把新改动标成已保存
+          if (saveTimer.current) clearTimeout(saveTimer.current);
+          saveTimer.current = setTimeout(() => save(), 500);
+        }
+        // 保存后结构有问题 → 弹一次检查清单（只提示、可忽略，同一批不重复打扰）
+        const s = structureRef.current;
+        const sig = structureSignature(s);
+        const serious = (s?.issues || []).some((i) => i.level === 'error' || i.level === 'warn');
+        if (serious && sig && sig !== dismissedStructRef.current) {
+          dismissedStructRef.current = sig;
+          setStructOpen(true);
+        }
+        return true;
+      } catch (e) {
+        setSaveError(e.message);
+        showToast(`保存失败: ${e.message}`);
+        return false;
+      } finally {
+        setSaving(false);
       }
-      setDirty(false);
-      // 保存后结构有问题 → 弹一次检查清单（只提示、可忽略，同一批不重复打扰）
-      const s = structureRef.current;
-      const sig = structureSignature(s);
-      const serious = (s?.issues || []).some((i) => i.level === 'error' || i.level === 'warn');
-      if (serious && sig && sig !== dismissedStructRef.current) {
-        dismissedStructRef.current = sig;
-        setStructOpen(true);
-      }
-    } catch (e) {
-      showToast(`保存失败: ${e.message}`);
-    } finally {
-      setSaving(false);
-    }
+    })();
+    savePromiseRef.current = task;
+    task.finally(() => {
+      if (savePromiseRef.current === task) savePromiseRef.current = null;
+    });
+    return task;
   }, [showToast]);
 
   const markDirty = useCallback(() => {
+    editSeqRef.current += 1;
     setDirty(true);
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => save(), 1500);
@@ -285,7 +315,7 @@ function FlowEditorInner({ flowId, onBack }) {
     runNow, runDebug, debugTo,
   } = useRunStream({
     flowId,
-    saveIfDirty: () => (stateRef.current.dirty ? save() : null),
+    saveIfDirty: () => (stateRef.current.dirty ? save() : Promise.resolve(true)),
     setRunStatus,
     setRunStatusAll,
     showToast,
@@ -354,7 +384,7 @@ function FlowEditorInner({ flowId, onBack }) {
   };
 
   const saveAsTemplate = async () => {
-    if (dirty) await save();
+    if (dirty && (await save()) === false) return;
     setTplName(flow.name.replace(/\s*·\s*\d+$/, '') + ' 模板');
     setTplErr('');
     setTplOpen(true);
@@ -489,7 +519,7 @@ function FlowEditorInner({ flowId, onBack }) {
           className="flow-title"
           value={flow.name}
           onChange={(e) => { setFlow({ ...flow, name: e.target.value }); markDirty(); }}
-          onBlur={() => api.updateFlow(flow.id, { name: flow.name }).catch((e) => showToast(e.message))}
+          onBlur={() => api.updateFlow(flow.id, { name: flow.name }).then((nf) => setFlow((cur) => ({ ...cur, rev: nf.rev }))).catch((e) => showToast(e.message))}
         />
         {flow.template && (
           <span className="chip chip-mute tpl-chip" title={`流程始终跟随模板「${flow.template.name}」；改这里的流程会把这个任务转成独立任务`}>
@@ -514,7 +544,9 @@ function FlowEditorInner({ flowId, onBack }) {
         <button className={`small${showConfig ? ' active' : ''}`} onClick={() => setShowConfig((v) => !v)} title="显示/收起参数面板">参数</button>
         <button className="small" onClick={layoutNow} title="按连线层级从左到右自动排列">整理</button>
         <span className="spacer" />
-        {saving ? <span style={{ color: 'var(--muted)', fontSize: 12 }}>保存中…</span> : dirty ? <span style={{ color: 'var(--warn)', fontSize: 12 }}>未保存</span> : null}
+        {saving ? <span style={{ color: 'var(--muted)', fontSize: 12 }}>保存中…</span>
+          : saveError ? <span style={{ color: 'var(--fail)', fontSize: 12 }} title={saveError}>保存失败</span>
+            : dirty ? <span style={{ color: 'var(--warn)', fontSize: 12 }}>未保存</span> : null}
         <button className="small" disabled={!runResult} onClick={() => setDrawerOpen(true)} title={runResult ? '展开运行日志' : '先运行一次'}>日志</button>
         <button className="small primary" onClick={runNow} title="从头执行整个流程">运行</button>
         <button className="iconbtn" onClick={() => setGuideOpen(true)} title="使用引导" aria-label="使用引导"><IconHelp size={16} /></button>
@@ -689,7 +721,7 @@ function FlowEditorInner({ flowId, onBack }) {
           onClose={() => setScheduleOpen(false)}
           onSave={async (patch) => {
             const nf = await api.updateFlow(flow.id, patch);
-            setFlow((cur) => ({ ...cur, ...patch }));
+            setFlow((cur) => ({ ...cur, ...patch, ...(Number.isFinite(nf.rev) ? { rev: nf.rev } : {}) }));
             return nf;
           }}
         />

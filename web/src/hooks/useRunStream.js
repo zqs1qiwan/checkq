@@ -20,7 +20,12 @@ export function useRunStream({ flowId, saveIfDirty, setRunStatus, setRunStatusAl
   }, [setRunStatus]);
 
   const run = useCallback(async ({ debug = false, debugStopId = null } = {}) => {
-    if (saveIfDirty) await saveIfDirty();
+    // 保存失败/版本冲突时绝不运行服务器上的旧流程：这是 T15 的核心要求。
+    const saved = saveIfDirty ? await saveIfDirty() : true;
+    if (saved === false) {
+      showToast('保存失败，已阻止运行；请处理后再试', 'fail');
+      return null;
+    }
     setDrawerOpen(true);
     if (debug) setDebugView(true);
     setRunResult({ id: 'pending', status: 'running', logs: [] });
@@ -28,8 +33,8 @@ export function useRunStream({ flowId, saveIfDirty, setRunStatus, setRunStatusAl
       const r = await api.runFlowStream(flowId, {
         debugStopId,
         debug,
-        onStart: () => {
-          setRunResult({ id: 'pending', status: 'running', logs: [] });
+        onStart: (d) => {
+          setRunResult({ id: d?.runId || 'pending', status: 'running', logs: [], startedAt: d?.startedAt });
           setRunStatusAll(null);
         },
         onLog: (log) => {

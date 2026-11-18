@@ -1,0 +1,130 @@
+/**
+ * T05：API Key 的任务范围与「读秘密」权限。
+ * 运行：node server/test/apikey-scope.test.js
+ */
+process.env.ADMIN_PASSWORD = 'test1234';
+import fs from 'node:fs';
+import os from 'node:os';
+
+let pass = 0, fail = 0;
+const ok = (cond, msg) => { if (cond) { pass++; console.log('  PASS', msg); } else { fail++; console.log('  FAIL', msg); } };
+
+const dir = fs.mkdtempSync(os.tmpdir() + '/cq-apikey-');
+const { buildServer } = await import('../src/api.js');
+const { app, scheduler } = buildServer({ dataDir: dir, port: 0 });
+await app.ready();
+
+let r = await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'test1234' } });
+const ck = { qsid: r.headers['set-cookie'].split(';')[0].split('=')[1] };
+
+const mkFlow = async (name, group = '') => {
+  const res = await app.inject({ method: 'POST', url: '/api/flows', cookies: ck, payload: {
+    name, group, cron: '',
+    vars: { cookie: 'SECRET-COOKIE', site: 'demo' },
+    nodes: [{
+      id: 'n0', type: 'http', name: '请求', x: 0, y: 0,
+      config: { method: 'GET', url: 'https://example.com/api', headers: [{ name: 'Authorization', value: 'Bearer SECRET-HEADER', enabled: true }], body: '' },
+    }],
+    edges: [],
+  } });
+  return res.json();
+};
+const f1 = await mkFlow('Key 范围 A', '签到');
+const f2 = await mkFlow('Key 范围 B', '查询');
+
+const mkKey = async (body) => {
+  const res = await app.inject({ method: 'POST', url: '/api/system/apikeys', cookies: ck, payload: body });
+  ok(res.statusCode === 200, `创建 Key：${body.name}`);
+  return { key: res.json().apiKey, id: res.json().key.id };
+};
+const asKey = (key, method, url, payload) => app.inject({
+  method, url, payload, headers: { 'x-api-key': key },
+});
+
+const readOnly = await mkKey({ name: '只读绑定 A', scopes: ['read'], flowIds: [f1.id] });
+
+r = await asKey(readOnly.key, 'GET', '/api/flows');
+ok(r.statusCode === 200, '只读 Key 列表 200');
+ok(r.json().length === 1 && r.json()[0].id === f1.id, '只读 Key 列表只返回绑定任务');
+
+r = await asKey(readOnly.key, 'GET', `/api/flows/${f1.id}`);
+ok(r.statusCode === 200, '只读 Key 读绑定任务 200');
+ok(r.json().vars?.cookie === '', '无 secrets 作用域读不到变量明文');
+ok(r.json().vars?.site === 'demo', '非敏感变量仍可读');
+const authHeader = r.json().nodes?.[0]?.config?.headers?.find((h) => h.name === 'Authorization');
+ok(authHeader?.value !== 'Bearer SECRET-HEADER', '无 secrets 作用域读不到内联 Authorization 明文');
+
+r = await asKey(readOnly.key, 'GET', `/api/flows/${f2.id}`);
+ok(r.statusCode === 403, '只读 Key 读范围外任务被拒绝');
+r = await asKey(readOnly.key, 'GET', `/api/flows/${f2.id}/logs`);
+ok(r.statusCode === 403, '只读 Key 读范围外日志被拒绝');
+r = await asKey(readOnly.key, 'POST', `/api/flows/${f1.id}/run`, {});
+ok(r.statusCode === 403, '只有 read 的 Key 不能运行任务');
+r = await asKey(readOnly.key, 'POST', '/api/flows', { name: '越权新建', nodes: [], edges: [] });
+ok(r.statusCode === 403, '受限 Key 不能新建任务');
+
+const runKey = await mkKey({ name: '运行绑定 A + 秘密', scopes: ['read', 'run', 'secrets'], flowIds: [f1.id] });
+r = await asKey(runKey.key, 'GET', '/api/flows?limit=1');
+ok(r.statusCode === 200 && r.json().length === 1, '运行 Key 列表仍受范围限制');
+r = await asKey(runKey.key, 'GET', `/api/flows/${f1.id}`);
+ok(r.statusCode === 200 && r.json().vars?.cookie === 'SECRET-COOKIE', 'secrets 作用域可读变量明文');
+r = await asKey(runKey.key, 'POST', `/api/flows/${f1.id}/run`, {});
+ok(r.statusCode === 200, 'run 作用域可运行绑定任务');
+const runId = r.json().id;
+
+r = await asKey(runKey.key, 'GET', '/api/runs?limit=10');
+ok(r.statusCode === 200, '运行 Key 可读运行历史');
+ok(r.json().every((x) => x.flowId === f1.id), '运行历史按任务范围过滤');
+
+r = await asKey(runKey.key, 'POST', '/api/flows/batch', { ids: [f1.id, f2.id], action: 'run' });
+ok(r.statusCode === 403, '批量操作含范围外任务被整体拒绝');
+r = await asKey(runKey.key, 'POST', '/api/flows/batch', { ids: [f1.id], action: 'set-group', group: '其它' });
+ok(r.statusCode === 403, '受限 Key 不能改分组逃逸范围');
+r = await asKey(runKey.key, 'POST', `/api/flows/${f1.id}/clone`, {});
+ok(r.statusCode === 403, '受限 Key 不能克隆任务');
+r = await asKey(runKey.key, 'PUT', `/api/flows/${f2.id}`, { name: '越权改' });
+ok(r.statusCode === 403, '受限 Key 不能改范围外任务');
+
+const groupKey = await mkKey({ name: '分组绑定', scopes: ['read'], groups: ['签到'] });
+r = await asKey(groupKey.key, 'GET', '/api/flows');
+ok(r.statusCode === 200 && r.json().length === 1 && r.json()[0].id === f1.id, '分组绑定只返回该分组任务');
+r = await asKey(groupKey.key, 'GET', `/api/flows/${f1.id}`);
+ok(r.statusCode === 200, '分组绑定可读组内任务');
+r = await asKey(groupKey.key, 'GET', `/api/flows/${f2.id}`);
+ok(r.statusCode === 403, '分组绑定读组外任务被拒绝');
+
+const broadKey = await mkKey({ name: '默认全范围', scopes: ['read', 'run'] });
+r = await asKey(broadKey.key, 'GET', '/api/flows');
+ok(r.statusCode === 200 && r.json().length === 2, '未绑定范围的 Key 仍可看全部任务（向后兼容）');
+r = await asKey(broadKey.key, 'GET', `/api/flows/${f1.id}`);
+ok(r.statusCode === 200 && r.json().vars?.cookie === '', '旧式 Key 默认没有 secrets 作用域');
+r = await asKey(broadKey.key, 'POST', `/api/flows/${f1.id}/run`, {});
+ok(r.statusCode === 200, '旧式 Key 默认仍可运行');
+
+r = await asKey(runKey.key, 'GET', '/api/me');
+ok(r.statusCode === 200 && r.json().permissions?.secrets === true && r.json().permissions?.scope === 'limited', '/api/me 暴露范围与 secrets 权限');
+
+r = await asKey(readOnly.key, 'GET', `/api/runs/${runId}`);
+ok(r.statusCode === 200 && r.json().flowId === f1.id, '只读 Key 可读范围内运行详情');
+
+// 管理员更新 Key 的范围：清空绑定后回到全范围
+r = await app.inject({ method: 'PUT', url: `/api/system/apikeys/${readOnly.id}`, cookies: ck, payload: { flowIds: [] } });
+ok(r.statusCode === 200 && r.json().key.flowIds.length === 0, '更新 Key 清空任务范围');
+r = await asKey(readOnly.key, 'GET', `/api/flows/${f2.id}`);
+ok(r.statusCode === 200, '清空绑定后可读其它任务');
+
+// 模板详情同样按 secrets 脱敏
+r = await asKey(readOnly.key, 'GET', '/api/templates');
+ok(r.statusCode === 200, '只读 Key 可看模板列表');
+const tpl = await app.inject({ method: 'POST', url: '/api/templates', cookies: ck, payload: {
+  name: '秘密模板', vars: { token: 'SECRET-TOKEN', site: 'demo' },
+  nodes: [{ id: 'n0', type: 'log', name: '记录', x: 0, y: 0, config: { text: 'ok' } }], edges: [],
+} });
+r = await asKey(readOnly.key, 'GET', `/api/templates/${tpl.json().id}`);
+ok(r.statusCode === 200 && r.json().vars?.token === '', '无 secrets 作用域模板变量被脱敏');
+r = await asKey(runKey.key, 'GET', `/api/templates/${tpl.json().id}`);
+ok(r.statusCode === 200 && r.json().vars?.token === 'SECRET-TOKEN', 'secrets 作用域模板变量可读');
+
+scheduler.stop?.();
+console.log(`\n${pass} passed, ${fail} failed`);
+process.exit(fail ? 1 : 0);

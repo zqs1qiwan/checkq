@@ -69,6 +69,22 @@ export function retryDelayMs(retry, attempt, rand = Math.random) {
   return Math.max(0, Math.round(delay));
 }
 
+/** 可取消的等待：取消时立即 reject，避免重试退避期间无法停止运行。 */
+function abortableSleep(ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) return reject(new Error('运行已取消'));
+    const timer = setTimeout(() => {
+      signal.removeEventListener?.('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new Error('运行已取消'));
+    };
+    signal.addEventListener?.('abort', onAbort, { once: true });
+  });
+}
+
 /** 人类可读的策略描述（列表 / 详情弹窗用） */
 export function describeRetry(input) {
   const cfg = normalizeRetry(input);
@@ -96,12 +112,18 @@ export async function runWithRetry({
   sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
   rand = Math.random,
   now = Date.now,
+  shouldStop = () => false,
+  signal = null,
 }) {
   const cfg = normalizeRetry(retry);
   const maxAttempts = cfg.enabled ? cfg.maxAttempts : 1;
   const attempts = [];
   let last = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    if (shouldStop()) {
+      last = { ...(last || {}), ok: false, cancelled: true, finalMessage: '运行已取消' };
+      break;
+    }
     const startedAt = now();
     let result;
     try {
@@ -120,8 +142,17 @@ export async function runWithRetry({
     last = result;
     onAttempt(rec, result);
     if (rec.ok || attempt >= maxAttempts) break;
+    if (shouldStop()) {
+      last = { ...(last || {}), ok: false, cancelled: true, finalMessage: '运行已取消' };
+      break;
+    }
     rec.nextDelayMs = retryDelayMs(cfg, attempt, rand);
-    await sleep(rec.nextDelayMs);
+    try {
+      await (signal ? abortableSleep(rec.nextDelayMs, signal) : sleep(rec.nextDelayMs));
+    } catch {
+      last = { ...(last || {}), ok: false, cancelled: true, finalMessage: '运行已取消' };
+      break;
+    }
   }
   return { ...(last || { ok: false }), attempts, retry: cfg, maxAttempts };
 }

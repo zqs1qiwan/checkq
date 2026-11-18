@@ -1,0 +1,120 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { Engine } from '../src/engine.js';
+import { Store } from '../src/store.js';
+import { runWithRetry } from '../src/retry.js';
+import { buildServer } from '../src/api.js';
+
+process.env.ADMIN_PASSWORD = 'test1234';
+
+function directory(t) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cq-run-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  return dir;
+}
+
+const delayFlow = (seconds = 5) => ({
+  id: 'f-run-control',
+  name: 'run-control',
+  vars: {},
+  log: { mode: 'all' },
+  retry: { enabled: false },
+  nodes: [{ id: 'n1', type: 'delay', config: { seconds } }],
+  edges: [],
+});
+
+test('engine aborts an in-flight delay immediately', async () => {
+  const engine = new Engine(delayFlow(8));
+  const ac = new AbortController();
+  setTimeout(() => ac.abort(), 80);
+  const started = Date.now();
+  const run = await engine.run({ trigger: 'manual', signal: ac.signal });
+  assert.equal(run.cancelled, true, '取消的运行应标记 cancelled');
+  assert.equal(run.ok, false);
+  assert.match(run.finalMessage, /运行已取消/);
+  assert.ok(Date.now() - started < 2000, '取消应立即结束，不能等完 8 秒 delay');
+  assert.ok(run.logs.some((l) => l.cancelled), '日志应标出取消');
+});
+
+test('retry backoff stops when the run is cancelled', async () => {
+  const ac = new AbortController();
+  const started = Date.now();
+  setTimeout(() => ac.abort(), 60);
+  const res = await runWithRetry({
+    retry: { enabled: true, maxAttempts: 5, baseDelayMs: 5000, maxDelayMs: 5000 },
+    signal: ac.signal,
+    shouldStop: () => ac.signal.aborted,
+    runOnce: async () => ({ ok: false, finalMessage: 'boom' }),
+  });
+  assert.equal(res.cancelled, true, '退避期间取消应立即结束');
+  assert.equal(res.finalMessage, '运行已取消');
+  assert.ok(Date.now() - started < 1000, '不能等完 5 秒退避');
+});
+
+test('API exposes queued run and cancels a running flow', async (t) => {
+  const dir = directory(t);
+  const { app, store, scheduler } = buildServer({ dataDir: dir, port: 0 });
+  t.after(async () => { scheduler.stop(); await app.close(); });
+  const login = await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'test1234' } });
+  const headers = { cookie: login.headers['set-cookie'].split(';')[0] };
+  const flow = store.createFlow({
+    name: 'cancel-me', enabled: false, retry: { enabled: false },
+    nodes: [{ id: 'n1', type: 'delay', config: { seconds: 10 } }], edges: [],
+  });
+
+  const started = Date.now();
+  const pending = app.inject({
+    method: 'POST', url: `/api/flows/${flow.id}/run`, headers,
+    payload: { stream: false },
+  });
+  // 等运行真正进入 running，再取消
+  let runId = null;
+  for (let i = 0; i < 30; i++) {
+    const runs = await app.inject({ method: 'GET', url: `/api/runs?flowId=${flow.id}`, headers });
+    const list = runs.json();
+    const live = list.find((r) => ['queued', 'running'].includes(r.status));
+    if (live) { runId = live.id; break; }
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  assert.ok(runId, '排队/运行中的运行应立即出现在运行历史里');
+
+  const cancel = await app.inject({ method: 'POST', url: `/api/runs/${runId}/cancel`, headers, payload: {} });
+  assert.equal(cancel.statusCode, 200, cancel.body);
+  assert.equal(cancel.json().cancelling, true);
+
+  const done = await pending;
+  assert.equal(done.statusCode, 200, done.body);
+  assert.equal(done.json().status, 'cancelled');
+  assert.equal(done.json().cancelled, true);
+  assert.match(done.json().finalMessage, /运行已取消/);
+  assert.ok(Date.now() - started < 5000, '取消后不能继续等满 10 秒');
+
+  const again = await app.inject({ method: 'POST', url: `/api/runs/${runId}/cancel`, headers, payload: {} });
+  assert.equal(again.statusCode, 409, '已结束的运行不能再取消');
+});
+
+test('cancel rejects unknown and cross-scope runs', async (t) => {
+  const dir = directory(t);
+  const { app, store, scheduler } = buildServer({ dataDir: dir, port: 0 });
+  t.after(async () => { scheduler.stop(); await app.close(); });
+  const login = await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'test1234' } });
+  const headers = { cookie: login.headers['set-cookie'].split(';')[0] };
+  const flow = store.createFlow({ name: 'scoped', nodes: [], edges: [] });
+  const otherFlow = store.createFlow({ name: 'other', nodes: [], edges: [] });
+  store.addRun({ id: 'live-run', flowId: flow.id, flowName: flow.name, status: 'running', startedAt: Date.now(), logs: [], attempts: [] });
+  const keyRes = await app.inject({
+    method: 'POST', url: '/api/system/apikeys', headers,
+    payload: { name: 'other', scopes: ['read', 'run'], flowIds: [otherFlow.id] },
+  });
+  assert.equal(keyRes.statusCode, 200, keyRes.body);
+  const keyHeaders = { 'x-api-key': keyRes.json().apiKey };
+
+  const missing = await app.inject({ method: 'POST', url: '/api/runs/nope/cancel', headers, payload: {} });
+  assert.equal(missing.statusCode, 404);
+
+  const scoped = await app.inject({ method: 'POST', url: '/api/runs/live-run/cancel', headers: keyHeaders, payload: {} });
+  assert.equal(scoped.statusCode, 403, scoped.body);
+});

@@ -591,6 +591,8 @@ span.json-toggle { cursor: default; }
 .run-status.success { color: var(--ok); }
 .run-status.failed { color: var(--fail); }
 .run-status.running { color: var(--accent); }
+.run-status.queued { color: var(--muted); }
+.run-status.cancelled { color: var(--warn); }
 .run-drawer {
   flex: 0 0 auto;
   height: min(46vh, 430px);
@@ -1039,7 +1041,11 @@ button.icon-text svg { flex: none; }
 .chip-read { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
 .chip-run { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 35%, transparent); }
 .chip-write { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 35%, transparent); }
+.chip-secrets { color: var(--fail); border-color: color-mix(in srgb, var(--fail) 35%, transparent); }
+.chip-none { color: var(--muted); border-style: dashed; }
 .chip-mute { color: var(--muted); }
+.scope-tasks { width: 100%; min-height: 108px; padding: 6px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--panel); color: var(--text); font-size: var(--fs-sm); }
+.scope-tasks option { padding: 4px 6px; }
 .chip-picker { display: flex; gap: 8px; flex-wrap: wrap; }
 .chip-toggle {
   display: inline-flex; align-items: center; gap: 6px;

@@ -14,7 +14,8 @@
 | 机器可读描述 | `GET /api/openapi.json`（OpenAPI 3.1，Agent 可自动生成客户端） |
 | 认证 | ① `x-api-key: <key>`（推荐）② 会话 Cookie `qsid` |
 | Key 生成 | 设置 → API Key（可命名、选作用域、设回收日期；明文只显示一次） |
-| 作用域 | `read` 查看 / `run` 运行任务 / `write` 改配置；权限不足返回 403 |
+| 作用域 | `read` 查看 / `run` 运行任务 / `write` 改配置 / `secrets` 读明文凭据；权限不足返回 403。旧 Key 未声明作用域时默认 `read/run/write`，**不含 `secrets`** |
+| 任务范围 | `flowIds` 指定任务、`groups` 指定分组（两者都填取并集；都为空 = 全部任务）。受限 Key 不能创建/克隆任务或模板，也不能改分组逃逸范围 |
 | 回收日期 | 到期自动失效并从列表移除（过期请求返回 401「已过期并被回收」） |
 | 限流 | 登录 5 次/10 分钟（IP）+ 8 次/15 分钟（账号）；API 调用无固定限流 |
 | IP 名单 | 每把 Key 可设 **IP 允许名单**（CIDR）；另有**全局 IP 黑名单**（登录与 API Key 同时生效）；名单外返回 403 |
@@ -62,7 +63,7 @@ X-API-Key: <key>
 - **Retry（任务级失败重试）**：`{ enabled, maxAttempts, backoff: "exponential"|"linear"|"fixed", baseDelayMs, maxDelayMs, jitter }`。一次运行最多尝试 `maxAttempts` 次，**只有最后一次仍失败才判定任务失败**；默认 `{ enabled:true, maxAttempts:3, backoff:"exponential", baseDelayMs:5000, maxDelayMs:300000, jitter:true }`。调试运行（`debugStopId`）不重试。
 - **Recovery（自动恢复探测）**：`{ enabled, intervalMinutes, maxAttempts, attempts, nextProbeAt, lastProbeAt, lastResult, exhausted }`。默认 `enabled:false`；`intervalMinutes` 收敛到 30–1440，`maxAttempts` 收敛到 1–5。`PUT /api/flows/:id` 只传配置字段即可，运行态由服务端维护。仅对 `enabled:false + pausedAt` 的任务生效；探测静默运行，成功自动启用，失败到上限停止并写站内通知；一次探测只执行一次（不沿用任务级重试）。
 - **Log config**：`{ level: "all"|"failure"|"summary", record: "all"|"log"|"log-final", include: {reqHeaders,reqBody,resBody,varsSnapshot}, resBodyLimit, keywords: [{name,regex,from,into,stepId,negate}] }`
-- **Run**：`{ id, flowId, trigger, startedAt, finishedAt, status, durationMs, summary, vars, logs, finalMessage, attempts, attempt, maxAttempts, paused, notify, recovered, recovery }`。`trigger` 为 `manual|cron|debug|probe`；`attempts[]` 每项 `{ attempt, startedAt, durationMs, ok, message, nextDelayMs? }`；`paused:true` 表示这次失败同时触发了自动停用；`notify` = `{ total, ok, failed: [{ type, error }] }`（通知渠道发送结果，未配置通知时不出现）；`trigger='probe'` 时 `recovered:true` 表示探测成功并重新启用，`recovery` = `{ attempt, maxAttempts, outcome, exhausted }`，且不产生 `notify`。
+- **Run**：`{ id, flowId, trigger, queuedAt, startedAt, finishedAt, status, durationMs, summary, vars, logs, finalMessage, attempts, attempt, maxAttempts, paused, notify, recovered, recovery, cancelled, timedOut }`。`status` 为 `queued|running|success|failed|cancelled`（失败里的超时由 `timedOut:true` 区分，人工取消为 `cancelled:true`）；`trigger` 为 `manual|cron|debug|probe`；`attempts[]` 每项 `{ attempt, startedAt, durationMs, ok, message, nextDelayMs? }`；`paused:true` 表示这次失败同时触发了自动停用；`notify` = `{ total, ok, failed: [{ type, error }] }`（通知渠道发送结果，未配置通知时不出现）；取消的运行不触发自动停用与任务通知；`trigger='probe'` 时 `recovered:true` 表示探测成功并重新启用，`recovery` = `{ attempt, maxAttempts, outcome, exhausted }`，且不产生 `notify`。
 - **StepLog**：`{ stepId, index, name, type, ok, message, ms, missing, asserts, keywords, detail }`；`detail` 对 http 步骤是 `{ method, url, headers, body, attempt, proxy, jar, response: { status, headers, setCookie, body, ms } }`；失败步骤额外带 `errorType: "network"|"assert"|"engine"`。
 - **Diagnosis（可解释失败）**：失败运行在 `run.diagnosis`，形如 `{ rule, cause, confidence: "high"|"medium"|"low", evidence: [{ label, value }], actions: [{ type, label, stepId?, vars? }] }`。`actions[].type` 只在 `show-response / edit-vars / edit-assert / copy-issue` 白名单里；文案不含"可能/也许/大概"这类猜测词（`server/test/diagnose.test.js` 会拦）。
 - **Structure（结构可见）**：`GET /api/flows/:id` 额外返回 `structure`，形如 `{ ok, entries, entryId, issues: [{ id, kind, level, message, nodeId?, handle? }], exits: [{ nodeId, type, handle, label, connected, target }], loops: [{ foreachId, nodeIds, closed }], orphans, counts }`。`kind` 见 `no-entry / multi-entry / orphan / dangling / unknown-type / loop-cycle / loop-large`；`level` 为 `error|warn|info`。**只是描述，不改引擎语义**。
@@ -76,6 +77,7 @@ X-API-Key: <key>
 | `ADMIN_PASSWORD` | 首次随机 | 仅首次建库时用；之后在设置页改 |
 | `CHECKQ_SECRET` | 自动生成 | 凭据加密密钥；已有数据不要更换 |
 | `CHECKQ_MAX_CONCURRENCY` | `4` | 同时执行的任务数上限（1–16） |
+| `CHECKQ_RUN_TIMEOUT_MS` | `1800000` | 单次运行的整体超时（60 秒–24 小时）；请求体可用 `timeoutMs` 为单次运行覆盖 |
 | `CHECKQ_DEMO` | 开启 | `0` 关闭演练场 |
 
 ## 4. 端点清单
@@ -114,7 +116,7 @@ X-API-Key: <key>
 | GET | /api/flows/:id | 详情（含 nodes/edges/vars/log/notify/template/structure；派生任务返回的是模板当前流程） |
 | PUT | /api/flows/:id | 更新（部分字段合并）。派生任务改了脚本内容 → 自动转为独立任务，返回体 `detached` = 模板名 |
 | DELETE | /api/flows/:id | 删除 |
-| POST | /api/flows/:id/run | `{ stream?: bool, debugStopId?, debug?, dedupe? }` 运行；stream=true → SSE（start/log/done）。`dedupe:true` 时若该任务已有一次运行在跑，直接返回 `{ ok:true, deduped:true, queued:true, message:"已在运行，本次未重复提交" }`（HTTP 200，不走 SSE）。失败按 `flow.retry` 自动退避重试，跑满次数才最终失败；调度触发时若上一次运行/重试尚未结束则跳过这一拍。调度触发（`cron`/`schedule`）跑满仍失败 → 自动停用该任务调度（`enabled:false` + `pausedAt/pausedReason`），该次 `run.paused=true` 且结论带「（已自动停用调度）」 |
+| POST | /api/flows/:id/run | `{ stream?: bool, debugStopId?, debug?, dedupe?, timeoutMs? }` 运行；stream=true → SSE（start/log/done，`start` 带 `runId`）。`dedupe:true` 时若该任务已有一次运行在跑，直接返回 `{ ok:true, deduped:true, queued:true, message:"已在运行，本次未重复提交" }`（HTTP 200，不走 SSE）。运行一开始就写入 `queued` 记录，排队与执行中都能在运行历史里看到。失败按 `flow.retry` 自动退避重试，跑满次数才最终失败；调度触发时若上一次运行/重试尚未结束则跳过这一拍。调度触发（`cron`/`schedule`）跑满仍失败 → 自动停用该任务调度（`enabled:false` + `pausedAt/pausedReason`），该次 `run.paused=true` 且结论带「（已自动停用调度）」。整体超时默认 30 分钟，可用 `timeoutMs` 或 `CHECKQ_RUN_TIMEOUT_MS` 调整。 |
 | POST | /api/flows/:id/clone | 克隆为「·副本 N」，enabled:false |
 | POST | /api/flows/:id/curl | 生成等价 curl 命令（变量代入） |
 | POST | /api/flows/batch | `{ action: run\|enable\|disable\|delete\|set-group, ids: [], group? }`（set-group 需带 group，空串=移出分组） |
@@ -125,6 +127,7 @@ X-API-Key: <key>
 |---|---|---|
 | GET | /api/runs?flowId=&limit= | 列表（默认 limit 30，上限 200） |
 | GET | /api/runs/:id | 单条详情（完整 logs） |
+| POST | /api/runs/:id/cancel | 取消排队中或运行中的此次运行；非 `queued/running` 返回 409。取消会立即中断 HTTP/curl、delay、节点重试和任务级退避；运行状态写 `cancelled`，不触发自动停用与任务通知 |
 | GET | /api/runs/:id/har | 导出单次运行的 HAR（默认脱敏；响应体沿用日志截断） |
 
 ### 模板
@@ -187,7 +190,7 @@ X-API-Key: <key>
 `POST /api/flows/:id/run` with `{ "stream": true }`：
 ```
 event: start
-data: {"flowId":"...","name":"..."}
+data: {"flowId":"...","flowName":"...","runId":"...","queued":false,"startedAt":1730000000000}
 
 event: log
 data: { "index":1, "name":"...", "type":"http", "ok":true, "message":"...", "ms":120, ... }
@@ -195,6 +198,7 @@ data: { "index":1, "name":"...", "type":"http", "ok":true, "message":"...", "ms"
 event: done
 data: { "id":"run-xxx", "status":"success", "durationMs":..., "summary":"...", "logs":[...], "vars":{...} }
 ```
+`status` 可能是 `success | failed | cancelled`；超时是 `failed` + `timedOut:true`，人工取消是 `cancelled` + `cancelled:true`。
 
 
 ### 账号 / Agent 接入
@@ -237,7 +241,7 @@ data: { "id":"run-xxx", "status":"success", "durationMs":..., "summary":"...", "
 
 | type | config 关键字段 |
 |---|---|
-| http | method, url, headers[{name,value,enabled}], body, timeout(秒), backend(fetch\|curl), charset, proxy{url}, retry{times,backoffMs,retryOn}, asserts[] |
+| http | method, url, headers[{name,value,enabled}], body, timeout(秒), backend(fetch\|curl), charset, proxy{url}, retry{times,backoffMs,retryOn}, asserts[], maxRespBytes（默认 2MB，最小 64KB，上限 8MB；超限立即中断） |
 | condition | expr (jexl) |
 | set | name, value |
 | extract | mode(json\|header\|setCookie), path, name, optional |
@@ -245,7 +249,7 @@ data: { "id":"run-xxx", "status":"success", "durationMs":..., "summary":"...", "
 | random-delay | min, max |
 | log | text (支持 `{{var}}` / `{{last.status}}`) |
 | notify | text, webhookUrl?, tgToken? + tgChat?, barkUrl? |
-| script | code (JS 沙箱，vars/last/steps 可读，1s 超时) |
+| script | code（JS 隔离沙箱，vars/last/steps 可读；独立子进程：64MB 内存、1s 执行、64KB 脚本、256KB 结果） |
 | foreach | source, itemVar, indexVar |
 
 断言 asserts：`{ res: [regex], from: "content"|"status", negate }` 或 `{ expr, expect }`。

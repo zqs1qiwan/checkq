@@ -293,6 +293,7 @@ export class Store {
     const lastByFlow = new Map();
     for (const r of this.runs) {
       if (!lastByFlow.has(r.flowId)) lastByFlow.set(r.flowId, r);
+      if (!['success', 'failed', 'cancelled'].includes(r.status)) continue; // 排队/运行中不进入今日统计
       if (!sameDay(r.startedAt)) continue;
       const rec = todayByFlow.get(r.flowId) || { runs: 0, success: 0, failed: 0 };
       rec.runs++;
@@ -388,6 +389,7 @@ export class Store {
       tplId: data.tplId || null,
       createdAt: Date.now(),
       updatedAt: Date.now(),
+      rev: 0,
     };
     this.flows.push(flow);
     this.flush();
@@ -443,6 +445,7 @@ export class Store {
       f.recovery.nextProbeAt = nextProbeTime(f.recovery);
     }
     f.updatedAt = Date.now();
+    f.rev = (Number(f.rev) || 0) + 1;
     this.flush();
     const out = this.resolveFlow(f);
     if (detached) out.detached = detached;   // 只在返回值里提示一次，不落盘
@@ -725,6 +728,8 @@ export class Store {
       id: k.id, name: k.name, prefix: k.prefix, createdAt: k.createdAt,
       lastUsedAt: k.lastUsedAt || null, userId: k.userId || null, disabled: !!k.disabled,
       scopes: Array.isArray(k.scopes) ? k.scopes : ['read', 'run', 'write'],
+      flowIds: Array.isArray(k.flowIds) ? k.flowIds : [],
+      groups: Array.isArray(k.groups) ? k.groups : [],
       expiresAt: k.expiresAt || null,
       expired: !!(k.expiresAt && k.expiresAt < Date.now()),
       daysLeft: k.expiresAt ? Math.ceil((k.expiresAt - Date.now()) / 86400e3) : null,
@@ -735,11 +740,13 @@ export class Store {
     }));
   }
 
-  addApiKey({ name, hash, prefix, userId, scopes, expiresAt, allowedIps }) {
+  addApiKey({ name, hash, prefix, userId, scopes, expiresAt, allowedIps, flowIds, groups }) {
     const k = {
       id: crypto.randomUUID(), name: name || 'API Key', hash, prefix, userId: userId || null,
       createdAt: Date.now(), lastUsedAt: null, disabled: false,
       scopes: Array.isArray(scopes) ? scopes : ['read', 'run', 'write'],
+      flowIds: Array.isArray(flowIds) ? flowIds.map(String).filter(Boolean) : [],
+      groups: Array.isArray(groups) ? groups.map((g) => normalizeGroup(g)).filter(Boolean) : [],
       expiresAt: expiresAt || null,
       allowedIps: Array.isArray(allowedIps) ? allowedIps.filter(Boolean) : [],
     };
@@ -776,7 +783,13 @@ export class Store {
     if (!k) return null;
     if (patch.name !== undefined) k.name = String(patch.name).slice(0, 40);
     if (patch.scopes !== undefined && Array.isArray(patch.scopes)) {
-      k.scopes = patch.scopes.filter((s) => ['read', 'run', 'write'].includes(s));
+      k.scopes = patch.scopes.filter((s) => ['read', 'run', 'write', 'secrets'].includes(s));
+    }
+    if (patch.flowIds !== undefined && Array.isArray(patch.flowIds)) {
+      k.flowIds = patch.flowIds.map(String).filter(Boolean);
+    }
+    if (patch.groups !== undefined && Array.isArray(patch.groups)) {
+      k.groups = patch.groups.map((g) => normalizeGroup(g)).filter(Boolean);
     }
     if (patch.allowedIps !== undefined && Array.isArray(patch.allowedIps)) {
       k.allowedIps = patch.allowedIps.map((x) => String(x || '').trim()).filter(Boolean);
@@ -819,7 +832,8 @@ export class Store {
 
   /** 指定时间窗内的运行统计（每日汇总用；窗口按服务器本地自然日） */
   statsForRange(startMs, endMs) {
-    const inWindow = this.runs.filter((r) => (r.startedAt || 0) >= startMs && (r.startedAt || 0) <= endMs);
+    const inWindow = this.runs.filter((r) => ['success', 'failed', 'cancelled'].includes(r.status)
+      && (r.startedAt || 0) >= startMs && (r.startedAt || 0) <= endMs);
     const success = inWindow.filter((r) => r.status === 'success').length;
     const failed = inWindow.filter((r) => r.status === 'failed').length;
     const names = new Map(this.flows.map((f) => [f.id, f.name]));

@@ -9,24 +9,43 @@ const SCOPES = [
   ['read', '只读'],
   ['run', '可运行'],
   ['write', '可修改'],
+  ['secrets', '读凭据'],
 ];
 
 function scopeBadges(scopes) {
   const s = scopes || [];
-  if (s.includes('write')) return [{ id: 'write', label: '完全权限' }];
-  if (s.includes('run') && s.includes('read')) return [{ id: 'run', label: '查看 + 运行' }];
-  if (s.includes('run')) return [{ id: 'run', label: '仅运行' }];
-  return [{ id: 'read', label: '只读' }];
+  const out = [];
+  if (s.includes('write')) out.push({ id: 'write', label: '完全权限' });
+  else if (s.includes('run') && s.includes('read')) out.push({ id: 'run', label: '查看 + 运行' });
+  else if (s.includes('run')) out.push({ id: 'run', label: '仅运行' });
+  else if (s.includes('read')) out.push({ id: 'read', label: '只读' });
+  else out.push({ id: 'none', label: '无权限' });
+  if (s.includes('secrets')) out.push({ id: 'secrets', label: '可读凭据' });
+  return out;
 }
+
+const rangeLabel = (k) => {
+  const flows = Array.isArray(k.flowIds) ? k.flowIds.length : 0;
+  const groups = Array.isArray(k.groups) ? k.groups.length : 0;
+  if (!flows && !groups) return '全部任务';
+  const parts = [];
+  if (flows) parts.push(`${flows} 个任务`);
+  if (groups) parts.push(`${groups} 个分组`);
+  return parts.join(' + ');
+};
 
 const fmt = (ts) => (ts ? new Date(ts).toLocaleString('zh-CN') : '—');
 
 /** API 密钥管理（GitHub token 风格）：一行一个密钥，右侧 ⋯ 菜单 */
 export default function ApiKeysPanel({ onToast }) {
   const [keys, setKeys] = useState([]);
+  const [flows, setFlows] = useState([]);
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState('');
   const [scopes, setScopes] = useState(['read', 'run']);
+  const [allFlows, setAllFlows] = useState(true);
+  const [flowIds, setFlowIds] = useState([]);
+  const [groups, setGroups] = useState([]);
   const [expiresAt, setExpiresAt] = useState('');
   const [allowedIps, setAllowedIps] = useState('');
   const [created, setCreated] = useState(null);
@@ -34,9 +53,12 @@ export default function ApiKeysPanel({ onToast }) {
   const [editing, setEditing] = useState(null);
 
   const load = () => api.apiKeys().then((r) => setKeys(r.keys || [])).catch(() => setKeys([]));
-  useEffect(() => { load(); }, []);
+  const loadFlows = () => api.flows().then((r) => setFlows(r || [])).catch(() => setFlows([]));
+  useEffect(() => { load(); loadFlows(); }, []);
+  const groupOptions = [...new Set(flows.map((f) => f.group).filter(Boolean))];
 
   const create = async () => {
+    if (!allFlows && !flowIds.length && !groups.length) return onToast('请选择任务或分组，或恢复为全部任务');
     setBusy(true);
     try {
       const r = await api.createApiKey(
@@ -44,10 +66,13 @@ export default function ApiKeysPanel({ onToast }) {
         scopes,
         expiresAt || null,
         allowedIps.split(/[\n,;\s]+/).filter(Boolean),
+        allFlows ? [] : flowIds,
+        allFlows ? [] : groups,
       );
       setCreated(r);
       setCreating(false);
       setName(''); setAllowedIps(''); setExpiresAt('');
+      setAllFlows(true); setFlowIds([]); setGroups([]);
       load();
     } catch (e) { onToast(e.message); } finally { setBusy(false); }
   };
@@ -59,7 +84,11 @@ export default function ApiKeysPanel({ onToast }) {
     catch (e) { onToast(e.message); }
   };
 
-  const toggleScope = (s) => setScopes((cur) => (cur.includes(s) ? cur.filter((x) => x !== s) : [...cur, s]));
+  const toggleScope = (s) => setScopes((cur) => {
+    if (s === 'read' && cur.includes('read')) return cur.filter((x) => x !== 'read' && x !== 'secrets');
+    if (s === 'secrets' && !cur.includes('secrets')) return [...new Set([...cur, 'secrets', 'read'])];
+    return cur.includes(s) ? cur.filter((x) => x !== s) : [...cur, s];
+  });
 
   return (
     <div className="keys-panel">
@@ -101,6 +130,7 @@ export default function ApiKeysPanel({ onToast }) {
                 <div className="key-title">
                   <b>{k.name}</b>
                   {scopeBadges(k.scopes).map((s) => <span key={s.id} className={`chip chip-${s.id}`}>{s.label}</span>)}
+                  <span className="chip chip-mute">{rangeLabel(k)}</span>
                   {k.allowedIps?.length ? <span className="chip chip-mute">IP 限 {k.allowedIps.length}</span> : null}
                   {k.expiresSoon ? <span className="chip chip-write">即将到期</span> : null}
                 </div>
@@ -115,7 +145,7 @@ export default function ApiKeysPanel({ onToast }) {
               </div>
               <div className="key-ops">
                 <Dropdown trigger={<IconMore />} triggerClass="dd-row" align="right" width={150} ariaLabel={`${k.name} 更多操作`}>
-                  <button onClick={() => { setEditing({ key: k, ips: (k.allowedIps || []).join('\n') }); }}>允许 IP</button>
+                  <button onClick={() => { setEditing({ key: k, ips: (k.allowedIps || []).join('\n'), scopes: [...(k.scopes || [])], allFlows: !(k.flowIds || []).length && !(k.groups || []).length, flowIds: [...(k.flowIds || [])], groups: [...(k.groups || [])] }); }}>设置</button>
                   <button onClick={() => onToast('请删除后重新生成')}>重新生成</button>
                   <button className="danger-text" onClick={() => revoke(k)}>立即回收</button>
                 </Dropdown>
@@ -142,15 +172,47 @@ export default function ApiKeysPanel({ onToast }) {
             <input value={name} onChange={(e) => setName(e.target.value)} placeholder="如：签到 Agent" autoFocus />
           </div>
           <div className="field">
-            <label title="只读=只能查看；可运行=能触发任务；可修改=能改变量与调度">权限范围</label>
+            <label title="只读=查看任务与日志；可运行=触发任务；可修改=改变量与调度；读凭据=可读 cookie/token 明文">权限范围</label>
             <div className="chip-picker">
               {SCOPES.map(([id, label]) => (
-                <label key={id} className={`chip-toggle${scopes.includes(id) ? ' on' : ''}`}>
+                <label key={id} className={`chip-toggle${scopes.includes(id) ? ' on' : ''}`} title={id === 'secrets' ? '勾选后自动包含只读；能让调用方看到任务里的明文凭据' : undefined}>
                   <input type="checkbox" style={{ width: 'auto' }} checked={scopes.includes(id)} onChange={() => toggleScope(id)} />
                   {label}
                 </label>
               ))}
             </div>
+          </div>
+          <div className="field">
+            <label title="默认全部任务；关闭后可只授权部分任务或分组，避免 Agent 越权操作">任务范围</label>
+            <div className="chip-picker" style={{ marginBottom: 8 }}>
+              <label className={`chip-toggle${allFlows ? ' on' : ''}`}>
+                <input type="checkbox" style={{ width: 'auto' }} checked={allFlows} onChange={() => { setAllFlows(!allFlows); setFlowIds([]); setGroups([]); }} />
+                全部任务
+              </label>
+            </div>
+            {!allFlows && (
+              <>
+                <select
+                  multiple
+                  className="scope-tasks"
+                  value={flowIds}
+                  onChange={(e) => setFlowIds([...e.target.selectedOptions].map((o) => o.value))}
+                  aria-label="选择任务"
+                >
+                  {flows.map((f) => <option key={f.id} value={f.id}>{f.name}{f.group ? ` · ${f.group}` : ''}</option>)}
+                </select>
+                {groupOptions.length > 0 && (
+                  <div className="chip-picker" style={{ marginTop: 8 }}>
+                    {groupOptions.map((g) => (
+                      <label key={g} className={`chip-toggle${groups.includes(g) ? ' on' : ''}`}>
+                        <input type="checkbox" style={{ width: 'auto' }} checked={groups.includes(g)} onChange={() => setGroups((cur) => (cur.includes(g) ? cur.filter((x) => x !== g) : [...cur, g]))} />
+                        {g}
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
           </div>
           <div className="field">
             <label title="到期后该密钥自动失效并从列表移除">回收日期</label>
@@ -165,16 +227,22 @@ export default function ApiKeysPanel({ onToast }) {
 
       {editing && (
         <Modal
-          title={`允许 IP（${editing.key.name}）`}
+          title={`设置（${editing.key.name}）`}
           onClose={() => setEditing(null)}
-          width={480}
+          width={520}
           footer={
             <>
               <button onClick={() => setEditing(null)}>取消</button>
               <button className="primary" onClick={async () => {
+                if (!editing.allFlows && !editing.flowIds.length && !editing.groups.length) return onToast('请选择任务或分组，或恢复为全部任务');
                 const ips = editing.ips.split(/[\n,;\s]+/).filter(Boolean);
                 try {
-                  await api.updateApiKey(editing.key.id, { allowedIps: ips });
+                  await api.updateApiKey(editing.key.id, {
+                    scopes: editing.scopes,
+                    allowedIps: ips,
+                    flowIds: editing.allFlows ? [] : editing.flowIds,
+                    groups: editing.allFlows ? [] : editing.groups,
+                  });
                   setEditing(null);
                   load();
                   onToast('已更新');
@@ -184,8 +252,57 @@ export default function ApiKeysPanel({ onToast }) {
           }
         >
           <div className="field">
+            <label title="只读=查看任务与日志；可运行=触发任务；可修改=改变量与调度；读凭据=可读 cookie/token 明文">权限范围</label>
+            <div className="chip-picker">
+              {SCOPES.map(([id, label]) => (
+                <label key={id} className={`chip-toggle${editing.scopes.includes(id) ? ' on' : ''}`} title={id === 'secrets' ? '勾选后自动包含只读；能让调用方看到任务里的明文凭据' : undefined}>
+                  <input type="checkbox" style={{ width: 'auto' }} checked={editing.scopes.includes(id)} onChange={() => setEditing((cur) => {
+                    let next = [...cur.scopes];
+                    if (id === 'read' && next.includes('read')) next = next.filter((x) => x !== 'read' && x !== 'secrets');
+                    else if (id === 'secrets' && !next.includes('secrets')) next = [...new Set([...next, 'secrets', 'read'])];
+                    else next = next.includes(id) ? next.filter((x) => x !== id) : [...next, id];
+                    return { ...cur, scopes: next };
+                  })} />
+                  {label}
+                </label>
+              ))}
+            </div>
+          </div>
+          <div className="field">
+            <label title="默认全部任务；关闭后可只授权部分任务或分组">任务范围</label>
+            <div className="chip-picker" style={{ marginBottom: 8 }}>
+              <label className={`chip-toggle${editing.allFlows ? ' on' : ''}`}>
+                <input type="checkbox" style={{ width: 'auto' }} checked={editing.allFlows} onChange={() => setEditing((cur) => ({ ...cur, allFlows: !cur.allFlows, flowIds: [], groups: [] }))} />
+                全部任务
+              </label>
+            </div>
+            {!editing.allFlows && (
+              <>
+                <select
+                  multiple
+                  className="scope-tasks"
+                  value={editing.flowIds}
+                  onChange={(e) => setEditing((cur) => ({ ...cur, flowIds: [...e.target.selectedOptions].map((o) => o.value) }))}
+                  aria-label="选择任务"
+                >
+                  {flows.map((f) => <option key={f.id} value={f.id}>{f.name}{f.group ? ` · ${f.group}` : ''}</option>)}
+                </select>
+                {groupOptions.length > 0 && (
+                  <div className="chip-picker" style={{ marginTop: 8 }}>
+                    {groupOptions.map((g) => (
+                      <label key={g} className={`chip-toggle${editing.groups.includes(g) ? ' on' : ''}`}>
+                        <input type="checkbox" style={{ width: 'auto' }} checked={editing.groups.includes(g)} onChange={() => setEditing((cur) => ({ ...cur, groups: cur.groups.includes(g) ? cur.groups.filter((x) => x !== g) : [...cur.groups, g] }))} />
+                        {g}
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+          <div className="field">
             <label title="每行一个 IP 或 CIDR；留空=不限制">允许的 IP / CIDR</label>
-            <textarea className="mono" rows={5} value={editing.ips} onChange={(e) => setEditing({ ...editing, ips: e.target.value })} placeholder={'192.168.1.0/24'} />
+            <textarea className="mono" rows={4} value={editing.ips} onChange={(e) => setEditing({ ...editing, ips: e.target.value })} placeholder={'192.168.1.0/24'} />
           </div>
         </Modal>
       )}

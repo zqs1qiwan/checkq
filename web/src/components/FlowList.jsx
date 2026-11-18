@@ -277,12 +277,18 @@ export default function FlowList({ onOpen, onLogout }) {
 
   const lastStatus = (f) => {
     if (!f.lastRun) return <span className="badge muted">未运行</span>;
-    const ok = f.lastRun.status === 'success';
+    const st = f.lastRun.status;
+    if (st === 'queued' || st === 'running') {
+      return <span className="badge warn">{st === 'queued' ? '排队中' : '运行中'}</span>;
+    }
+    const ok = st === 'success';
+    const cancelled = st === 'cancelled';
+    const label = ok ? '成功' : cancelled ? '已取消' : (f.lastRun.timedOut ? '超时' : '失败');
     return (
-      <button className={`badge ${ok ? 'ok' : 'fail'} badge-btn`}
+      <button className={`badge ${ok ? 'ok' : cancelled ? 'warn' : 'fail'} badge-btn`}
         title="点击查看运行日志"
         onClick={() => setModal({ type: 'logstream', flowId: f.id, flowName: f.name, refresh: Date.now() })}>
-        {ok ? '成功' : '失败'} <span className="badge-time">{fmtTime(f.lastRun.startedAt)}</span>
+        {label} <span className="badge-time">{fmtTime(f.lastRun.startedAt)}</span>
       </button>
     );
   };

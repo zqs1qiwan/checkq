@@ -25,6 +25,7 @@ export default function RunDrawer({ run, flowId, onClose, onPickResponse, onRepP
   const dragRef = useRef(null);
   const bodyRef = useRef(null);
   const [harBusy, setHarBusy] = useState(false);
+  const [cancelBusy, setCancelBusy] = useState(false);
   const [errFilter, setErrFilter] = useState('all'); // all | network | assert | engine
 
   // 拖拽调整日志坞高度（25% ~ 92%）
@@ -110,10 +111,25 @@ export default function RunDrawer({ run, flowId, onClose, onPickResponse, onRepP
     } finally { setHarBusy(false); }
   };
 
+  const cancelRun = async () => {
+    if (!shown.id || shown.id === 'pending' || cancelBusy) return;
+    setCancelBusy(true);
+    try {
+      await api.cancelRun(shown.id);
+      toast('已发送停止请求，正在中断当前步骤', 'ok');
+    } catch (e) {
+      toast(e.message, 'fail');
+    } finally { setCancelBusy(false); }
+  };
+
   if (!run && !override) return null;
   const shown = override || run;
+  const liveRun = !override && shown.status !== 'success' && shown.status !== 'failed' && shown.status !== 'cancelled';
 
-  const statusLabel = shown.status === 'success' ? '执行成功' : shown.status === 'failed' ? '执行失败' : '执行中';
+  const statusLabel = shown.status === 'success' ? '执行成功'
+    : shown.status === 'failed' ? (shown.timedOut ? '运行超时' : '执行失败')
+    : shown.status === 'cancelled' ? '已取消'
+    : shown.status === 'queued' ? '排队中' : '执行中';
   const failLog = shown.logs?.find((l) => !l.ok);
   // 日常只看「人话」：log 节点输出 + 失败步骤 + 重试分隔；调试模式才展开全部步骤
   // 流程里没有 log 节点时退回全部步骤，避免「成功但日志空白」
@@ -192,6 +208,11 @@ export default function RunDrawer({ run, flowId, onClose, onPickResponse, onRepP
             </>
           )}
         </div>
+        {liveRun && (
+          <button className="small danger" disabled={cancelBusy || !shown.id || shown.id === 'pending'} onClick={cancelRun} title="停止本次运行（会中断当前请求与等待）">
+            {shown.status === 'queued' ? '取消排队' : '停止运行'}
+          </button>
+        )}
         <button className="modal-close drawer-close" onClick={onClose} title="关闭（Esc）" aria-label="关闭"><IconClose size={14} /></button>
       </div>
 

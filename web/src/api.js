@@ -54,7 +54,7 @@ export const api = {
   deleteUser: (id) => req('DELETE', `/api/system/users/${id}`),
   auditLog: (limit = 100) => req('GET', `/api/system/audit?limit=${limit}`),
   apiKeys: () => req('GET', '/api/system/apikeys'),
-  createApiKey: (name, scopes, expiresAt) => req('POST', '/api/system/apikeys', { name, scopes, expiresAt }),
+  createApiKey: (name, scopes, expiresAt, allowedIps, flowIds, groups) => req('POST', '/api/system/apikeys', { name, scopes, expiresAt, allowedIps, flowIds, groups }),
   revokeApiKey: (id) => req('DELETE', `/api/system/apikeys/${id}`),
   updateApiKey: (id, patch) => req('PUT', `/api/system/apikeys/${id}`, patch),
   ipBlocklist: () => req('GET', '/api/system/ip-blocklist'),
@@ -125,6 +125,7 @@ export const api = {
   curlFor: (id, nodeId, vars) => req('POST', `/api/flows/${id}/curl`, { nodeId, vars }),
   runs: (flowId, limit = 30) => req('GET', `/api/runs?flowId=${flowId || ''}&limit=${limit}`),
   run: (id) => req('GET', `/api/runs/${id}`),
+  cancelRun: (id) => req('POST', `/api/runs/${id}/cancel`, {}),
   // templates
   templates: () => req('GET', '/api/templates'),
   template: (id) => req('GET', `/api/templates/${id}`),

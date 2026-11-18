@@ -120,8 +120,8 @@ export default function LogStream({ flowId, flowName, onClose, onToast, onFix })
           {visibleGroups.map((g) => (
             <div key={g.runId + '@' + g.startedAt} className="logstream-group">
               <div className="logstream-run">
-                <span className={`badge ${g.status === 'success' ? 'ok' : g.status === 'failed' ? 'fail' : ''}`}>
-                  {g.status === 'success' ? '成功' : g.status === 'failed' ? '失败' : '运行中'}
+                <span className={`badge ${g.status === 'success' ? 'ok' : g.status === 'failed' ? 'fail' : g.status === 'cancelled' ? 'warn' : ''}`}>
+                  {g.status === 'success' ? '成功' : g.status === 'failed' ? (g.timedOut ? '超时' : '失败') : g.status === 'cancelled' ? '已取消' : '运行中'}
                 </span>
                 <span className="logstream-time">{fmtClock(g.startedAt)}</span>
                 <span className="logstream-count">{g.items.length} 条</span>

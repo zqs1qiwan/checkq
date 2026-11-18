@@ -12,13 +12,73 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { ProxyAgent } from 'undici';
-import vm from 'node:vm';
+import { fileURLToPath } from 'node:url';
 import { collectSecrets, redactLogEntry, redactText } from './redact.js';
 import { isSensitiveName } from './sensitive-name.js';
 
 const MAX_STEPS = 500;
 const HTTP_TIMEOUT = 30000;
-const MAX_RESP_BYTES = 2 * 1024 * 1024; // 响应体上限 2MB（预留，当前文本阶段仅记录截断）
+const MAX_RESP_BYTES = 2 * 1024 * 1024; // 执行阶段响应体硬上限，超限直接失败（与日志截断是两件事）
+const MIN_RESP_BYTES = 64 * 1024;
+const MAX_RESP_BYTES_CAP = 8 * 1024 * 1024;
+
+function cancelError() {
+  const e = new Error('运行已取消');
+  e.name = 'AbortError';
+  e.cancelled = true;
+  return e;
+}
+function throwIfAborted(signal) {
+  if (signal?.aborted) throw cancelError();
+}
+function sleep(ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(cancelError());
+    const timer = setTimeout(() => {
+      signal?.removeEventListener?.('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(cancelError());
+    };
+    signal?.addEventListener?.('abort', onAbort, { once: true });
+  });
+}
+
+class ResponseLimitError extends Error {
+  constructor(limit) {
+    super(`响应体超过上限 ${limit} 字节`);
+    this.code = 'RESP_TOO_LARGE';
+  }
+}
+
+/** 流式读取响应体，超过字节上限立即取消读取，避免把超大响应读进内存。 */
+async function readBodyWithLimit(resp, limit) {
+  if (!resp.body || typeof resp.body.getReader !== 'function') {
+    const buf = Buffer.from(await resp.arrayBuffer());
+    if (buf.byteLength > limit) throw new ResponseLimitError(limit);
+    return buf;
+  }
+  const reader = resp.body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > limit) {
+        try { await reader.cancel(); } catch {}
+        throw new ResponseLimitError(limit);
+      }
+      chunks.push(Buffer.from(value));
+    }
+  } finally {
+    try { reader.releaseLock(); } catch {}
+  }
+  return Buffer.concat(chunks, total);
+}
 
 const proxyAgents = new Map(); // proxyUrl -> ProxyAgent（复用连接池）
 function getProxyAgent(proxyUrl) {
@@ -28,6 +88,77 @@ function getProxyAgent(proxyUrl) {
     proxyAgents.set(proxyUrl, a);
   }
   return a;
+}
+
+const SCRIPT_RUNNER = fileURLToPath(new URL('./script-runner.cjs', import.meta.url));
+
+/** 在独立、受限的子进程中执行 script 节点；只传 JSON 快照，不注入宿主对象。 */
+function runScriptProcess(code, snapshot, signal) {
+  return new Promise((resolve) => {
+    if (signal?.aborted) return resolve({ ok: false, cancelled: true, error: '运行已取消' });
+    const payload = JSON.stringify({
+      code,
+      vars: snapshot.vars || {},
+      last: snapshot.last || null,
+      steps: snapshot.steps || {},
+      timeoutMs: 1000,
+    });
+    const env = {
+      PATH: process.env.PATH || '',
+      SystemRoot: process.env.SystemRoot || process.env.SYSTEMROOT || '',
+      TMPDIR: os.tmpdir(),
+    };
+    let child;
+    try {
+      child = spawn(process.execPath, [
+        '--max-old-space-size=64',
+        '--permission',
+        `--allow-fs-read=${SCRIPT_RUNNER}`,
+        SCRIPT_RUNNER,
+      ], { stdio: ['pipe', 'pipe', 'pipe'], env, windowsHide: true });
+    } catch (err) {
+      return resolve({ ok: false, error: `脚本运行器启动失败: ${err.message}` });
+    }
+
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    let timer = null;
+    const onAbort = () => {
+      try { child.kill('SIGKILL'); } catch {}
+      done({ ok: false, cancelled: true, error: '运行已取消' });
+    };
+    const done = (result) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      signal?.removeEventListener?.('abort', onAbort);
+      resolve(result);
+    };
+    signal?.addEventListener?.('abort', onAbort, { once: true });
+    timer = setTimeout(() => {
+      try { child.kill('SIGKILL'); } catch {}
+      done({ ok: false, error: '脚本执行超时（运行器未响应）' });
+    }, 7000);
+
+    child.stdout.on('data', (d) => { stdout += d; });
+    child.stderr.on('data', (d) => { stderr = (stderr + d).slice(-500); });
+    child.on('error', (err) => done({ ok: false, error: `脚本运行器启动失败: ${err.message}` }));
+    child.on('close', () => {
+      const text = stdout.trim();
+      if (!text) {
+        return done({ ok: false, error: `脚本运行器无输出${stderr ? `（${stderr.trim().slice(0, 200)}）` : ''}` });
+      }
+      try {
+        const result = JSON.parse(text);
+        done(result && typeof result === 'object' ? result : { ok: false, error: '脚本运行器返回格式无效' });
+      } catch {
+        done({ ok: false, error: '脚本运行器返回格式无效' });
+      }
+    });
+    child.stdin.on('error', () => {});
+    child.stdin.end(payload);
+  });
 }
 
 export class Engine {
@@ -51,10 +182,10 @@ export class Engine {
   }
 
   /** 执行流程。debugStopId: 调试模式，跑到该节点（含）即止。returns { ok, logs, vars, finalMessage } */
-  async run({ trigger = 'manual', runId, logSink, debugStopId, debug } = {}) {
+  async run({ trigger = 'manual', runId, logSink, debugStopId, debug, signal } = {}) {
     const flow = this.flow;
     const vars = { ...(flow.vars || {}) };
-    const state = { vars, last: null, steps: {}, cookieJar: new CookieJar() };
+    const state = { vars, last: null, steps: {}, cookieJar: new CookieJar(), signal };
     const logs = [];
     const missing = new Set();
 
@@ -97,12 +228,29 @@ export class Engine {
       return { ok: false, logs, vars: this.logInclude.varsSnapshot ? vars : {}, finalMessage: msg };
     }
 
+    if (signal?.aborted) {
+      const msg = '运行已取消';
+      logs.push({ stepId: null, index: 1, name: '流程', type: 'system', ok: false, message: msg, detail: null, ms: 0, cancelled: true });
+      return { ok: false, cancelled: true, logs, vars: this.logInclude.varsSnapshot ? vars : {}, finalMessage: msg };
+    }
+
     let node = entry;
     let stepCount = 0;
     let failed = false;
     let finalMessage = '';
 
     while (node && stepCount < MAX_STEPS) {
+      if (signal?.aborted) {
+        failed = true;
+        finalMessage = '运行已取消';
+        const lastLog = {
+          stepId: node.id, index: stepCount + 1, name: '运行取消', type: 'system', ok: false,
+          message: finalMessage, detail: null, ms: 0, cancelled: true,
+        };
+        logs.push(lastLog);
+        if (logSink) logSink(redactLogEntry(lastLog, collectSecrets(vars)));
+        break;
+      }
       stepCount++;
       const started = Date.now();
       const stepLog = {
@@ -179,8 +327,10 @@ export class Engine {
           break;
         }
       } catch (err) {
+        const cancelled = err?.cancelled || err?.name === 'AbortError' || signal?.aborted;
         stepLog.ok = false;
-        stepLog.message = `步骤异常: ${err.message}`;
+        stepLog.cancelled = !!cancelled;
+        stepLog.message = cancelled ? '运行已取消' : `步骤异常: ${err.message}`;
         stepLog.ms = Date.now() - started;
         logs.push(stepLog);
         if (logSink && shouldDisplay(stepLog)) logSink(redactLogEntry(stepLog, collectSecrets(vars)));
@@ -237,8 +387,8 @@ export class Engine {
       : '';
 
     // include.varsSnapshot=false：不记录运行级变量快照（PRD §4.7.4）
-    if (!this.logInclude.varsSnapshot) return { ok: !failed, logs: trimmedLogs, vars: {}, finalMessage, summary };
-    return { ok: !failed, logs: trimmedLogs, vars, finalMessage, summary };
+    if (!this.logInclude.varsSnapshot) return { ok: !failed, cancelled: finalMessage === '运行已取消', logs: trimmedLogs, vars: {}, finalMessage, summary };
+    return { ok: !failed, cancelled: finalMessage === '运行已取消', logs: trimmedLogs, vars, finalMessage, summary };
   }
 
   findEntryNode() {
@@ -290,22 +440,29 @@ export class Engine {
     if (!include.reqBody) delete stepLog.detail.body;
 
     const t0 = Date.now();
+    const signal = state.signal;
+    throwIfAborted(signal);
     let status, statusText, text, respHeaders, setCookies;
+    const maxBytes = Math.min(
+      MAX_RESP_BYTES_CAP,
+      Math.max(MIN_RESP_BYTES, Number(c.maxRespBytes) || MAX_RESP_BYTES),
+    );
     try {
       if ((c.backend || 'fetch') === 'curl') {
         // c.timeout 单位是秒（与 fetch 路径一致），httpViaCurl 内部按毫秒处理
         ({ status, statusText, headers: respHeaders, text, setCookies } = await httpViaCurl(
-          url, method, headers, body, c.timeout ? Math.max(1000, Number(c.timeout) * 1000) : HTTP_TIMEOUT, (c.redirect || 'follow') !== 'manual', proxyUrl));
+          url, method, headers, body, c.timeout ? Math.max(1000, Number(c.timeout) * 1000) : HTTP_TIMEOUT, (c.redirect || 'follow') !== 'manual', proxyUrl, maxBytes, signal));
       } else {
         const dispatcher = proxyUrl ? getProxyAgent(proxyUrl) : undefined;
         // config.timeout 单位是秒（ConfigPanel「超时 (秒)」/ curl --max-time），fetch 需换算成毫秒
         const timeoutMs = c.timeout ? Math.max(1000, Number(c.timeout) * 1000) : HTTP_TIMEOUT;
+        const timeoutSignal = AbortSignal.timeout(timeoutMs);
         const resp = await fetch(url, {
           method,
           headers,
           body,
           redirect: c.redirect || 'follow',
-          signal: AbortSignal.timeout(timeoutMs),
+          signal: signal ? AbortSignal.any([timeoutSignal, signal]) : timeoutSignal,
           dispatcher,
         });
         status = resp.status;
@@ -314,20 +471,24 @@ export class Engine {
         const ctype = resp.headers.get('content-type') || '';
         let encoding = (ctype.match(/charset=([\w-]+)/i) || [])[1] || 'utf-8';
         if (c.charset && c.charset !== 'auto') encoding = c.charset;
-        if (/utf-?8/i.test(encoding)) {
-          text = await resp.text();
-        } else {
-          const buf = await resp.arrayBuffer();
-          try {
-            text = new TextDecoder(encoding).decode(buf);
-          } catch {
-            text = new TextDecoder('utf-8').decode(buf); // 不认识的编码回退 utf-8
-          }
-        }
+        const buf = await readBodyWithLimit(resp, maxBytes);
+        text = /utf-?8/i.test(encoding)
+          ? buf.toString('utf8')
+          : (() => {
+              try {
+                return new TextDecoder(encoding).decode(buf);
+              } catch {
+                return buf.toString('utf8'); // 不认识的编码回退 utf-8
+              }
+            })();
         respHeaders = Object.fromEntries(resp.headers.entries());
         setCookies = resp.headers.getSetCookie ? resp.headers.getSetCookie() : [];
       }
     } catch (err) {
+      if (signal?.aborted) throw cancelError();
+      if (err && err.code === 'RESP_TOO_LARGE') {
+        return { ok: false, errorKind: 'network', message: err.message };
+      }
       return { ok: false, errorKind: 'network', message: `请求失败: ${err.message}${err.cause ? ` (${err.cause.code || err.cause.message || ''})` : ''}` };
     }
 
@@ -409,6 +570,7 @@ export class Engine {
         let attempt = 0;
         let result = null;
         for (;;) {
+          throwIfAborted(state.signal);
           result = await this.execHttp(node, c, state, stepLog, missing, attempt);
           if (result.ok) break;
           const isNetworkError = result.errorKind === 'network';
@@ -419,7 +581,7 @@ export class Engine {
             stepLog.message = `${result.message} → 重试 ${attempt}/${retry.times}（${wait}ms 后）`;
             logs.push({ ...stepLog, ok: true }); // 重试过程记录为中间日志
             if (logSink) logSink(redactLogEntry(logs[logs.length - 1], collectSecrets(state.vars)));
-            await new Promise((r) => setTimeout(r, wait));
+            await sleep(wait, state.signal);
             continue;
           }
           stepLog.ok = false;
@@ -545,7 +707,7 @@ export class Engine {
         const lo = Math.min(min, max);
         const hi = Math.max(min, max);
         const sec = lo + Math.random() * (hi - lo);
-        await new Promise((r) => setTimeout(r, Math.min(sec, 300) * 1000));
+        await sleep(Math.min(sec, 300) * 1000, state.signal);
         stepLog.message = `随机等待 ${sec.toFixed(1)}s (${lo}-${hi}s)`;
         return { handle: 'next' };
       }
@@ -553,7 +715,7 @@ export class Engine {
       case 'delay': {
         const c = node.config || {};
         const sec = Number(renderTemplate(String(c.seconds ?? 1), vars, missing)) || 0;
-        await new Promise((r) => setTimeout(r, Math.min(sec, 300) * 1000));
+        await sleep(Math.min(sec, 300) * 1000, state.signal);
         stepLog.message = `等待 ${sec}s`;
         return { handle: 'next' };
       }
@@ -567,7 +729,7 @@ export class Engine {
       }
 
       case 'script': {
-        // 受限 JS 沙箱（PRD §4.1）：只注入 vars/last/steps 值，无 require/网络/fs/process；超时 1s；返回值对象合并回 vars
+        // 隔离子进程执行：只传 JSON 快照；子进程无 fs/child_process/worker 权限，vm 不注入宿主对象。
         const c = node.config || {};
         const code = String(c.code || '');
         if (!code.trim()) {
@@ -578,21 +740,13 @@ export class Engine {
         // 先按模板渲染，允许 {{var}} 占位
         const rendered = renderTemplate(code, vars, missing);
         const snapshot = JSON.parse(JSON.stringify({ vars, last: state.last, steps: state.steps }));
-        let out;
-        try {
-          const ctx = {
-            vars: snapshot.vars, last: snapshot.last, steps: snapshot.steps,
-            console: { log: () => {}, warn: () => {}, error: () => {} },
-            Math, JSON, Date, Number, String, Array, Object, isNaN, parseInt, parseFloat,
-          };
-          vm.createContext(ctx);
-          const wrapped = `(() => {\n${rendered}\n})();`;
-          out = vm.runInContext(wrapped, ctx, { timeout: 1000 });
-        } catch (err) {
+        const result = await runScriptProcess(rendered, snapshot, state.signal);
+        if (!result.ok) {
           stepLog.ok = false;
-          stepLog.message = `脚本异常: ${err.message}`;
+          stepLog.message = result.error || '脚本执行失败';
           return null;
         }
+        const out = result.out;
         if (out && typeof out === 'object' && !Array.isArray(out)) {
           for (const [k, v] of Object.entries(out)) vars[k] = typeof v === 'object' ? JSON.stringify(v) : String(v);
           stepLog.message = `脚本返回 ${Object.keys(out).length} 个变量：${Object.keys(out).join(', ')}`;
@@ -639,18 +793,21 @@ export class Engine {
         const maxIter = Math.min(50, arr.length);
         let doneCount = 0;
         for (let i = 0; i < maxIter; i++) {
+          throwIfAborted(state.signal);
           vars[itemVar] = arr[i];
           vars[indexVar] = String(i);
           let cursor = this.nodeById.get(bodyTargetId);
           let guard = 0;
           while (cursor && guard < 100) {
             guard++;
+            throwIfAborted(state.signal);
             const started = Date.now();
             const bodyLog = { stepId: cursor.id, index: logs.length + 1, name: `${cursor.name || cursor.type} #${i + 1}`, type: cursor.type, ok: true, message: '', detail: null, ms: 0 };
             let outcome;
             try {
               outcome = await this.execNode(cursor, state, bodyLog, missing, logs, logSink);
             } catch (err) {
+              if (err?.cancelled || state.signal?.aborted) throw cancelError();
               bodyLog.ok = false;
               bodyLog.message = `步骤异常: ${err.message}`;
               bodyLog.ms = Date.now() - started;
@@ -663,6 +820,7 @@ export class Engine {
             bodyLog.ms = Date.now() - started;
             logs.push(bodyLog);
             if (logSink) logSink(bodyLog);
+            if (state.signal?.aborted) throw cancelError();
             if (!outcome) {
               stepLog.ok = false;
               stepLog.message = `遍历第 ${i + 1} 轮失败: ${bodyLog.message}`;
@@ -718,11 +876,12 @@ export class Engine {
  * 支持 proxyUrl（http/https/socks5h → --proxy）。
  * 返回与 fetch 路径同构: { status, statusText, headers, text, setCookies }
  */
-async function httpViaCurl(url, method, headers, body, timeoutMs, follow, proxyUrl) {
+async function httpViaCurl(url, method, headers, body, timeoutMs, follow, proxyUrl, maxBytes = MAX_RESP_BYTES, signal) {
+  throwIfAborted(signal);
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'checkq-'));
   const hdrFile = path.join(tmp, 'h.txt');
   const bodyFile = path.join(tmp, 'b.txt');
-  const args = ['-sS', '--max-time', String(Math.ceil(timeoutMs / 1000)), '-X', method, '-D', hdrFile, '-o', bodyFile];
+  const args = ['-sS', '--max-time', String(Math.ceil(timeoutMs / 1000)), '--max-filesize', String(maxBytes), '-X', method, '-D', hdrFile, '-o', bodyFile];
   if (follow) args.push('-L');
   if (proxyUrl) args.push('--proxy', proxyUrl);
   args.push(url);
@@ -732,11 +891,32 @@ async function httpViaCurl(url, method, headers, body, timeoutMs, follow, proxyU
     await new Promise((resolve, reject) => {
       const child = spawn('curl', args, { timeout: timeoutMs + 5000 });
       let stderr = '';
+      let settled = false;
+      const finish = (fn, value) => {
+        if (settled) return;
+        settled = true;
+        signal?.removeEventListener?.('abort', onAbort);
+        fn(value);
+      };
+      const onAbort = () => {
+        try { child.kill('SIGKILL'); } catch {}
+        finish(reject, cancelError());
+      };
+      signal?.addEventListener?.('abort', onAbort, { once: true });
       child.stderr.on('data', (d) => { stderr = String(d).slice(0, 300); });
-      child.on('error', reject);
-      child.on('close', (code) => (code === 0 ? resolve() : reject(new Error(stderr.trim() || `curl exit ${code}`))));
+      child.on('error', (err) => finish(reject, signal?.aborted ? cancelError() : err));
+      child.on('close', (code) => {
+        if (code === 0) return finish(resolve);
+        if (signal?.aborted) return finish(reject, cancelError());
+        const err = new Error(stderr.trim() || (code === 63 ? `响应体超过上限 ${maxBytes} 字节` : `curl exit ${code}`));
+        if (code === 63) err.code = 'RESP_TOO_LARGE';
+        finish(reject, err);
+      });
     });
+    throwIfAborted(signal);
     const hdrRaw = fs.readFileSync(hdrFile, 'utf8');
+    const bodyStat = fs.statSync(bodyFile);
+    if (bodyStat.size > maxBytes) throw new ResponseLimitError(maxBytes);
     const text = fs.readFileSync(bodyFile, 'utf8');
     const blocks = hdrRaw.split(/\r?\n\r?\n/).filter((b) => b.trim());
     const lines = (blocks[blocks.length - 1] || '').split(/\r?\n/);

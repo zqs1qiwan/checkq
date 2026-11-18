@@ -20,6 +20,7 @@ import { buildOpenApi } from './openapi.js';
 import { ipAllowed, isPrivateIp, normalizeIp } from './iprange.js';
 import { Engine, redactVars } from './engine.js';
 import { collectSecrets, redactRunForExport } from './redact.js';
+import { maskSecrets } from './secret.js';
 import { validateFlow } from './model.js';
 import { importHar } from './har-import.js';
 import { parseCurl } from './curl-import.js';
@@ -57,6 +58,34 @@ export function buildServer({ dataDir, port }) {
   const loginFails = new Map(); // ip -> { count, firstAt }
   const LOGIN_FAIL_LIMIT = 5;
   const LOGIN_FAIL_WINDOW = 10 * 60 * 1000;
+  const API_KEY_SCOPES = ['read', 'run', 'write', 'secrets'];
+
+  /**
+   * API Key 的「任务范围」：flowIds / groups 任一为空表示不限制；两者都填则取并集。
+   * 浏览器会话与旧版单 Key 不受范围限制。
+   */
+  const keyAllowsFlow = (req, flow) => {
+    if (!req.apiKey || req.legacyApiKey || !flow) return true;
+    const ids = Array.isArray(req.apiKey.flowIds) ? req.apiKey.flowIds : [];
+    const groups = Array.isArray(req.apiKey.groups) ? req.apiKey.groups : [];
+    if (!ids.length && !groups.length) return true;
+    if (ids.includes(flow.id)) return true;
+    return !!flow.group && groups.includes(flow.group);
+  };
+  /** 受限 Key 不能创建新任务/模板（新对象不在绑定范围内）；无绑定的 Key 仍可创建。 */
+  const keyCanCreate = (req) => {
+    if (!req.apiKey || req.legacyApiKey) return true;
+    const ids = Array.isArray(req.apiKey.flowIds) ? req.apiKey.flowIds : [];
+    const groups = Array.isArray(req.apiKey.groups) ? req.apiKey.groups : [];
+    return !ids.length && !groups.length;
+  };
+  const keyHasScope = (req, scope) => {
+    if (!req.apiKey || req.legacyApiKey) return true;
+    return (req.apiKeyScopes || []).includes(scope);
+  };
+  /** API Key 默认只看到脱敏后的任务定义；secrets 作用域才返回明文凭据。 */
+  const visibleFlow = (req, flow) => (keyHasScope(req, 'secrets') ? flow : maskSecrets(flow));
+  const keyScopeDenied = (reply, message = '该 API Key 的任务范围不包含此任务') => reply.code(403).send({ error: message });
   const loginLocked = (ip) => {
     const rec = loginFails.get(ip);
     if (!rec) return false;
@@ -115,6 +144,8 @@ export function buildServer({ dataDir, port }) {
   }
 
   const runningFlows = new Set();
+  const activeRuns = new Map(); // runId -> { run, controller, flowId, reason }
+  const RUN_TIMEOUT_MS = Math.min(24 * 3600e3, Math.max(60e3, Number(process.env.CHECKQ_RUN_TIMEOUT_MS) || 30 * 60e3));
   const manualInFlight = new Set(); // 手动触发的在途请求（同步占位，避免并发点击跑两遍）
   const queueMap = new Map(); // flowId -> Promise 链（运行排队：同 flow 串行执行）
   const enqueueRun = (flowId, fn) => {
@@ -135,20 +166,47 @@ export function buildServer({ dataDir, port }) {
   const queuedSet = new Set(); // 等待中的 flowId（排队中徽章）
   const runLimiter = createLimiter(process.env.CHECKQ_MAX_CONCURRENCY || 4);
   const runner = {
-    async runFlow(flow, trigger, { debugStopId, onLog, debug, notify = true } = {}) {
+    async runFlow(flow, trigger, { debugStopId, onLog, debug, notify = true, onStart, timeoutMs } = {}) {
+      const runId = crypto.randomUUID();
+      const limitMs = Math.min(24 * 3600e3, Math.max(60e3, Number(timeoutMs) || RUN_TIMEOUT_MS));
+      const run = {
+        id: runId, flowId: flow.id, flowName: flow.name, trigger,
+        queuedAt: Date.now(), startedAt: Date.now(), status: 'queued', logs: [], vars: {}, finalMessage: '',
+        attempts: [],
+      };
+      const controller = new AbortController();
+      const record = { run, controller, flowId: flow.id, reason: '' };
+      activeRuns.set(runId, record);
+      // 在途记录先落库：排队/运行中的任务在运行历史里可见，不会因为进程重启凭空消失
+      store.addRun(run);
+      let runTimer = null;
       queuedSet.add(flow.id);
       try {
         return await enqueueRun(flow.id, async () => {
           await runLimiter.acquire();
+          if (controller.signal.aborted) {
+            const timedOut = record.reason === 'timeout';
+            run.status = timedOut ? 'failed' : 'cancelled';
+            run.finalMessage = timedOut ? `运行超时（超过 ${Math.round(limitMs / 1000)} 秒）` : '运行已取消';
+            run.cancelled = !timedOut;
+            run.timedOut = timedOut;
+            run.durationMs = Date.now() - run.startedAt;
+            store.addRun(run);
+            runLimiter.release();
+            queuedSet.delete(flow.id);
+            return run;
+          }
           runningFlows.add(flow.id);
           queuedSet.delete(flow.id);
+          run.status = 'running';
+          run.startedAt = Date.now();
+          store.addRun(run);
+          onStart?.(run);
+          runTimer = setTimeout(() => {
+            record.reason = 'timeout';
+            controller.abort();
+          }, limitMs);
           try {
-          const runId = crypto.randomUUID();
-          const run = {
-            id: runId, flowId: flow.id, flowName: flow.name, trigger,
-            startedAt: Date.now(), status: 'running', logs: [], vars: {}, finalMessage: '',
-            attempts: [],
-          };
           // 任务级重试：调试运行不重试（要看到断点处的真实失败）；恢复探测也不重试，
           // 否则一次探测会连续打多次请求，绕过“最多探测 N 次”的风控上限。
           const cfg = normalizeRetry(flow.retry);
@@ -158,6 +216,8 @@ export function buildServer({ dataDir, port }) {
           try {
             const outcome = await runWithRetry({
               retry: cfg,
+              signal: controller.signal,
+              shouldStop: () => controller.signal.aborted,
               runOnce: async (attempt) => {
                 if (attempt > 1) {
                   const marker = {
@@ -173,17 +233,21 @@ export function buildServer({ dataDir, port }) {
                 try {
                   result = await engine.run({
                     trigger, runId, debugStopId, debug: debug === true,
+                    signal: controller.signal,
                     logSink: (entry) => onLog?.(entry),
                   });
                 } catch (err) {
+                  const cancelled = !!err?.cancelled || err?.name === 'AbortError' || controller.signal.aborted;
                   result = {
                     ok: false,
+                    cancelled,
                     logs: [{
                       stepId: null, index: 1, name: '引擎', type: 'error', ok: false,
-                      message: `引擎异常: ${err.message}`, detail: null, ms: 0,
+                      message: cancelled ? '运行已取消' : `引擎异常: ${err.message}`, detail: null, ms: 0,
+                      cancelled: cancelled || undefined,
                     }],
                     vars: {},
-                    finalMessage: `引擎异常: ${err.message}`,
+                    finalMessage: cancelled ? '运行已取消' : `引擎异常: ${err.message}`,
                   };
                 }
                 lastMessage = result.finalMessage || '执行失败';
@@ -196,13 +260,29 @@ export function buildServer({ dataDir, port }) {
                 run.maxAttempts = maxAttempts;
               },
             });
-            run.status = outcome.ok ? 'success' : 'failed';
-            run.finalMessage = outcome.finalMessage || (outcome.ok ? '' : '执行失败');
+            if (controller.signal.aborted || outcome.cancelled) {
+              const timedOut = record.reason === 'timeout';
+              run.status = timedOut ? 'failed' : 'cancelled';
+              run.finalMessage = timedOut ? `运行超时（超过 ${Math.round(limitMs / 1000)} 秒）` : '运行已取消';
+              run.cancelled = !timedOut;
+              run.timedOut = timedOut;
+            } else {
+              run.status = outcome.ok ? 'success' : 'failed';
+              run.finalMessage = outcome.finalMessage || (outcome.ok ? '' : '执行失败');
+            }
             run.summary = outcome.summary || '';
             run.vars = redactVars(outcome.vars || {});
           } catch (err) {
-            run.status = 'failed';
-            run.finalMessage = `引擎异常: ${err.message}`;
+            if (controller.signal.aborted) {
+              const timedOut = record.reason === 'timeout';
+              run.status = timedOut ? 'failed' : 'cancelled';
+              run.finalMessage = timedOut ? `运行超时（超过 ${Math.round(limitMs / 1000)} 秒）` : '运行已取消';
+              run.cancelled = !timedOut;
+              run.timedOut = timedOut;
+            } else {
+              run.status = 'failed';
+              run.finalMessage = `引擎异常: ${err.message}`;
+            }
           }
           if (!run.logs.length && run.finalMessage) {
             run.logs = [{
@@ -212,7 +292,7 @@ export function buildServer({ dataDir, port }) {
           }
           run.durationMs = Date.now() - run.startedAt;
           // 重试过的运行：把尝试次数写进结论，列表/通知/日志都能看到
-          if (run.attempts.length > 1) {
+          if (run.attempts.length > 1 && run.status !== 'cancelled') {
             run.finalMessage = `${run.finalMessage || (run.status === 'success' ? '执行成功' : '执行失败')}（第 ${run.attempts.length}/${maxAttempts} 次尝试）`;
           }
           // 可解释失败（P0-3）：失败运行带一份诊断（纯函数、不重跑、只给证据与动作）
@@ -251,7 +331,7 @@ export function buildServer({ dataDir, port }) {
                 }
               }
             } catch { /* 探测状态写入失败不影响本次运行记录 */ }
-          } else if (shouldAutoPause(trigger, run)) {
+          } else if (!run.cancelled && shouldAutoPause(trigger, run)) {
             // 连续失败自动停用（只针对调度触发）：把任务停掉，避免错误状态一直刷
             try {
               if (applyAutoPause({ store, scheduler, flowId: flow.id, reason: run.finalMessage })) {
@@ -262,7 +342,7 @@ export function buildServer({ dataDir, port }) {
           }
           store.addRun(run);
           // 恢复探测是静默诊断：不写任务通知、不碰外部渠道，避免反复失败触发站点风控。
-          if (notify !== false && trigger !== 'probe') {
+          if (notify !== false && trigger !== 'probe' && !run.cancelled) {
             const notifyResults = await sendNotify(flow, run);
             if (Array.isArray(notifyResults) && notifyResults.length) {
               const failed = notifyResults.filter((r) => !r.ok).map((r) => ({ type: r.type, error: String(r.error || '').slice(0, 80) }));
@@ -283,13 +363,46 @@ export function buildServer({ dataDir, port }) {
           }
           return run;
           } finally {
+            if (runTimer) clearTimeout(runTimer);
             runningFlows.delete(flow.id);
             runLimiter.release();
           }
         });
       } finally {
+        if (runTimer) clearTimeout(runTimer);
+        activeRuns.delete(runId);
         if (queuedSet.has(flow.id) && !runningFlows.has(flow.id)) queuedSet.delete(flow.id);
       }
+    },
+    /** 取消一次运行（排队中也能取消）；返回最新 run 记录 */
+    cancel(runId, reason = 'cancelled') {
+      const rec = activeRuns.get(runId);
+      if (!rec) {
+        const run = store.getRun(runId);
+        if (run && ['queued', 'running'].includes(run.status)) {
+          run.status = reason === 'timeout' ? 'failed' : 'cancelled';
+          run.finalMessage = reason === 'timeout' ? '运行超时' : '运行已取消';
+          run.cancelled = reason !== 'timeout';
+          run.timedOut = reason === 'timeout';
+          store.addRun(run);
+          return run;
+        }
+        return null;
+      }
+      rec.reason = reason;
+      rec.controller.abort();
+      if (rec.run.status === 'queued') {
+        rec.run.status = 'cancelled';
+        rec.run.cancelled = true;
+        rec.run.finalMessage = '运行已取消';
+        store.addRun(rec.run);
+      } else {
+        rec.run.cancelling = true;
+      }
+      return rec.run;
+    },
+    active(runId) {
+      return activeRuns.get(runId) || null;
     },
     /** 调度器用：上一次运行（含重试等待）还没结束就跳过这一拍，避免堆积 */
     isBusy(flowId) {
@@ -546,6 +659,7 @@ export function buildServer({ dataDir, port }) {
     if (!flowId || !cookie) return reply.code(400).send({ error: '缺少 flowId/cookie' });
     const f = store.getFlow(flowId);
     if (!f) return reply.code(404).send({ error: '任务不存在' });
+    if (!keyAllowsFlow(req, f)) return keyScopeDenied(reply);
     const name = /^[A-Za-z_][\w]*$/.test(varName || 'cookie') ? (varName || 'cookie') : 'cookie';
     store.updateFlow(flowId, { vars: { ...(f.vars || {}), [name]: String(cookie).trim() } });
     store.flush();
@@ -571,6 +685,7 @@ export function buildServer({ dataDir, port }) {
   app.post('/api/browser-login/start', async (req, reply) => {
     const { flowId, url } = req.body || {};
     const f = flowId ? store.getFlow(flowId) : null;
+    if (f && !keyAllowsFlow(req, f)) return keyScopeDenied(reply);
     if (!url || !/^https?:\/\//i.test(String(url))) return reply.code(400).send({ error: '缺少合法 url' });
     const userId = `checkq-${f?.id || 'anon'}`;
     try {
@@ -584,6 +699,7 @@ export function buildServer({ dataDir, port }) {
     const { flowId, tabId, varName } = req.body || {};
     const f = flowId ? store.getFlow(flowId) : null;
     if (!f || !tabId) return reply.code(400).send({ error: '缺少 flowId/tabId' });
+    if (!keyAllowsFlow(req, f)) return keyScopeDenied(reply);
     const userId = `checkq-${f.id}`;
     try {
       const ev = await camo('POST', `/tabs/${tabId}/evaluate`, { userId, expression: 'document.cookie' });
@@ -662,15 +778,21 @@ export function buildServer({ dataDir, port }) {
           store.audit('apikey.expired', `名称=${key.name}`, '');
           return reply.code(401).send({ error: `API Key 已过期并被回收（${key.name}）`, expired: true });
         }
-        // 作用域：read=查看 / run=运行任务 / write=增删改配置
+        // 作用域：read=查看 / run=运行任务 / write=增删改配置 / secrets=读取明文凭据
         const scopes = Array.isArray(key.scopes) ? key.scopes : ['read', 'run', 'write'];
         const need = ['GET', 'HEAD'].includes(req.method) ? 'read'
-          : (/^\/api\/flows\/[^/]+\/run$/.test(path) ? 'run' : 'write');
+          : ((/^\/api\/flows\/[^/]+\/run$/.test(path) || /^\/api\/runs\/[^/]+\/cancel$/.test(path)) ? 'run' : 'write');
         if (!scopes.includes(need)) {
           return reply.code(403).send({ error: `API Key 权限不足：需要 ${need}，当前仅 ${scopes.join('/') || '无'}` });
         }
         req.apiKey = key;
         req.apiKeyScopes = scopes;
+        // 任务范围：路径里出现 flow id 时先拦（/api/flows/batch 由处理器逐个校验）
+        const fm = path.match(/^\/api\/flows\/([^/]+)(?:\/|$)/);
+        if (fm && fm[1] !== 'batch') {
+          const target = store.getFlowRaw(fm[1]);
+          if (target && !keyAllowsFlow(req, target)) return keyScopeDenied(reply);
+        }
         return;
       }
       // 兼容旧的单条 meta.apiKey（全权限）
@@ -792,11 +914,16 @@ export function buildServer({ dataDir, port }) {
       return {
         authenticated: true,
         via: 'api-key',
-        apiKey: { prefix: req.apiKey.prefix, name: req.apiKey.name, scopes: req.apiKeyScopes || [] },
+        apiKey: {
+          prefix: req.apiKey.prefix, name: req.apiKey.name, scopes: req.apiKeyScopes || [],
+          flowIds: req.apiKey.flowIds || [], groups: req.apiKey.groups || [],
+        },
         permissions: {
           read: true,
           run: (req.apiKeyScopes || []).includes('run'),
           write: (req.apiKeyScopes || []).includes('write'),
+          secrets: (req.apiKeyScopes || []).includes('secrets'),
+          scope: (req.apiKey.flowIds || []).length || (req.apiKey.groups || []).length ? 'limited' : 'all',
         },
       };
     }
@@ -1121,8 +1248,17 @@ export function buildServer({ dataDir, port }) {
   app.post('/api/system/apikeys', async (req, reply) => {
     if (!requireAdmin(req, reply)) return;
     const { name, scopes } = req.body || {};
-    const wanted = Array.isArray(scopes) ? scopes.filter((s) => ['read', 'run', 'write'].includes(s)) : [];
+    const wanted = Array.isArray(scopes) ? scopes.filter((s) => API_KEY_SCOPES.includes(s)) : [];
     const useScopes = Array.isArray(scopes) ? wanted : ['read', 'run', 'write'];
+    // 任务范围：flowIds / groups 为空 = 全部任务；填了则只允许这些任务或分组
+    const flowIds = Array.isArray(req.body?.flowIds)
+      ? [...new Set(req.body.flowIds.map(String).filter(Boolean))]
+      : [];
+    const missing = flowIds.filter((id) => !store.getFlowRaw(id));
+    if (missing.length) return reply.code(400).send({ error: `任务不存在：${missing.slice(0, 3).join(', ')}` });
+    const groups = Array.isArray(req.body?.groups)
+      ? [...new Set(req.body.groups.map((g) => String(g || '').trim().replace(/\s+/g, ' ').slice(0, 40)).filter(Boolean))]
+      : [];
     // 回收日期：expiresAt（毫秒时间戳）；null = 永不过期
     let expiresAt = null;
     if (req.body && req.body.expiresAt) {
@@ -1135,17 +1271,30 @@ export function buildServer({ dataDir, port }) {
       ? req.body.allowedIps.map((x) => String(x || '').trim()).filter(Boolean)
       : [];
     const { key, hash, prefix } = newApiKey();
-    const k = store.addApiKey({ name: String(name || 'API Key').slice(0, 40), hash, prefix, userId: req.user?.id || null, scopes: useScopes, expiresAt, allowedIps });
-    store.audit('apikey.create', `名称=${k.name} 权限=${useScopes.join('/')}${expiresAt ? ' 到期=' + new Date(expiresAt).toISOString().slice(0, 10) : ''}`, req.user?.username || '');
-    return { ok: true, apiKey: key, key: { id: k.id, name: k.name, prefix: k.prefix, createdAt: k.createdAt, scopes: useScopes, expiresAt, allowedIps } };
+    const k = store.addApiKey({
+      name: String(name || 'API Key').slice(0, 40), hash, prefix, userId: req.user?.id || null,
+      scopes: useScopes, expiresAt, allowedIps, flowIds, groups,
+    });
+    const scopeText = flowIds.length || groups.length ? ` 范围=${flowIds.length ? flowIds.length + ' 个任务' : ''}${flowIds.length && groups.length ? '+' : ''}${groups.length ? groups.length + ' 个分组' : ''}` : ' 范围=全部';
+    store.audit('apikey.create', `名称=${k.name} 权限=${useScopes.join('/')}${scopeText}${expiresAt ? ' 到期=' + new Date(expiresAt).toISOString().slice(0, 10) : ''}`, req.user?.username || '');
+    return { ok: true, apiKey: key, key: { id: k.id, name: k.name, prefix: k.prefix, createdAt: k.createdAt, scopes: useScopes, expiresAt, allowedIps, flowIds, groups } };
   });
   app.put('/api/system/apikeys/:id', async (req, reply) => {
     if (!requireAdmin(req, reply)) return;
     const patch = {};
     const b = req.body || {};
-    if (Array.isArray(b.scopes)) patch.scopes = b.scopes.filter((s) => ['read', 'run', 'write'].includes(s));
+    if (Array.isArray(b.scopes)) patch.scopes = b.scopes.filter((s) => API_KEY_SCOPES.includes(s));
     if (Array.isArray(b.allowedIps)) patch.allowedIps = b.allowedIps.map((x) => String(x || '').trim()).filter(Boolean);
     if (b.name !== undefined) patch.name = String(b.name).slice(0, 40);
+    if (Array.isArray(b.flowIds)) {
+      const flowIds = [...new Set(b.flowIds.map(String).filter(Boolean))];
+      const missing = flowIds.filter((id) => !store.getFlowRaw(id));
+      if (missing.length) return reply.code(400).send({ error: `任务不存在：${missing.slice(0, 3).join(', ')}` });
+      patch.flowIds = flowIds;
+    }
+    if (Array.isArray(b.groups)) {
+      patch.groups = [...new Set(b.groups.map((g) => String(g || '').trim().replace(/\s+/g, ' ').slice(0, 40)).filter(Boolean))];
+    }
     if (b.expiresAt !== undefined) {
       if (!b.expiresAt) patch.expiresAt = null;
       else {
@@ -1394,13 +1543,19 @@ export function buildServer({ dataDir, port }) {
   });
 
   // ---- flows ----
-  app.get('/api/flows', async () => store.listFlows());
+  app.get('/api/flows', async (req) => {
+    const list = store.listFlows();
+    if (!req.apiKey || req.legacyApiKey) return list;
+    return list.filter((f) => keyAllowsFlow(req, f));
+  });
 
   // ---- templates (user-created, stored in DB) ----
   // 从现有流程"另存为模板"
   app.post('/api/templates/from-flow/:flowId', async (req, reply) => {
     const f = store.getFlow(req.params.flowId);
     if (!f) return reply.code(404).send({ error: '流程不存在' });
+    if (!keyAllowsFlow(req, f)) return keyScopeDenied(reply);
+    if (!keyCanCreate(req)) return keyScopeDenied(reply, '受限 API Key 不能创建模板');
     const { name, desc } = req.body || {};
     const tpl = store.createTemplate({
       name: name || f.name.replace(/\s*·\s*\d+$/, '') + ' 模板',
@@ -1417,6 +1572,7 @@ export function buildServer({ dataDir, port }) {
   app.get('/api/templates', async () => store.listTemplates());
 
   app.post('/api/templates', async (req, reply) => {
+    if (!keyCanCreate(req)) return keyScopeDenied(reply, '受限 API Key 不能创建模板');
     const { name, desc, vars, varNames, nodes, edges, log, notify } = req.body || {};
     const errors = validateFlow({ name, nodes, edges, vars });
     if (errors.length) return reply.code(400).send({ error: errors.join('; ') });
@@ -1425,18 +1581,21 @@ export function buildServer({ dataDir, port }) {
   });
 
   app.put('/api/templates/:id', async (req, reply) => {
+    if (!keyCanCreate(req)) return keyScopeDenied(reply, '受限 API Key 不能修改模板');
     const t = store.updateTemplate(req.params.id, req.body || {});
     if (!t) return reply.code(404).send({ error: 'not found' });
     return t;
   });
 
   app.delete('/api/templates/:id', async (req, reply) => {
+    if (!keyCanCreate(req)) return keyScopeDenied(reply, '受限 API Key 不能删除模板');
     const ok = store.deleteTemplate(req.params.id);
     return ok ? { ok: true } : reply.code(404).send({ error: 'not found' });
   });
 
   // 模板 → 生成任务实例（变量差异化）
   app.post('/api/templates/:id/instantiate', async (req, reply) => {
+    if (!keyCanCreate(req)) return keyScopeDenied(reply, '受限 API Key 不能创建任务');
     const { name, vars, note } = req.body || {};
     const flow = store.instantiateTemplate(req.params.id, { name, vars, note });
     if (!flow) return reply.code(404).send({ error: '模板不存在' });
@@ -1450,29 +1609,31 @@ export function buildServer({ dataDir, port }) {
   app.get('/api/templates/:id', async (req, reply) => {
     const t = store.getTemplate(req.params.id);
     if (!t) return reply.code(404).send({ error: 'not found' });
-    return t;
+    return keyHasScope(req, 'secrets') ? t : maskSecrets(t);
   });
 
   // 模板导出（4.3）：脱敏 —— 敏感变量默认值置空，样本不导出
   app.get('/api/templates/:id/export', async (req, reply) => {
     const t = store.getTemplate(req.params.id);
     if (!t) return reply.code(404).send({ error: 'not found' });
+    const safe = maskSecrets(t);
     const safeVars = {};
-    for (const [k, v] of Object.entries(t.vars || {})) {
+    for (const [k, v] of Object.entries(safe.vars || {})) {
       safeVars[k] = /cookie|token|password|secret|key/i.test(k) ? '' : v;
     }
     return {
-      name: t.name, desc: t.desc,
-      varNames: t.varNames || Object.keys(safeVars),
+      name: safe.name, desc: safe.desc,
+      varNames: safe.varNames || Object.keys(safeVars),
       vars: safeVars,
-      nodes: t.nodes, edges: t.edges,
-      log: t.log || null,
+      nodes: safe.nodes, edges: safe.edges,
+      log: safe.log || null,
       samplesIncluded: false,
     };
   });
 
   // CSV 批量建任务（4.3）
   app.post('/api/templates/:id/instantiate-csv', async (req, reply) => {
+    if (!keyCanCreate(req)) return keyScopeDenied(reply, '受限 API Key 不能创建任务');
     const { csv } = req.body || {};
     if (!csv || typeof csv !== 'string') return reply.code(400).send({ error: '缺少 csv 内容' });
     const tpl = store.getTemplate(req.params.id);
@@ -1546,6 +1707,7 @@ export function buildServer({ dataDir, port }) {
   });
 
   app.post('/api/flows', async (req, reply) => {
+    if (!keyCanCreate(req)) return keyScopeDenied(reply, '受限 API Key 不能创建任务');
     const flow = req.body || {};
     const errors = validateFlow(flow);
     if (errors.length) return reply.code(400).send({ error: errors.join('; ') });
@@ -1556,16 +1718,28 @@ export function buildServer({ dataDir, port }) {
     const f = store.getFlow(req.params.id);
     if (!f) return reply.code(404).send({ error: 'not found' });
     // structure = 结构事实（P0-2）：缺线出口 / 孤立步骤 / 起点 / 循环体范围，画布与检查清单共用
-    return { ...f, template: store.templateInfo(f), structure: analyzeStructure(f) };
+    const structure = analyzeStructure(f);
+    return { ...visibleFlow(req, f), template: store.templateInfo(f), structure };
   });
 
   app.put('/api/flows/:id', async (req, reply) => {
     const patch = req.body || {};
     const f0 = store.getFlow(req.params.id);
     if (!f0) return reply.code(404).send({ error: 'not found' });
+    // 乐观并发：带 baseRev 的写入必须基于同一版本；不带 baseRev 的旧客户端/脚本仍可写。
+    if (patch.baseRev !== undefined) {
+      const base = Number(patch.baseRev);
+      delete patch.baseRev;
+      if (!Number.isFinite(base) || base !== (Number(f0.rev) || 0)) {
+        return reply.code(409).send({
+          error: '任务已被其他窗口或 Agent 修改，请刷新后再保存', conflict: true, rev: Number(f0.rev) || 0,
+        });
+      }
+    }
     const errors = validateFlow({ ...f0, ...patch });
     if (errors.length) return reply.code(400).send({ error: errors.join('; ') });
     const f = store.updateFlow(req.params.id, patch);
+    if (!f) return reply.code(404).send({ error: 'not found' });
     scheduler.rebuild();
     // 派生任务改了脚本内容 → 自动转为独立任务（前端提示一次）
     const detached = f && f.detached ? f.detached : null;
@@ -1600,10 +1774,11 @@ export function buildServer({ dataDir, port }) {
         const push = (event, data) => {
           reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
         };
-        push('start', { flowId: f.id, flowName: f.name, queued: false });
         const run = await runner.runFlow(f, debugStopId ? 'debug' : 'manual', {
           debugStopId,
           debug: body.debug === true,
+          timeoutMs: body.timeoutMs,
+          onStart: (r) => push('start', { flowId: f.id, flowName: f.name, runId: r.id, queued: false, startedAt: r.startedAt }),
           onLog: (log) => push('log', log),
         });
         push('done', run);
@@ -1611,7 +1786,9 @@ export function buildServer({ dataDir, port }) {
         return reply;
       }
 
-      const run = await runner.runFlow(f, debugStopId ? 'debug' : 'manual', { debugStopId, debug: body.debug === true });
+      const run = await runner.runFlow(f, debugStopId ? 'debug' : 'manual', {
+        debugStopId, debug: body.debug === true, timeoutMs: body.timeoutMs,
+      });
       return run; // 完整 run 对象（含 logs + diagnosis）
     } finally {
       if (claimed) runner.releaseManual(f.id);
@@ -1620,6 +1797,7 @@ export function buildServer({ dataDir, port }) {
 
   // 克隆任务：复制为新任务（PRD §4.4）
   app.post('/api/flows/:id/clone', async (req, reply) => {
+    if (!keyCanCreate(req)) return keyScopeDenied(reply, '受限 API Key 不能克隆任务');
     const f = store.getFlow(req.params.id);
     if (!f) return reply.code(404).send({ error: 'not found' });
     const seq = store.flows.filter((x) => x.name.startsWith(f.name)).length + 1;
@@ -1734,6 +1912,7 @@ export function buildServer({ dataDir, port }) {
 
   // 模板市场索引导入（规范见 docs/TEMPLATE-MARKET.md）：从 URL 拉取 {name,desc,vars,nodes,edges,log} 建模板
   app.post('/api/templates/from-url', async (req, reply) => {
+    if (!keyCanCreate(req)) return keyScopeDenied(reply, '受限 API Key 不能创建模板');
     const { url } = req.body || {};
     if (!url || !/^https?:\/\//i.test(String(url))) return reply.code(400).send({ error: '缺少合法 url' });
     let data;
@@ -1756,6 +1935,13 @@ export function buildServer({ dataDir, port }) {
     if (!['run', 'enable', 'disable', 'delete', 'set-group'].includes(action)) return reply.code(400).send({ error: '不支持的 action' });
     const group = String((req.body || {}).group || '').trim().replace(/\s+/g, ' ').slice(0, 40);
     if (ids.length > 200) return reply.code(400).send({ error: '单次最多 200 个' });
+    if (req.apiKey && !req.legacyApiKey) {
+      if (action === 'set-group' && !keyCanCreate(req)) {
+        return keyScopeDenied(reply, '受限 API Key 不能修改任务分组');
+      }
+      const outOfScope = ids.map((id) => store.getFlowRaw(id)).filter((f) => f && !keyAllowsFlow(req, f));
+      if (outOfScope.length) return keyScopeDenied(reply, `有 ${outOfScope.length} 个任务不在该 API Key 的任务范围内`);
+    }
     const results = [];
     let changed = false;
     for (const id of ids) {
@@ -1848,15 +2034,39 @@ export function buildServer({ dataDir, port }) {
   });
 
 
-  app.get('/api/runs', async (req) => {
+  app.get('/api/runs', async (req, reply) => {
     const { flowId, limit } = req.query;
-    return store.listRuns(flowId, Math.min(Number(limit) || 30, 200));
+    if (flowId && req.apiKey && !req.legacyApiKey) {
+      const f = store.getFlowRaw(flowId);
+      if (f && !keyAllowsFlow(req, f)) return keyScopeDenied(reply);
+    }
+    const runs = store.listRuns(flowId, Math.min(Number(limit) || 30, 200));
+    if (!req.apiKey || req.legacyApiKey) return runs;
+    return runs.filter((r) => {
+      const f = store.getFlowRaw(r.flowId);
+      return !f || keyAllowsFlow(req, f);
+    });
   });
 
   app.get('/api/runs/:id', async (req, reply) => {
     const r = store.getRun(req.params.id);
     if (!r) return reply.code(404).send({ error: 'not found' });
+    const f = store.getFlowRaw(r.flowId);
+    if (f && !keyAllowsFlow(req, f)) return keyScopeDenied(reply);
     return r;
+  });
+
+  // 取消排队中/运行中的一次运行：中断 fetch/curl、delay、节点重试与任务级退避
+  app.post('/api/runs/:id/cancel', async (req, reply) => {
+    const r = store.getRun(req.params.id);
+    if (!r) return reply.code(404).send({ error: 'not found' });
+    const f = store.getFlowRaw(r.flowId);
+    if (f && !keyAllowsFlow(req, f)) return keyScopeDenied(reply);
+    if (!['queued', 'running'].includes(r.status)) {
+      return reply.code(409).send({ error: '这次运行已经结束', status: r.status });
+    }
+    const updated = runner.cancel(r.id, 'cancelled');
+    return { ok: true, cancelling: true, run: updated || r };
   });
 
   // 单次运行导出 HAR（默认脱敏；响应体沿用日志截断）
@@ -1864,6 +2074,7 @@ export function buildServer({ dataDir, port }) {
     const r = store.getRun(req.params.id);
     if (!r) return reply.code(404).send({ error: 'not found' });
     const flow = store.getFlow(r.flowId);
+    if (flow && !keyAllowsFlow(req, flow)) return keyScopeDenied(reply);
     const har = runToHar(r, flow);
     reply.header('content-type', 'application/json; charset=utf-8');
     reply.header('content-disposition', `attachment; filename="checkq-run-${String(r.id).replace(/[^\w-]/g, '')}.har"`);
@@ -2031,6 +2242,7 @@ export function buildServer({ dataDir, port }) {
   });
 
   app.post('/api/market/import', async (req, reply) => {
+    if (!keyCanCreate(req)) return keyScopeDenied(reply, '受限 API Key 不能创建模板');
     const { url, id, mode } = req.body || {};
     if (!url || !id) return reply.code(400).send({ error: '缺少 url/id' });
     let data;
@@ -2061,6 +2273,7 @@ export function buildServer({ dataDir, port }) {
   });
 
   app.post('/api/market/subscribe', async (req, reply) => {
+    if (!keyCanCreate(req)) return keyScopeDenied(reply, '受限 API Key 不能修改市场订阅');
     const url = String((req.body || {}).url || '').trim();
     if (!/^https?:\/\//i.test(url)) return reply.code(400).send({ error: '索引地址必须是 http/https' });
     let data;

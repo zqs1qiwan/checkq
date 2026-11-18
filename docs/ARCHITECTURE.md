@@ -87,13 +87,13 @@ flowchart TB
 
 **一次运行**：
 
-1. `POST /api/flows/:id/run`（或 cron 触发）→ `api.js` 把任务放进**同任务串行队列**（`queueMap`，`flowId → Promise 链`），再由全局 `createLimiter`（`CHECKQ_MAX_CONCURRENCY`，默认 4）限制同时执行数；排队任务在 `queuedSet` 里，前端能看到"排队中"。
-2. `retry.js` 按任务级策略执行整条流程：每次尝试跑一个完整的 `Engine.run()`，失败则退避后再来，跑满 `maxAttempts` 才判最终失败。
-3. `engine.js` 从无入边的起点沿边单链执行，`MAX_STEPS = 500`；每步产出 `stepLog`（请求/响应/断言/耗时/变量快照）。
-4. `store.js` 落地 `Run`、通知，并立即 flush（原子写 `tmp + rename`）；`run.notify` 记录每个渠道的发送结果，外部渠道全失败时另写一条站内告警。
+1. `POST /api/flows/:id/run`（或 cron 触发）→ `api.js` 先创建 `runId` 与 `queued` 记录并落库（在途可见），再把任务放进**同任务串行队列**（`queueMap`，`flowId → Promise 链`），由全局 `createLimiter`（`CHECKQ_MAX_CONCURRENCY`，默认 4）限制同时执行数；拿不到并发名额时状态保持 `queued`，`activeRuns` 记录 `AbortController`。
+2. `retry.js` 按任务级策略执行整条流程：每次尝试跑一个完整的 `Engine.run()`，失败则退避后再来，跑满 `maxAttempts` 才判最终失败；每次尝试都带同一个 `signal`，取消时不进入下一次退避。
+3. `engine.js` 从无入边的起点沿边单链执行，`MAX_STEPS = 500`；每步产出 `stepLog`（请求/响应/断言/耗时/变量快照）。HTTP fetch/curl、delay、random-delay、script 子进程和 foreach 都检查 `signal`，取消时尽快退出。
+4. `store.js` 落地 `Run`、通知，并立即 flush（原子写 `tmp + rename`）；`run.notify` 记录每个渠道的发送结果，外部渠道全失败时另写一条站内告警。整体超时默认 30 分钟（`CHECKQ_RUN_TIMEOUT_MS` 或 `timeoutMs`），超时按 `failed + timedOut`，人工取消按 `cancelled`（不触发自动停用与任务通知）。
 5. 自动停用：调度触发的运行失败后，`auto-pause.js` 写 `enabled=false + pausedAt/pausedReason`；若任务开启 `recovery`，同时排下一次探测。
 6. 恢复探测：`scheduler.js` 每 60s 扫描「已暂停 + recovery.enabled」的任务，到点以 `trigger='probe'`、`{ notify:false }` 调用 `runFlow`；成功自动启用，失败累计次数，达到上限停止。探测关闭任务级重试，一次探测只跑一次。
-7. 若请求带 `stream: true`，同上过程通过 SSE 推 `start / log / done`。
+7. 若请求带 `stream: true`，同上过程通过 SSE 推 `start（含 runId） / log / done`；`POST /api/runs/:id/cancel` 可在另一条请求里中断这次运行。
 
 **存储**：六个 JSON 文件，全量读写；没有数据库、没有外部依赖。这就是"零依赖"的来源，也是容量上限的来源。`flows.json`、`templates.json`、`channels.json` 共用 AES-256-GCM 密钥；`meta.json` 的 AI Key 与旧 API Key 也走同一加密（内存明文、落盘密文）。
 
@@ -111,7 +111,7 @@ flowchart TB
 
 | 对象 | 位置 | 关键字段 | 注意 |
 |---|---|---|---|
-| Flow（任务） | `flows.json` | `id, name, note, group, cron, timezone, enabled, vars, notify, log, retry, recovery, jitterMinutes, pausedAt, pausedReason, tplId, nodes, edges` | 派生任务（`tplId`）读时取模板当前流程图；`recovery` 默认关闭，含探测配置与运行态 |
+| Flow（任务） | `flows.json` | `id, name, note, group, cron, timezone, enabled, vars, notify, log, retry, recovery, jitterMinutes, pausedAt, pausedReason, tplId, nodes, edges, rev` | 派生任务（`tplId`）读时取模板当前流程图；`recovery` 默认关闭，含探测配置与运行态；`rev` 每次保存递增，用于并发编辑冲突检测 |
 | Node | `Flow.nodes[]` | `id, type, x, y, name, config` | `type` 必须是 `STEP_TYPES` 的键 |
 | Edge | `Flow.edges[]` | `id, source, sourceHandle, target` | `sourceHandle` 决定走哪条出口 |
 | Template | `templates.json` | `id, name, desc, vars, nodes, edges, log` + 派生计数 | 不含调度与真实凭据 |
@@ -150,6 +150,7 @@ flowchart TB
 | `index.js` | 启动、端口、数据目录 | 低 |
 | `api.js` | 所有路由、鉴权、批量、备份恢复、SSE、运行队列 | **高**（约 96KB，改前先读相关段） |
 | `engine.js` | 节点执行、断言、cookie 罐接入、日志过滤、foreach | **高**（执行语义的唯一事实源） |
+| `script-runner.cjs` | `script` 节点隔离子进程（内存/时长/输入/输出上限） | 中（安全边界） |
 | `model.js` | `STEP_TYPES`、`validateFlow` | 中（前后端共用） |
 | `store.js` | JSON 持久化、模板解析、统计、脱敏出口 | **高**（数据一致性） |
 | `scheduler.js` | croner 调度、抖动、跳过重叠、恢复探测对账 | 中 |
@@ -210,6 +211,8 @@ flowchart TB
 9. **版本单源**：运行时代码从 `version.js` 取版本，文档不写死版本号；三处 `package.json` 必须一致。
 10. **文案零常驻说明**：解释放悬停（`title`），不写副标题式说教（`copy-audit` 会拦）。
 11. **恢复探测默认关闭**：`recovery.enabled` 不得默认 true；`trigger='probe'` 不得触发自动停用，也不得发送任务通知。
+12. **运行生命周期**：排队/运行中的 Run 必须先落库；取消走 `AbortController`，所有可等待步骤（HTTP、curl、delay、重试退避、脚本子进程）都要响应 `signal`；取消不得触发自动停用或任务通知。
+13. **脚本隔离**：`script` 不得回到服务端主进程执行；必须经 `script-runner.cjs` 子进程（内存/时长/脚本/结果上限），父进程只传 JSON 快照、只收 JSON 结果。
 
 ---
 

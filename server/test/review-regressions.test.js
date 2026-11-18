@@ -90,6 +90,28 @@ test('HTTP timeout covers response body after headers arrive', async (t) => {
   assert.ok(Date.now() - start < 5000);
 });
 
+test('HTTP response body is stopped at the byte limit instead of being read whole', async (t) => {
+  let sent = 0;
+  const server = http.createServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'text/plain' });
+    const chunk = Buffer.alloc(16 * 1024, 'x');
+    const push = () => {
+      if (sent >= 40) return res.end();
+      sent++;
+      res.write(chunk, () => setTimeout(push, 0));
+    };
+    push();
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const result = await new Engine({ name: 'limit', nodes: [{ id: 'n', type: 'http', config: {
+    url: `http://127.0.0.1:${server.address().port}`,
+    maxRespBytes: 64 * 1024,
+  } }], edges: [] }).run();
+  assert.equal(result.ok, false);
+  assert.match(result.finalMessage, /响应体超过上限 65536 字节/);
+});
+
 test('MCP reports the package version and filters tasks using its search argument', async (t) => {
   const server = http.createServer((_req, res) => {
     res.setHeader('content-type', 'application/json');
@@ -181,4 +203,44 @@ test('API scopes, legacy key revocation, debug retries and restore fields', asyn
     assert.notEqual(first.json().id, second.json().id);
     assert.equal(repeat.statusCode, 409);
   } finally { globalThis.fetch = originalFetch; }
+});
+
+test('flow writes expose revision and reject stale baseRev', async (t) => {
+  const dir = directory(t);
+  const { app, store, scheduler } = buildServer({ dataDir: dir, port: 0 });
+  t.after(async () => { scheduler.stop(); await app.close(); });
+  const login = await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'test1234' } });
+  const headers = { cookie: login.headers['set-cookie'].split(';')[0] };
+  const flow = store.createFlow({ name: 'rev', nodes: [], edges: [] });
+  assert.equal(flow.rev, 0, '新任务 rev 从 0 开始');
+
+  const first = await app.inject({
+    method: 'PUT', url: `/api/flows/${flow.id}`, headers,
+    payload: { name: 'rev-1', baseRev: 0 },
+  });
+  assert.equal(first.statusCode, 200, first.body);
+  assert.equal(first.json().rev, 1, '保存后 rev 递增');
+  assert.equal(store.getFlow(flow.id).name, 'rev-1');
+
+  const stale = await app.inject({
+    method: 'PUT', url: `/api/flows/${flow.id}`, headers,
+    payload: { name: 'rev-stale', baseRev: 0 },
+  });
+  assert.equal(stale.statusCode, 409, '旧版本保存必须冲突');
+  assert.equal(stale.json().conflict, true);
+  assert.equal(stale.json().rev, 1);
+  assert.equal(store.getFlow(flow.id).name, 'rev-1', '冲突写入不能落盘');
+
+  const fresh = await app.inject({
+    method: 'PUT', url: `/api/flows/${flow.id}`, headers,
+    payload: { name: 'rev-2', baseRev: 1 },
+  });
+  assert.equal(fresh.statusCode, 200, fresh.body);
+  assert.equal(fresh.json().rev, 2);
+  assert.equal(fresh.json().name, 'rev-2');
+
+  // 旧客户端/脚本不带 baseRev 仍可写，保持兼容；但 rev 继续递增，让挂着的编辑页下次保存时发现冲突
+  const legacy = await app.inject({ method: 'PUT', url: `/api/flows/${flow.id}`, headers, payload: { name: 'rev-legacy' } });
+  assert.equal(legacy.statusCode, 200, legacy.body);
+  assert.equal(legacy.json().rev, 3);
 });
