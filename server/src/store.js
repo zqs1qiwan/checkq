@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { Cron } from 'croner';
-import { hashPwd, checkPassword } from './auth.js';
+import { hashPwd, checkPassword, hashApiKey } from './auth.js';
 import { secretKey, encryptSecrets, decryptSecrets, maskSecrets, encryptChannels, decryptChannels, maskChannels, encryptMeta, decryptMeta } from './secret.js';
 import { normalizeRetry, DEFAULT_RETRY } from './retry.js';
 import { normalizeRecovery, nextProbeTime } from './recovery.js';
@@ -151,8 +151,9 @@ export class Store {
   #load(file, fallback) {
     try {
       return JSON.parse(fs.readFileSync(file, 'utf8'));
-    } catch {
-      return fallback;
+    } catch (err) {
+      if (err.code === 'ENOENT') return fallback;
+      throw new Error(`无法读取存储文件 ${path.basename(file)}，请检查文件或从备份恢复：${err.message}`, { cause: err });
     }
   }
 
@@ -289,7 +290,9 @@ export class Store {
   listFlows() {
     // 预聚合「今日」运行统计（按服务器本地日期），避免每个任务都扫一遍 runs
     const todayByFlow = new Map();
+    const lastByFlow = new Map();
     for (const r of this.runs) {
+      if (!lastByFlow.has(r.flowId)) lastByFlow.set(r.flowId, r);
       if (!sameDay(r.startedAt)) continue;
       const rec = todayByFlow.get(r.flowId) || { runs: 0, success: 0, failed: 0 };
       rec.runs++;
@@ -298,7 +301,7 @@ export class Store {
       todayByFlow.set(r.flowId, rec);
     }
     return this.flows.map((f) => {
-      const last = this.runs.find((r) => r.flowId === f.id) || null;
+      const last = lastByFlow.get(f.id) || null;
       const lastRun = last ? {
         id: last.id, status: last.status, startedAt: last.startedAt, finalMessage: last.finalMessage,
       } : null;
@@ -405,7 +408,7 @@ export class Store {
       }
     }
     for (const k of allowed) {
-      if (patch[k] !== undefined) f[k] = patch[k];
+      if (patch[k] !== undefined && k !== 'recovery') f[k] = patch[k];
     }
     // 分组名始终收敛成合法值（去空白 / 限长）
     if (patch.group !== undefined) f.group = normalizeGroup(patch.group);
@@ -431,8 +434,8 @@ export class Store {
         attempts: 0,
         nextProbeAt: null,
         exhausted: false,
-        lastProbeAt: patch.recovery?.lastProbeAt ?? null,
-        lastResult: patch.recovery?.lastResult ?? null,
+        lastProbeAt: rec.lastProbeAt,
+        lastResult: rec.lastResult,
       };
     }
     // 兜底：任何写入路径（包括手写 API）让「已暂停 + 已开启探测」但没有下一次时间时补齐
@@ -721,7 +724,7 @@ export class Store {
     return this.meta.apiKeys.map((k) => ({
       id: k.id, name: k.name, prefix: k.prefix, createdAt: k.createdAt,
       lastUsedAt: k.lastUsedAt || null, userId: k.userId || null, disabled: !!k.disabled,
-      scopes: Array.isArray(k.scopes) && k.scopes.length ? k.scopes : ['read', 'run', 'write'],
+      scopes: Array.isArray(k.scopes) ? k.scopes : ['read', 'run', 'write'],
       expiresAt: k.expiresAt || null,
       expired: !!(k.expiresAt && k.expiresAt < Date.now()),
       daysLeft: k.expiresAt ? Math.ceil((k.expiresAt - Date.now()) / 86400e3) : null,
@@ -736,7 +739,7 @@ export class Store {
     const k = {
       id: crypto.randomUUID(), name: name || 'API Key', hash, prefix, userId: userId || null,
       createdAt: Date.now(), lastUsedAt: null, disabled: false,
-      scopes: Array.isArray(scopes) && scopes.length ? scopes : ['read', 'run', 'write'],
+      scopes: Array.isArray(scopes) ? scopes : ['read', 'run', 'write'],
       expiresAt: expiresAt || null,
       allowedIps: Array.isArray(allowedIps) ? allowedIps.filter(Boolean) : [],
     };
@@ -748,6 +751,7 @@ export class Store {
   revokeApiKey(id) {
     const i = this.meta.apiKeys.findIndex((k) => k.id === id);
     if (i === -1) return false;
+    if (this.meta.apiKey && hashApiKey(this.meta.apiKey) === this.meta.apiKeys[i].hash) delete this.meta.apiKey;
     this.meta.apiKeys.splice(i, 1);
     this.flush();
     return true;

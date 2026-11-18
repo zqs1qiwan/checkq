@@ -33,6 +33,15 @@ jar.setFrom('https://sub.a.com/y', ['s2=z; Path=/']);
 check('Domain 属性子域共享', jar.headerFor('https://sub.a.com/y').includes('w=1'), true);
 check('子域 cookie 不上溯主域(浏览器语义)', jar.headerFor('https://a.com/x').includes('s2=z'), false);
 
+const jar2 = new CookieJar();
+jar2.setFrom('https://a.com/api/login', ['p=1; Path=/api', 's=1; Secure', 'bad=1; Domain=com', 'e=1; Max-Age=0']);
+check('Path 前缀匹配', jar2.headerFor('https://a.com/api/x').includes('p=1'), true);
+check('Path 不匹配不回发', jar2.headerFor('https://a.com/other').includes('p=1'), false);
+check('Secure 只走 https', jar2.headerFor('http://a.com/api/x').includes('s=1'), false);
+check('Secure 在 https 回发', jar2.headerFor('https://a.com/api/x').includes('s=1'), true);
+check('公共后缀式 Domain 被拒', jar2.headerFor('https://evil.com/x').includes('bad=1'), false);
+check('Max-Age=0 立即删除', jar2.headerFor('https://a.com/api/x').includes('e=1'), false);
+
 // mergeCookieHeader：显式优先
 check('显式同名优先', mergeCookieHeader('sid=jar; uid=7', 'sid=mine'), 'sid=mine; uid=7');
 check('仅罐', mergeCookieHeader('a=1', ''), 'a=1');

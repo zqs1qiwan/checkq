@@ -20,9 +20,12 @@ const { app, scheduler } = server;
 await app.ready();
 
 let passed = 0, failed = 0;
-const check = (name, cond, extra = '') => {
-  if (cond) { passed++; console.log(`  PASS ${name}`); }
-  else { failed++; console.log(`  FAIL ${name} ${extra}`); }
+const check = async (name, cond, extra = '') => {
+  try {
+    const result = typeof cond === 'function' ? await cond() : await cond;
+    assert.ok(result, extra || name);
+    passed++; console.log(`  PASS ${name}`);
+  } catch (err) { failed++; console.log(`  FAIL ${name}: ${err.message}`); }
 };
 
 const login = async (body) => {
@@ -74,7 +77,7 @@ await check('跨站 Origin 的写操作被拒（CSRF 防护）', async () => {
 
 await check('同源 Origin 正常放行', async () => {
   const r = await app.inject({
-    method: 'POST', url: '/api/flows', headers: { cookie: admin.cookie, origin: 'http://localhost' },
+    method: 'POST', url: '/api/flows', headers: { cookie: admin.cookie, host: 'localhost', origin: 'http://localhost' },
     payload: { name: 'same-origin-ok', nodes: [] },
   });
   return r.statusCode === 200;
@@ -243,10 +246,11 @@ await check('弱新密码被拒（策略）', async () => {
   return r.statusCode === 400;
 });
 
+let neu;
 await check('改密成功且旧密码失效', async () => {
   const r = await app.inject({ method: 'POST', url: '/api/system/password', headers: { cookie: admin.cookie }, payload: { oldPassword: 'test1234', newPassword: 'NewStrong#2026' } });
   const old = await login({ username: 'admin', password: 'test1234' });
-  const neu = await login({ username: 'admin', password: 'NewStrong#2026' });
+  neu = await login({ username: 'admin', password: 'NewStrong#2026' });
   return r.statusCode === 200 && old.status === 401 && neu.status === 200;
 });
 
@@ -296,6 +300,8 @@ await check('修改用户名成功并强制重新登录', async () => {
   const newLogin = await login({ username: 'testuser', password: 'NewStrong#2026' });
   // 旧会话已失效
   const after = await app.inject({ method: 'GET', url: '/api/flows', headers: { cookie: neu.cookie } });
+  neu = newLogin;
+  admin.cookie = newLogin.cookie;
   return r.statusCode === 200 && j.reauth === true && oldLogin.status === 401 && newLogin.status === 200 && after.statusCode === 401;
 });
 
@@ -322,6 +328,7 @@ await check('退出全部设备会清空当前用户会话', async () => {
 });
 
 // ---- API Key 只存摘要 ----
+neu = await login({ username: 'testuser', password: 'NewStrong#2026' });
 await check('API Key 创建后只返回一次明文，服务端存摘要', async () => {
   const r = await app.inject({ method: 'POST', url: '/api/system/apikeys', headers: { cookie: neu.cookie }, payload: { name: 'MCP' } });
   const j = r.json();

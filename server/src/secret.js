@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { isSensitiveName } from './sensitive-name.js';
+import { collectSecrets, redactBody, redactDeep, redactText, redactUrl } from './redact.js';
 
 export { isSensitiveName };
 
@@ -18,35 +19,29 @@ const PREFIX = 'enc:v1:';
 const IV_LEN = 12;
 const TAG_LEN = 16;
 
-let cachedKey = null;
-
 /** 取（或生成）数据加密密钥 */
 export function secretKey(dataDir) {
-  if (cachedKey) return cachedKey;
   const fromEnv = process.env.CHECKQ_SECRET;
   if (fromEnv && fromEnv.length >= 8) {
-    cachedKey = crypto.createHash('sha256').update(String(fromEnv)).digest();
-    return cachedKey;
+    return crypto.createHash('sha256').update(String(fromEnv)).digest();
   }
   const file = path.join(dataDir, '.secret');
   try {
     const hex = fs.readFileSync(file, 'utf8').trim();
-    if (hex.length >= 64) {
-      cachedKey = Buffer.from(hex, 'hex');
-      return cachedKey;
-    }
-  } catch { /* 不存在则生成 */ }
+    if (!/^[0-9a-f]{64}$/i.test(hex)) throw new Error('密钥文件必须是 64 位十六进制');
+    return Buffer.from(hex, 'hex');
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+  }
   const key = crypto.randomBytes(32);
   try {
     fs.writeFileSync(file, key.toString('hex'), { mode: 0o600 });
     fs.chmodSync(file, 0o600);
   } catch (e) {
-    console.warn('[CheckQ] 无法写入 data/.secret，敏感凭据将不做静态加密:', e.message);
-    return (cachedKey = crypto.randomBytes(32)); // 退化为内存密钥（重启后旧密文解不开）
+    throw new Error(`无法保存 data/.secret，已停止启动以避免重启后凭据丢失：${e.message}`, { cause: e });
   }
-  cachedKey = key;
   console.log('[CheckQ] 已生成 data/.secret（600 权限）：敏感凭据（cookie/token/密码）静态加密存储');
-  return cachedKey;
+  return key;
 }
 
 export function isEncrypted(v) {
@@ -195,6 +190,7 @@ export function decryptSecrets(key, obj) {
 export function maskSecrets(obj) {
   if (!obj || typeof obj !== 'object') return obj;
   const out = { ...obj };
+  const secrets = collectSecrets(out.vars);
   if (out.vars && typeof out.vars === 'object') {
     const vars = {};
     for (const [k, v] of Object.entries(out.vars)) {
@@ -205,5 +201,41 @@ export function maskSecrets(obj) {
   if (out.notify && Array.isArray(out.notify.channels)) {
     out.notify = { ...out.notify, channels: maskChannels(out.notify.channels) };
   }
+  if (Array.isArray(out.nodes)) {
+    out.nodes = out.nodes.map((n) => maskNode(n, secrets));
+  }
+  return out;
+}
+
+/** 节点内联凭据：URL/代理、Cookie/Authorization 头、body、通知节点密钥 */
+const NODE_SECRET_HEADER = /^(cookie|set-cookie|authorization|proxy-authorization|x-api-key|api-key|x-auth-token|access-token|refresh-token|token|password|secret)$/i;
+function maskNode(node, secrets) {
+  if (!node || typeof node !== 'object') return node;
+  const out = { ...node };
+  if (!out.config || typeof out.config !== 'object') return out;
+  const config = redactDeep(out.config, secrets);
+  if (Array.isArray(config.headers)) {
+    config.headers = config.headers.map((h) => {
+      if (!h || typeof h !== 'object') return h;
+      return NODE_SECRET_HEADER.test(String(h.name || '')) ? { ...h, value: '***' } : h;
+    });
+  }
+  const headers = Array.isArray(config.headers) ? config.headers : [];
+  const contentType = headers.find((h) => String(h?.name || '').toLowerCase() === 'content-type')?.value || '';
+  if (typeof config.url === 'string') config.url = redactUrl(config.url, secrets);
+  if (typeof config.proxy === 'string') config.proxy = redactUrl(config.proxy, secrets);
+  else if (config.proxy && typeof config.proxy === 'object' && typeof config.proxy.url === 'string') {
+    config.proxy = { ...config.proxy, url: redactUrl(config.proxy.url, secrets) };
+  }
+  if (typeof config.webhookUrl === 'string') config.webhookUrl = redactUrl(config.webhookUrl, secrets);
+  if (typeof config.barkUrl === 'string') config.barkUrl = redactUrl(config.barkUrl, secrets);
+  if (config.body !== undefined) config.body = redactBody(config.body, contentType, secrets);
+  if (typeof config.text === 'string') config.text = redactText(config.text, secrets);
+  if (Array.isArray(config.channels)) config.channels = maskChannels(config.channels);
+  // 兼容旧 notify 节点的单字段目标
+  for (const key of ['tgToken', 'tgChat', 'token', 'chatId', 'password', 'secret']) {
+    if (config[key]) config[key] = '***';
+  }
+  out.config = config;
   return out;
 }

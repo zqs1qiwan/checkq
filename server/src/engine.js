@@ -13,6 +13,8 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { ProxyAgent } from 'undici';
 import vm from 'node:vm';
+import { collectSecrets, redactLogEntry, redactText } from './redact.js';
+import { isSensitiveName } from './sensitive-name.js';
 
 const MAX_STEPS = 500;
 const HTTP_TIMEOUT = 30000;
@@ -44,7 +46,7 @@ export class Engine {
     // 同一出口下匹配多条边：优先精确 handle，其次空 handle 边（UI 拖线未带 handle 时）
     const exact = this.edgeBy.get(`${fromId}:${handle}`) || [];
     const blank = this.edgeBy.get(`${fromId}:`) || [];
-    const list = exact.length ? exact : blank;
+    const list = exact.length ? exact : (handle === 'failed' ? [] : blank);
     return list.length ? list[0].target : null;
   }
 
@@ -117,7 +119,7 @@ export class Engine {
         const outcome = await this.execNode(node, state, stepLog, missing, logs, logSink);
         stepLog.ms = Date.now() - started;
         logs.push(stepLog);
-        if (logSink && shouldDisplay(stepLog)) logSink(stepLog);
+        if (logSink && shouldDisplay(stepLog)) logSink(redactLogEntry(stepLog, collectSecrets(vars)));
         if (missing.size) {
           stepLog.missing = [...missing];
           missing.clear();
@@ -181,7 +183,7 @@ export class Engine {
         stepLog.message = `步骤异常: ${err.message}`;
         stepLog.ms = Date.now() - started;
         logs.push(stepLog);
-        if (logSink && shouldDisplay(stepLog)) logSink(stepLog);
+        if (logSink && shouldDisplay(stepLog)) logSink(redactLogEntry(stepLog, collectSecrets(vars)));
         failed = true;
         finalMessage = stepLog.message;
         break;
@@ -197,6 +199,7 @@ export class Engine {
     //   all       = 所有步骤（默认，调试）
     //   log       = 仅 log 节点 + 失败步骤（qinglong/qiandao 风格，用户只看调教好的干净日志）
     //   log-final = 合并所有 log 节点为一条汇总日志 + 失败步骤
+    const secrets = collectSecrets(vars);
     let trimmedLogs = logs;
     if (!debugMode && (effectiveRecord === 'log' || effectiveRecord === 'log-final')) {
       const displayed = logs.filter((l) => shouldDisplay(l));
@@ -225,10 +228,12 @@ export class Engine {
 
     // 非调试模式：成功步骤不落请求/响应细节（保留失败步骤详情便于排障）
     // 注：clean 模式下 http 步骤本就不入日志，故此处无需再裁剪。
+    trimmedLogs = trimmedLogs.map((l) => redactLogEntry(l, secrets));
+    finalMessage = redactText(finalMessage, secrets);
 
     // 运行摘要：关键字提取结果汇总（PRD：每次运行关心什么值，一眼可见）
     const summary = keywordResults.length
-      ? keywordResults.map((r) => `${r.name}: ${r.values.join(', ')}`).join('； ')
+      ? redactText(keywordResults.map((r) => `${r.name}: ${r.values.join(', ')}`).join('； '), secrets)
       : '';
 
     // include.varsSnapshot=false：不记录运行级变量快照（PRD §4.7.4）
@@ -278,7 +283,7 @@ export class Engine {
     if (c.proxy && c.proxy.url) {
       proxyUrl = String(renderTemplate(c.proxy.url, vars, missing)).trim();
     }
-    stepLog.detail = { method, url, headers: redact(headers), body, attempt, proxy: proxyUrl || undefined, jar: jarUsed || undefined };
+    stepLog.detail = { method, url, headers, body, attempt, proxy: proxyUrl || undefined, jar: jarUsed || undefined };
     // include 开关（level=all 时生效；failure/summary 的裁剪在 run 末尾统一处理）
     const include = this.logInclude || { reqHeaders: true, reqBody: true, resBody: true };
     if (!include.reqHeaders) delete stepLog.detail.headers;
@@ -293,19 +298,16 @@ export class Engine {
           url, method, headers, body, c.timeout ? Math.max(1000, Number(c.timeout) * 1000) : HTTP_TIMEOUT, (c.redirect || 'follow') !== 'manual', proxyUrl));
       } else {
         const dispatcher = proxyUrl ? getProxyAgent(proxyUrl) : undefined;
-        const controller = new AbortController();
         // config.timeout 单位是秒（ConfigPanel「超时 (秒)」/ curl --max-time），fetch 需换算成毫秒
         const timeoutMs = c.timeout ? Math.max(1000, Number(c.timeout) * 1000) : HTTP_TIMEOUT;
-        const timer = setTimeout(() => controller.abort(), timeoutMs);
         const resp = await fetch(url, {
           method,
           headers,
           body,
           redirect: c.redirect || 'follow',
-          signal: controller.signal,
+          signal: AbortSignal.timeout(timeoutMs),
           dispatcher,
         });
-        clearTimeout(timer);
         status = resp.status;
         statusText = resp.statusText || '';
         // charset（4.2）：默认按响应 content-type；强制 c.charset 覆盖
@@ -350,7 +352,7 @@ export class Engine {
     stepLog.detail.response = {
       status,
       headers: respHeaders,
-      setCookie: (setCookies || []).length ? redactSetCookies(setCookies) : undefined,
+      setCookie: (setCookies || []).length ? setCookies : undefined,
       body: recBody,
       ms: duration,
     };
@@ -416,14 +418,15 @@ export class Engine {
             const wait = retry.backoffMs * attempt; // 线性退避
             stepLog.message = `${result.message} → 重试 ${attempt}/${retry.times}（${wait}ms 后）`;
             logs.push({ ...stepLog, ok: true }); // 重试过程记录为中间日志
-            if (logSink) logSink(logs[logs.length - 1]);
+            if (logSink) logSink(redactLogEntry(logs[logs.length - 1], collectSecrets(state.vars)));
             await new Promise((r) => setTimeout(r, wait));
             continue;
           }
           stepLog.ok = false;
           stepLog.message = result.message;
           stepLog.errorType = result.errorKind === 'network' ? 'network' : result.errorKind === 'assert' ? 'assert' : 'engine';
-          return null;
+          // 有 failed 出口时交给主循环继续走；未接时主循环按「失败」收尾
+          return { handle: 'failed' };
         }
         return { handle: 'success' };
       }
@@ -756,32 +759,11 @@ async function httpViaCurl(url, method, headers, body, timeoutMs, follow, proxyU
 }
 
 /** 头部脱敏：cookie/authorization 只留前 12 字符（日志展示用） */
-function redact(headers) {
-  const out = { ...headers };
-  for (const k of Object.keys(out)) {
-    if (/^(cookie|authorization)$/i.test(k)) {
-      out[k] = String(out[k]).slice(0, 12) + '…';
-    }
-  }
-  return out;
-}
-
-/** Set-Cookie 数组脱敏：每个 k=v 只留 k 和 v 的前 4 字符 */
-function redactSetCookies(list) {
-  return list.map((sc) => {
-    const pair = String(sc).split(';')[0] || '';
-    const i = pair.indexOf('=');
-    return i > 0 ? `${pair.slice(0, i)}=${pair.slice(i + 1, i + 5)}…` : `${pair.slice(0, 12)}…`;
-  });
-}
-
-/** 通用脱敏（PRD §4.7.3 扩展）：变量快照等场景，敏感名变量的值打码 */
+/** 通用脱敏（PRD §4.7.3 扩展）：变量快照等场景，敏感名变量的值整体打码 */
 export function redactVars(vars) {
   const out = {};
   for (const [k, v] of Object.entries(vars || {})) {
-    out[k] = /cookie|token|password|secret|key/i.test(k)
-      ? String(v).slice(0, 12) + '…'
-      : v;
+    out[k] = isSensitiveName(k) ? '***' : v;
   }
   return out;
 }

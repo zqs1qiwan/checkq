@@ -18,9 +18,12 @@ const { app, scheduler } = server;
 await app.ready();
 
 let passed = 0, failed = 0;
-const check = (name, cond, extra = '') => {
-  if (cond) { passed++; console.log(`  PASS ${name}`); }
-  else { failed++; console.log(`  FAIL ${name} ${extra}`); }
+const check = async (name, cond, extra = '') => {
+  try {
+    const result = typeof cond === 'function' ? await cond() : await cond;
+    assert.ok(result, extra || name);
+    passed++; console.log(`  PASS ${name}`);
+  } catch (err) { failed++; console.log(`  FAIL ${name}: ${err.message}`); }
 };
 
 const login = await app.inject({ method: 'POST', url: '/api/login', payload: { username: 'admin', password: 'test1234' } });
@@ -111,9 +114,10 @@ await check('运行日志/变量快照不含明文凭据（脱敏层）', async 
     nodes: [{ id: 'n0', type: 'http', name: 'r', x: 0, y: 0, config: { method: 'GET', url: 'https://example.com', headers: [{ name: 'cookie', value: '{{cookie}}', enabled: true }], body: '', asserts: [] } }],
     edges: [], log: { level: 'all', record: 'all' },
   };
-  const { Engine } = await import('../src/engine.js');
-  const res = await new Engine(flow).run({});
-  const text = JSON.stringify(res);
+  const created = await app.inject({ method: 'POST', url: '/api/flows', headers: H, payload: flow });
+  const res = await app.inject({ method: 'POST', url: `/api/flows/${created.json().id}/run`, headers: H, payload: {} });
+  assert.strictEqual(res.statusCode, 200, res.body);
+  const text = res.body;
   return !text.includes('gld:sess=abc123def456ghi789jkl012mno345pqr') && !text.includes('SIGNATUREVALUE');
 });
 

@@ -18,7 +18,7 @@
 | 说得清 | 失败要能给出原因与下一步 | 只把原始响应丢给用户 |
 | 拿得走 | 模板 = 流程 + 各自参数，能复用、能分发 | 把模板做成一次性复制品 |
 
-**本期（v0.5）只做六件事**：演练场、结构可见、可解释失败、修改即重跑、模板市场 v1、度量最小版。详见 `docs/PRD.md` §5。
+**已交付的六项基础能力**：演练场、结构可见、可解释失败、修改即重跑、模板市场 v1、度量最小版。交付记录见 `docs/PRD.md` §5；下一阶段见 §9。
 
 **明确的非目标**（不要顺手加）：
 
@@ -97,6 +97,10 @@ flowchart TB
 
 **存储**：六个 JSON 文件，全量读写；没有数据库、没有外部依赖。这就是"零依赖"的来源，也是容量上限的来源。`flows.json`、`templates.json`、`channels.json` 共用 AES-256-GCM 密钥；`meta.json` 的 AI Key 与旧 API Key 也走同一加密（内存明文、落盘密文）。
 
+**出口安全**：运行日志在写入 `runs.json` 和 SSE 推送前统一经过 `redact.js`；默认备份、任务/模板导出也走同一套脱敏。执行状态（`state.vars` / `last`）保留原值，脱敏只发生在对外出口。
+
+**客户端 IP**：默认只信任本机/私有网段来源的 `X-Forwarded-For`；`CHECKQ_TRUST_PROXY=1` 全信任、`=0` 不信任、其他值按 CIDR 列表匹配连接来源（见 `api.js clientIp`）。
+
 ---
 
 ## 2. 数据模型
@@ -125,7 +129,7 @@ flowchart TB
 | `foreach` | `each` / `next` | 循环体入口 / 循环结束后的后继 |
 | 其它 | `next` | 唯一出口 |
 
-**未连线时的行为（务必记住）**：`failed` 出口没接线 → 判运行失败；`true` / `false` / `next` 出口没接线 → **链路结束并判为正常完成**（`engine.js` 明确如此）。v0.5 的 P0-2 会加"缺线提示 + 保存检查清单"，但**不改变执行语义**——要改语义必须先开产品决策。
+**未连线时的行为（务必记住）**：`failed` 出口没接线 → 判运行失败；接了线 → 沿失败分支继续执行。`true` / `false` / `next` 出口没接线 → **链路结束并判为正常完成**（`engine.js` 明确如此）。v0.5 的 P0-2 会加"缺线提示 + 保存检查清单"，但**不改变执行语义**——要改语义必须先开产品决策。
 
 ### 2.3 变量与渲染
 
@@ -144,7 +148,7 @@ flowchart TB
 | 文件 | 职责 | 改动风险 |
 |---|---|---|
 | `index.js` | 启动、端口、数据目录 | 低 |
-| `api.js` | 所有路由、鉴权、批量、备份恢复、SSE、运行队列 | **高**（98KB，改前先读相关段） |
+| `api.js` | 所有路由、鉴权、批量、备份恢复、SSE、运行队列 | **高**（约 96KB，改前先读相关段） |
 | `engine.js` | 节点执行、断言、cookie 罐接入、日志过滤、foreach | **高**（执行语义的唯一事实源） |
 | `model.js` | `STEP_TYPES`、`validateFlow` | 中（前后端共用） |
 | `store.js` | JSON 持久化、模板解析、统计、脱敏出口 | **高**（数据一致性） |
@@ -156,6 +160,7 @@ flowchart TB
 | `cookiejar.js` | run 级 cookie 罐 | 中 |
 | `har-import.js` / `curl-import.js` / `har-export.js` | 导入导出 | 中（格式兼容） |
 | `auth.js` / `totp.js` / `secret.js` | 登录、2FA、凭据加密 | **高**（安全） |
+| `redact.js` | 日志/导出统一脱敏：URL、headers、body、动态值、Set-Cookie（纯函数） | 中（所有日志出口都走这里） |
 | `iprange.js` / `sensitive-name.js` / `text-regex.js` | 小工具（部分前后端共用） | 低 |
 | `notify.js` | 12 类通知渠道的唯一发送出口（统一超时、并行、返回结构） | 中（所有通知都走这里） |
 | `concurrency.js` | 全局并发限制器（默认 4，可环境变量覆盖） | 低（纯函数） |
@@ -197,7 +202,7 @@ flowchart TB
 1. **出口约定**：handle 名字与 `STEP_TYPES[type].outputs` 一致；新增出口要同时改 `engine.js` 的 `nextNodeId` 调用点与配置面板。
 2. **缺线语义**：`failed` 未接 = 失败；其它未接 = 正常完成。改语义 = 产品决策。
 3. **模板跟随**：读时取模板（`store.resolveFlow`）；`PUT` 时用 `sameLogic`（忽略坐标）判断脚本是否被改，改了则脱钩并返回 `detached`。不要在任务里存模板的副本做"同步"。
-4. **凭据**：新增任何落盘字段，若可能含凭据，必须走 `secret.js` 加密；新增任何日志/导出字段，必须脱敏。
+4. **凭据**：新增任何落盘字段，若可能含凭据，必须走 `secret.js` 加密；新增任何日志/导出字段，必须走 `redact.js` 脱敏。执行内部保留原值，只在写盘/SSE/备份/导出出口脱敏。
 5. **单任务串行**：同一 flow 同时只跑一个；调度触发时若上次未结束则跳过这一拍。
 6. **日志唯一入口**：任务行「日志」、状态徽章、运行结束提示都打开同一个连续日志流。
 7. **持久化**：新增数据一律走 `store.js`，保持"原子写 + 变更立即 flush + 进程退出 flush"。
@@ -268,22 +273,25 @@ flowchart TB
 ## 6. 验收命令
 
 ```bash
-# 全量单测（31 个文件）
+# 全量单测
 node --test "server/test/*.test.js"
 
 # 前端构建
 npm run build
+node tools/copy-web.cjs
 
 # 三个静态审计
 node tools/project-audit.cjs
 node tools/copy-audit.cjs
 node tools/secret-scan.cjs
+node tools/diagnose-replay.cjs
 
 # 起一个本地实例（另开终端；DATA_DIR 指向任意空目录）
 cd server
 PORT=19998 DATA_DIR=/tmp/cq-ui node src/index.js   # 不设 ADMIN_PASSWORD 时首启自动生成并打印到日志
 
 # 浏览器类检查（需要上一步的实例）
+node tools/seed-demo-instance.cjs http://localhost:19998
 node tools/ui-smoke.cjs http://localhost:19998
 node tools/ui-interaction-audit.cjs http://localhost:19998
 

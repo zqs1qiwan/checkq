@@ -12,11 +12,12 @@
  *   CHECKQ_API_KEY   X-API-Key（推荐，免登录；从 CheckQ 设置页生成）
  *
  * 启动：node mcp/checkq-mcp.cjs
- * 协议：JSON-RPC 2.0 over stdio（Content-Length framing 与 newline-delimited 两种都兼容）
+ * 协议：JSON-RPC 2.0 over stdio（newline-delimited）
  */
 const BASE = (process.env.CHECKQ_URL || '').replace(/\/+$/, '');
 const PASSWORD = process.env.CHECKQ_PASSWORD || '';
 const API_KEY = process.env.CHECKQ_API_KEY || '';
+const { version: VERSION } = require('../server/package.json');
 
 if (!BASE) {
   process.stderr.write('CHECKQ_URL 未设置\n');
@@ -117,7 +118,11 @@ async function callTool(name, args) {
     }
     case 'flow_notify_test': return api('POST', '/api/flows/' + encodeURIComponent(args.id) + '/notify-test', {});
     case 'flow_delete': return api('DELETE', '/api/flows/' + encodeURIComponent(args.id));
-    case 'flows_list': return api('GET', '/api/flows');
+    case 'flows_list': {
+      const flows = await api('GET', '/api/flows');
+      const query = String(args.search || '').trim().toLowerCase();
+      return query ? flows.filter((f) => [f.name, f.note, f.group].some((v) => String(v || '').toLowerCase().includes(query))) : flows;
+    }
     case 'flow_get': return api('GET', '/api/flows/' + args.id);
     case 'flow_run': return api('POST', '/api/flows/' + args.id + '/run', {});
     case 'flow_update_vars': {
@@ -165,7 +170,7 @@ function pump() {
 
 async function handle(msg) {
   if (msg.method === 'initialize') {
-    write({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'checkq-mcp', version: '0.3.17' } } });
+    write({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'checkq-mcp', version: VERSION } } });
     return;
   }
   if (msg.method === 'tools/list') {

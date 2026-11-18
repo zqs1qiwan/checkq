@@ -82,3 +82,16 @@ export function normalizeIp(ip) {
   const mapped = s.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
   return mapped ? mapped[1] : s;
 }
+
+/**
+ * 连接来源是否属于本机/私有网段。
+ * 只有这类来源才默认允许读取 X-Forwarded-For；公网客户端直连时自填 XFF 不可信。
+ */
+export function isPrivateIp(ip) {
+  const s = normalizeIp(ip);
+  if (!net.isIP(s)) return false;
+  return ipAllowed(s, [
+    '127.0.0.0/8', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '169.254.0.0/16',
+    '::1/128', 'fc00::/7', 'fe80::/10',
+  ]);
+}

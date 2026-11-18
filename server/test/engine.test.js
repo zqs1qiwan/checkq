@@ -120,6 +120,30 @@ await ok('断言失败 → 日志含完整响应', async () => {
   assert.ok(!res.logs.some((l) => l.name === 'should-not-run'), '后续节点不应执行');
 });
 
+await ok('断言失败 → 已接 failed 出口时走失败分支', async () => {
+  const failBranch = {
+    id: 'f3', name: 'assert-failed-branch', vars: {},
+    nodes: [
+      { id: 'b0', type: 'http', name: 'req', x: 0, y: 0, config: {
+        method: 'GET', url: 'https://example.com/api/data', headers: [], body: '',
+        asserts: [{ expr: 'last.json.ok == true', expect: 'true' }],
+      } },
+      { id: 'b1', type: 'log', name: 'handled', x: 200, y: 80, config: { text: '已走失败分支' } },
+      { id: 'b2', type: 'log', name: 'should-not-run', x: 200, y: -80, config: { text: 'never' } },
+    ],
+    edges: [
+      { id: 'eb0', source: 'b0', sourceHandle: 'failed', target: 'b1' },
+      { id: 'eb1', source: 'b0', sourceHandle: 'success', target: 'b2' },
+    ],
+  };
+  mockFetch([{ body: JSON.stringify({ ok: false, detail: 'nope' }) }]);
+  const eng = new Engine(failBranch);
+  const res = await eng.run({});
+  assert.strictEqual(res.ok, true, '失败分支处理完后不应再判整体失败');
+  assert.ok(res.logs.some((l) => l.name === 'handled'), 'failed 出口应被执行');
+  assert.ok(!res.logs.some((l) => l.name === 'should-not-run'), 'success 出口不应执行');
+});
+
 // ========== 4. QD/HAR 导入 → 真实执行 ==========
 await ok('QD 模板导入 → 流程可执行', async () => {
   // 构造一个最小 QD 模板（不依赖任何具体站点）

@@ -77,6 +77,15 @@ await check('X-Forwarded-For 优先于容器内看到的网关 IP', async () => 
   return r.statusCode === 200;
 });
 
+await check('公网直连不可伪造 X-Forwarded-For 绕过允许名单', async () => {
+  const r = await app.inject({
+    method: 'GET', url: '/api/flows',
+    remoteAddress: '203.0.113.20',
+    headers: { 'x-api-key': key, 'x-forwarded-for': '10.1.2.3' },
+  });
+  return r.statusCode === 403 && /允许名单/.test(r.json().error);
+});
+
 await check('更新 Key 的允许名单立即生效', async () => {
   const list = await app.inject({ method: 'GET', url: '/api/system/apikeys', headers: { cookie } });
   const k = list.json().keys.find((x) => x.name === 'limited');

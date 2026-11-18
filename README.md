@@ -33,9 +33,8 @@ CheckQ 把签到、打卡、查询、监控、上报这类重复 HTTP 操作做�
 ## 快速开始
 
 ```bash
-mkdir checkq && cd checkq
-curl -O https://raw.githubusercontent.com/zqs1qiwan/checkq/main/docker-compose.yml
-# 或克隆本仓库后:
+git clone https://github.com/zqs1qiwan/checkq.git
+cd checkq
 docker compose up -d --build
 ```
 
@@ -66,14 +65,17 @@ services:
 | 赋值 | 文本模板或表达式计算 → 写入变量 |
 | 提取 | 正则从响应体/状态码/响应头提取 → 变量 |
 | 延迟 | 等待 N 秒 |
+| 随机延迟 | 在指定秒数区间内随机等待 |
 | 日志 | 输出信息到运行日志 |
 | 通知 | 节点内推送（Webhook / Telegram / Bark）；任务级通知渠道共 12 种，在编辑器「通知渠道」里配置 |
+| 脚本 | 执行 JS 计算并返回变量；当前隔离能力见安全说明 |
+| 遍历 | 对数组逐项运行循环体 |
 
 变量模板语法：`{{var}}`、`{{user.email}}`，缺变量渲染为空并在日志记录缺失名。
 
 ## API
 
-除 `/api/login`、`/api/health`、`/api`、`/api/openapi.json`、`/api/system/bootstrap`、`/api/me` 外，所有 `/api/*` 需登录 cookie 或 `X-API-Key`。
+除 `/api/login`、`/api/health`、`/api`、`/api/openapi.json`、`/api/system/bootstrap`、`/api/me` 与演练端点 `/api/demo/profile|checkin|items` 外，所有 `/api/*` 需登录 cookie 或 `X-API-Key`。
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
@@ -101,7 +103,7 @@ cd web && npm install && npm run dev   # http://localhost:5173，/api 代理到 
 # 单测
 cd server && node test/engine.test.js && node test/engine-v02.test.js && node test/curl-import.test.js && node test/logging.test.js
 # 全量单测
-cd server && for f in test/*.test.js; do node $f; done
+node --test "server/test/*.test.js"   # 在仓库根目录运行
 # 前端规范（生成本地 .agents/skills，不入库）
 npx modern-web-guidance@latest install
 ```

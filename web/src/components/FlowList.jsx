@@ -54,14 +54,33 @@ export default function FlowList({ onOpen, onLogout }) {
     } catch { /* 隐私模式忽略 */ }
   }, [flows]);
 
-  const load = () => {
-    api.flows().then(setFlows).catch((e) => setToast({ kind: 'fail', text: e.message }));
+  const load = (opts = {}) => {
+    api.flows().then(setFlows).catch((e) => {
+      if (!opts.silent) setToast({ kind: 'fail', text: e.message });
+    });
     api.templates().then(setTemplates).catch(() => setTemplates([]));
     api.stats().then(setStats).catch(() => setStats(null));
-    setSelected(new Set());
+    if (!opts.silent) setSelected(new Set());
   };
 
   useEffect(() => { load(); }, []);
+
+  // 定时任务在后台跑：可见时轻量刷新，避免首页状态一直停在旧快照
+  useEffect(() => {
+    let alive = true;
+    const tick = () => {
+      if (!alive || document.visibilityState === 'hidden') return;
+      load({ silent: true });
+    };
+    const timer = setInterval(tick, 30000);
+    const onVisible = () => { if (document.visibilityState === 'visible') tick(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, []);
 
   // 演练场是否可用（P0-1）：以服务端开关为准，不自己写死
   useEffect(() => { api.features().then(setFeatures).catch(() => setFeatures({ demo: false })); }, []);
@@ -90,6 +109,10 @@ export default function FlowList({ onOpen, onLogout }) {
     if (filter === 'recent-failed' && f.lastRun?.status !== 'failed') return false;
     return true;
   });
+
+  const runningIds = new Set(stats?.runningFlowIds || []);
+  const queuedIds = new Set(stats?.queuedFlowIds || []);
+  const liveState = (id) => (runningIds.has(id) ? 'running' : (queuedIds.has(id) ? 'queued' : null));
 
   // 分组：按组名聚合；「未分组」永远排在最后；组内保持列表原顺序
   const groupMap = new Map();
@@ -242,6 +265,14 @@ export default function FlowList({ onOpen, onLogout }) {
   const openLog = async (f) => {
     // 打开连续日志流（多次运行滚动在一起）
     setModal({ type: 'logstream', flowId: f.id, flowName: f.name });
+  };
+
+  // 连续日志里的诊断动作：能就地改变量的改变量，结构问题回画布
+  const fixFromLog = (flowId, action) => {
+    const f = (flows || []).find((x) => x.id === flowId);
+    if (!f) return;
+    if (action.type === 'edit-vars') setModal({ type: 'vars', flow: f });
+    else if (action.type === 'edit-assert') { setModal(null); onOpen(flowId); }
   };
 
   const lastStatus = (f) => {
@@ -554,8 +585,14 @@ export default function FlowList({ onOpen, onLogout }) {
                             {f.nextRunAt ? <span style={{ fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap' }}>{fmtTime(f.nextRunAt)}</span> : <span style={{ color: 'var(--muted)', fontSize: 12 }}>—</span>}
                           </td>
                           <td style={{ whiteSpace: 'nowrap', fontSize: 12, color: f.enabled ? 'var(--ok)' : (f.pausedAt ? 'var(--warn)' : 'var(--muted)') }}>
-                            <span className={`status-dot${f.enabled ? ' on' : (f.pausedAt ? ' paused' : '')}`} />
-                            {f.enabled ? '已启用' : (f.pausedAt ? <span title={pausedTitle(f)}>已暂停</span> : '已停用')}
+                            {liveState(f.id) === 'running' ? (
+                              <><span className="status-dot on" /><span className="live-tag">运行中</span></>
+                            ) : liveState(f.id) === 'queued' ? (
+                              <><span className="status-dot paused" /><span className="live-tag">排队中</span></>
+                            ) : (
+                              <><span className={`status-dot${f.enabled ? ' on' : (f.pausedAt ? ' paused' : '')}`} />
+                                {f.enabled ? '已启用' : (f.pausedAt ? <span title={pausedTitle(f)}>已暂停</span> : '已停用')}</>
+                            )}
                           </td>
                           <td className="col-last">{lastStatus(f)}</td>
                           <td>
@@ -647,7 +684,14 @@ export default function FlowList({ onOpen, onLogout }) {
       )}
 
       {modal?.type === 'logstream' && (
-        <LogStream key={modal.refresh || modal.flowId} flowId={modal.flowId} flowName={modal.flowName} onClose={() => setModal(null)} />
+        <LogStream
+          key={modal.refresh || modal.flowId}
+          flowId={modal.flowId}
+          flowName={modal.flowName}
+          onClose={() => setModal(null)}
+          onToast={(text, kind) => setToast({ kind, text })}
+          onFix={(action) => fixFromLog(modal.flowId, action)}
+        />
       )}
 
       {modal?.type === 'template-editor' && (

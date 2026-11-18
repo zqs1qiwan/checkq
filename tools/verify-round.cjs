@@ -7,7 +7,7 @@
  *
  * 用法：node tools/verify-round.cjs [baseUrl]
  * 前提：目标实例已启动（默认 http://localhost:19998）。
- * 只读：不会修改任何任务/设置。
+ * 仅用于本地/测试实例：UI 冒烟包含创建、保存与删除临时任务等写操作。
  */
 const { spawnSync } = require('child_process');
 const path = require('path');
@@ -42,6 +42,7 @@ step('服务端全量单测', NODE, ['--test', 'test/*.test.js'], { cwd: path.jo
 step('文案审计', NODE, ['tools/copy-audit.cjs']);
 step('秘密扫描', NODE, ['tools/secret-scan.cjs']);
 step('项目一致性', NODE, ['tools/project-audit.cjs']);
+step('诊断规则回放', NODE, ['tools/diagnose-replay.cjs']);
 step('UI 冒烟', NODE, ['tools/ui-smoke.cjs', BASE]);
 step('UI 交互巡检', NODE, ['tools/ui-interaction-audit.cjs', BASE]);
 

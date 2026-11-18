@@ -105,16 +105,15 @@ await ok('level=summary → 所有步骤只记标题', async () => {
 });
 
 // ========== 3. 变量脱敏 ==========
-await ok('redactVars 敏感名值打码, 非敏感名保留', async () => {
+await ok('redactVars 敏感名整体打码, 非敏感名保留', async () => {
   const r = redactVars({
     cookie: 'sess=abcdef1234567890; other=1',
     token: 'tok_very_long_secret_value',
     username: 'plainuser',
     note: '普通内容',
   });
-  assert.ok(r.cookie.startsWith('sess=abcdef1'), `cookie 应截断保留前12字符: ${r.cookie}`);
-  assert.ok(r.cookie.endsWith('…'));
-  assert.ok(r.token.endsWith('…'));
+  assert.strictEqual(r.cookie, '***');
+  assert.strictEqual(r.token, '***');
   assert.strictEqual(r.username, 'plainuser');
   assert.strictEqual(r.note, '普通内容');
 });

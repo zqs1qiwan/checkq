@@ -1,6 +1,8 @@
-# CheckQ 安全说明（v0.4.3）
+# CheckQ 安全说明（v0.6.3）
 
 > 覆盖：账号体系、密码存储、TOTP 两步验证、会话、权限、已知风险与自查结论、运维手册。
+
+> **2026-11-18 审计补充**：`0.6.3` 已修复日志/默认备份脱敏与来源 IP 信任边界（T02/T03/T04）；`script` 节点的 Node `vm` 仍能通过注入对象访问宿主 `process`（T01），read Key 仍可读取任务定义中的明文凭据（T05）。在这两项完成前，不应把脚本执行或只读 Key 描述为凭据隔离边界。完整清单见 [全项目审查](PROJECT-REVIEW-2026-11-18.md)。
 
 ## 1. 账号体系
 
@@ -57,7 +59,7 @@
 - **CSRF**：写操作（POST/PUT/DELETE）校验 `Origin` 必须同源，跨站一律 403（浏览器表单/图片攻击不带同源 Origin）；会话 Cookie 同时 `SameSite=Strict`；
 - **CSP 与内联样式**：组件里存在少量内联 `style`，因此 `style-src` 保留 `'unsafe-inline'`；`script-src` 严格 `'self'`（无内联脚本、无第三方 CDN）；
 - **注入面**：HTTP 节点的 URL/头/体为用户自有配置，属于「用户对自己目标的主动请求」，不属于服务端注入；引擎内不使用 `eval` 渲染模板（表达式走白名单函数 + jexl 沙箱，1s 超时）；
-- **敏感信息脱敏**：运行日志里的 cookie / authorization 头自动脱敏（保留前 12 字符），变量快照同样脱敏。
+- **敏感信息脱敏**：运行日志在写盘和 SSE 推送前统一脱敏（`server/src/redact.js`）：Cookie / Set-Cookie / Authorization / API Key 等请求与响应头、URL userinfo 与敏感 query、JSON/表单请求体和响应体、动态提取值、断言证据与关键字摘要；执行内部变量保持原值，避免破坏提取链。变量快照敏感名统一显示 `***`，不保留前缀。
 
 
 ### 6.1 IP 访问控制（v0.4.3）
@@ -67,7 +69,7 @@
 | Key 级 **IP 允许名单** | 每把 API Key 可设来源 IP / CIDR 列表（空=不限）；名单外 → 403「IP 不在该 API Key 的允许名单内」 |
 | 全局 **IP 黑名单** | 设置 → 账号安全 →「访问控制」；被拉黑的 IP **登录与 API Key 同时被拦**（403） |
 | 实现 | `server/src/iprange.js`：IPv4/IPv6 + CIDR 解析匹配，IPv4-mapped IPv6 归一，非法条目忽略 |
-| 来源 IP 判定 | 优先 `X-Forwarded-For` 第一个地址，其次 `req.ip`；⚠️ Docker 端口映射下容器只看到网关地址，需调用方带 XFF 或改用 `--network host` |
+| 来源 IP 判定 | 默认：连接来源是本机/私有网段（含 Docker 网关、局域网反代）时，读取 `X-Forwarded-For` 第一个地址；公网直连不信任该头。需要显式信任时可设 `CHECKQ_TRUST_PROXY=1`、`=0` 或 CIDR 列表；实现见 `iprange.js` / `api.js clientIp` |
 
 ## 7. 自查：已发现并修复的问题
 
@@ -196,7 +198,7 @@ ssh root@checkq.local 'docker exec checkq node -e "
 | 密钥与密码绑定 | ✅ 绑定（改密码 ⇒ 旧 cookie 密文解不开，需重填） | ❌ 无（明文） | ❌ 不绑定（改密码不影响凭据），但**改密码会吊销全部会话** |
 | 脚本/代码 | 模板 `tpl['tpl']` 也加密存储 | 脚本是**文件**（`data/scripts/`），非秘密 | 脚本节点代码在 `flows.json`（明文，代码不是秘密） |
 | 共享模板 | 公共模板用**全局同一把**密钥（弱一点） | 公共 env 明文 | 模板默认变量导出时**脱敏** |
-| 日志脱敏 | 失败信息入库（`tasklog.msg`） | 有日志系统 | ✅ 运行日志/变量快照自动脱敏（cookie/authorization 保留前 12 字符） |
+| 日志脱敏 | 失败信息入库（`tasklog.msg`） | 有日志系统 | ✅ 写盘/SSE 前统一脱敏 URL、请求/响应头、Cookie、body、提取值；变量快照敏感名整体 `***` |
 | 备份 | DB 备份 | `data.tgz`（含明文 env） | ✅ **备份默认脱敏**；完整备份需再输一次当前密码 |
 | 密钥文件保护 | `userkey` 用全局 `aes_key` 加密 | `auth.json`/`env.sh` 在 `blackFileList`（脚本不可读写） | `data/.secret` 600 权限，不在任何 API 返回里 |
 

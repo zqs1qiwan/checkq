@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import Modal from './Modal.jsx';
+import DiagnosisCard from './DiagnosisCard.jsx';
 import { IconDownload, IconBug } from './Icons.jsx';
 
 /**
@@ -15,7 +16,7 @@ function fmtClock(ts) {
   return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
-export default function LogStream({ flowId, flowName, onClose }) {
+export default function LogStream({ flowId, flowName, onClose, onToast, onFix }) {
   const [entries, setEntries] = useState([]);
   const [hasMore, setHasMore] = useState(false);
   const [nextBefore, setNextBefore] = useState(null);
@@ -89,8 +90,14 @@ export default function LogStream({ flowId, flowName, onClose }) {
   const groups = [];
   for (const e of entries) {
     const last = groups[groups.length - 1];
-    if (last && last.runId === e.runId) last.items.push(e);
-    else groups.push({ runId: e.runId, startedAt: e.startedAt, status: e.status, summary: e.summary, finalMessage: e.finalMessage, items: [e] });
+    if (last && last.runId === e.runId) {
+      last.items.push(e);
+      if (!last.diagnosis && e.diagnosis) last.diagnosis = e.diagnosis;
+    }
+    else groups.push({
+      runId: e.runId, startedAt: e.startedAt, status: e.status, summary: e.summary,
+      finalMessage: e.finalMessage, diagnosis: e.diagnosis, items: [e],
+    });
   }
   const visibleGroups = groups
     .map((g) => ({ ...g, items: filter === 'error' ? g.items.filter((i) => !i.ok) : g.items }))
@@ -127,6 +134,17 @@ export default function LogStream({ flowId, flowName, onClose }) {
                   <IconDownload size={13} /> 导出
                 </button>
               </div>
+              {g.status === 'failed' && g.diagnosis?.cause && (
+                <div className="logstream-diag">
+                  <DiagnosisCard
+                    diagnosis={g.diagnosis}
+                    onShowResponse={() => toggleDebug(g.runId)}
+                    onEditVars={(vars) => onFix?.({ type: 'edit-vars', vars })}
+                    onEditAssert={(stepId) => onFix?.({ type: 'edit-assert', stepId })}
+                    onToast={onToast}
+                  />
+                </div>
+              )}
               {g.items.map((e, i) => (
                 <div key={i} className={`logstream-line${e.ok ? '' : ' bad'}`}>
                   <span className="logstream-ts">{fmtClock(e.startedAt).slice(6)}</span>

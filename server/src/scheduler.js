@@ -11,6 +11,8 @@ export class Scheduler {
     this.store = store;
     this.runner = runner; // { runFlow(flow, trigger) }
     this.jobs = new Map(); // flowId -> Cron
+    this.timezones = new Map();
+    this.pendingTimers = new Map();
     this.interval = null;
     this.recoveryInterval = null;
   }
@@ -27,6 +29,9 @@ export class Scheduler {
   stop() {
     for (const job of this.jobs.values()) job.stop();
     this.jobs.clear();
+    this.timezones.clear();
+    for (const timer of this.pendingTimers.values()) clearTimeout(timer);
+    this.pendingTimers.clear();
     if (this.interval) clearInterval(this.interval);
     if (this.recoveryInterval) clearInterval(this.recoveryInterval);
   }
@@ -39,9 +44,12 @@ export class Scheduler {
     // 移除不再需要的（包含非 flows 的汇总任务 id 统一在这里对账）
     for (const [id, job] of this.jobs) {
       if (id.startsWith('__summary__')) continue;
-      if (!want.has(id) || job.expression !== want.get(id).cron) {
+      if (!want.has(id) || job.getPattern() !== want.get(id).cron || this.timezones.get(id) !== (want.get(id).timezone || 'Asia/Shanghai')) {
         job.stop();
         this.jobs.delete(id);
+        this.timezones.delete(id);
+        clearTimeout(this.pendingTimers.get(id));
+        this.pendingTimers.delete(id);
       }
     }
     // 新增
@@ -51,11 +59,13 @@ export class Scheduler {
         const job = new Cron(f.cron, { timezone: f.timezone || 'Asia/Shanghai' }, async () => {
           const flow = this.store.getFlow(id);
           if (!flow || !flow.enabled) return;
+          if (this.pendingTimers.has(id) || this.runner.isBusy?.(id)) return;
           // 随机抖动（PRD §4.5）：触发时刻在 cron 点后随机延迟 0-jitterMinutes 分钟，避免整点风控
           const jitter = Math.min(30, Math.max(0, Number(flow.jitterMinutes) || 0));
           const delay = jitter > 0 ? Math.random() * jitter * 60 * 1000 : 0;
           if (delay > 0) console.log(`[CheckQ] jitter: ${flow.name} 延迟 ${Math.round(delay / 1000)}s (${jitter}min 抖动)`);
-          setTimeout(async () => {
+          const timer = setTimeout(async () => {
+            this.pendingTimers.delete(id);
             const cur = this.store.getFlow(id);
             if (!cur || !cur.enabled) return;
             // 上一次运行（可能正在退避重试）还没结束 → 跳过这一拍，避免同一任务堆积
@@ -63,10 +73,13 @@ export class Scheduler {
               console.log(`[CheckQ] 跳过 ${cur.name}：上一次运行/重试尚未结束`);
               return;
             }
-            await this.runner.runFlow(cur, 'cron');
+            try { await this.runner.runFlow(cur, 'cron'); }
+            catch (err) { console.error(`[CheckQ] 调度运行异常 ${cur.name}: ${err.message}`); }
           }, delay);
+          this.pendingTimers.set(id, timer);
         });
         this.jobs.set(id, job);
+        this.timezones.set(id, f.timezone || 'Asia/Shanghai');
       } catch (err) {
         console.error(`[CheckQ] cron "${f.cron}" invalid on flow ${f.name}: ${err.message}`);
       }
@@ -109,17 +122,19 @@ export class Scheduler {
     const id = '__summary__';
     const existing = this.jobs.get(id);
     if (!cfg.enabled || !cfg.time) {
-      if (existing) { existing.stop(); this.jobs.delete(id); }
+      if (existing) { existing.stop(); this.jobs.delete(id); this.timezones.delete(id); }
       return;
     }
     const expr = `${String(cfg.time).split(':')[1] || '0'} ${String(cfg.time).split(':')[0] || '8'} * * *`;
-    if (existing && existing.expression === expr) return;
+    const timezone = cfg.timezone || 'Asia/Shanghai';
+    if (existing && existing.getPattern() === expr && this.timezones.get(id) === timezone) return;
     if (existing) existing.stop();
     try {
       const job = new Cron(expr, { timezone: cfg.timezone || 'Asia/Shanghai' }, async () => {
         if (this.runner.sendDailySummary) await this.runner.sendDailySummary();
       });
       this.jobs.set(id, job);
+      this.timezones.set(id, timezone);
     } catch (err) {
       console.error(`[CheckQ] daily summary cron invalid: ${err.message}`);
     }

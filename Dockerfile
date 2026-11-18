@@ -8,6 +8,7 @@ COPY web/ ./
 COPY server/src/text-regex.js /server/src/text-regex.js
 COPY server/src/sensitive-name.js /server/src/sensitive-name.js
 COPY server/src/model.js /server/src/model.js
+COPY server/src/structure.js /server/src/structure.js
 RUN npm run build
 
 # ---- server ----

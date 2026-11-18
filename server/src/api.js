@@ -17,8 +17,9 @@ import { Store, hashPwd, verifyPwd } from './store.js';
 import { checkPassword, checkUsername, ROLES, PASSWORD_MIN, hashApiKey, newApiKey } from './auth.js';
 import { generateSecret, verifyTotp, generateRecoveryCodes, hashRecoveryCode, verifyRecoveryCode, otpauthUri } from './totp.js';
 import { buildOpenApi } from './openapi.js';
-import { ipAllowed, normalizeIp } from './iprange.js';
+import { ipAllowed, isPrivateIp, normalizeIp } from './iprange.js';
 import { Engine, redactVars } from './engine.js';
+import { collectSecrets, redactRunForExport } from './redact.js';
 import { validateFlow } from './model.js';
 import { importHar } from './har-import.js';
 import { parseCurl } from './curl-import.js';
@@ -71,13 +72,27 @@ export function buildServer({ dataDir, port }) {
   const ACCOUNT_FAIL_WINDOW = 15 * 60e3; // 单账号锁定窗口
 
   /**
-   * 取客户端真实 IP：
-   * - 优先 X-Forwarded-For 第一个地址（反代/局域网可信场景）
-   * - 其次 req.ip（注意：Docker 端口映射时容器看到的是网关地址，如 172.17.0.1）
+   * 取客户端真实 IP。
+   * - 默认只信任「本机/私有网段」来源的 X-Forwarded-For（Docker 网关、局域网反代）；
+   * - 公网客户端自填 XFF 不采用，避免伪造 IP 绕过黑名单/限流；
+   * - CHECKQ_TRUST_PROXY=1 信任全部来源；=0 不信任任何 XFF；也可填 CIDR 列表。
    */
+  function connectionIp(req) {
+    return normalizeIp(req.socket?.remoteAddress || req.raw?.socket?.remoteAddress || req.ip || '');
+  }
+
+  function trustForwarded(peer) {
+    const raw = String(process.env.CHECKQ_TRUST_PROXY || '').trim();
+    if (raw === '1' || raw.toLowerCase() === 'true') return true;
+    if (raw === '0' || raw.toLowerCase() === 'false') return false;
+    if (raw) return ipAllowed(peer, raw.split(/[\s,;]+/));
+    return isPrivateIp(peer);
+  }
+
   function clientIp(req) {
+    const peer = connectionIp(req);
     const xff = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
-    return normalizeIp(xff || req.ip || '');
+    return normalizeIp((trustForwarded(peer) && xff) ? xff : (peer || req.ip || ''));
   }
 
   /** 当前会话（过期即清理） */
@@ -108,9 +123,13 @@ export function buildServer({ dataDir, port }) {
     const cur = new Promise((res) => { release = res; });
     // 上一轮即使异常结束，也不能毒化整条队列：吞掉旧错误后继续排队。
     const tail = prev.catch(() => {});
-    queueMap.set(flowId, tail.then(() => cur));
+    const queued = tail.then(() => cur);
+    queueMap.set(flowId, queued);
     return tail.then(async () => {
-      try { return await fn(); } finally { release(); }
+      try { return await fn(); } finally {
+        release();
+        if (queueMap.get(flowId) === queued) queueMap.delete(flowId);
+      }
     });
   };
   const queuedSet = new Set(); // 等待中的 flowId（排队中徽章）
@@ -133,7 +152,7 @@ export function buildServer({ dataDir, port }) {
           // 任务级重试：调试运行不重试（要看到断点处的真实失败）；恢复探测也不重试，
           // 否则一次探测会连续打多次请求，绕过“最多探测 N 次”的风控上限。
           const cfg = normalizeRetry(flow.retry);
-          if (debugStopId || trigger === 'probe') cfg.enabled = false;
+          if (debugStopId || debug === true || trigger === 'probe') cfg.enabled = false;
           const maxAttempts = cfg.enabled ? cfg.maxAttempts : 1;
           let lastMessage = '';
           try {
@@ -644,7 +663,7 @@ export function buildServer({ dataDir, port }) {
           return reply.code(401).send({ error: `API Key 已过期并被回收（${key.name}）`, expired: true });
         }
         // 作用域：read=查看 / run=运行任务 / write=增删改配置
-        const scopes = Array.isArray(key.scopes) && key.scopes.length ? key.scopes : ['read', 'run', 'write'];
+        const scopes = Array.isArray(key.scopes) ? key.scopes : ['read', 'run', 'write'];
         const need = ['GET', 'HEAD'].includes(req.method) ? 'read'
           : (/^\/api\/flows\/[^/]+\/run$/.test(path) ? 'run' : 'write');
         if (!scopes.includes(need)) {
@@ -1103,7 +1122,7 @@ export function buildServer({ dataDir, port }) {
     if (!requireAdmin(req, reply)) return;
     const { name, scopes } = req.body || {};
     const wanted = Array.isArray(scopes) ? scopes.filter((s) => ['read', 'run', 'write'].includes(s)) : [];
-    const useScopes = wanted.length ? wanted : ['read', 'run', 'write'];
+    const useScopes = Array.isArray(scopes) ? wanted : ['read', 'run', 'write'];
     // 回收日期：expiresAt（毫秒时间戳）；null = 永不过期
     let expiresAt = null;
     if (req.body && req.body.expiresAt) {
@@ -1658,7 +1677,18 @@ export function buildServer({ dataDir, port }) {
 
   app.get('/api/system/stats', async () => {
     const s = store.stats();
-    return { ...s, queuedFlows: [...runningFlows, ...queuedSet], queueCount: queuedSet.size, runningCount: runningFlows.size, maxConcurrency: runLimiter.limit, globalWaiting: runLimiter.waiting, dailySummary: store.meta.dailySummary || null, unreadNotifications: store.listNotifications(1).unread };
+    return {
+      ...s,
+      queuedFlows: [...runningFlows, ...queuedSet],
+      queuedFlowIds: [...queuedSet],
+      runningFlowIds: [...runningFlows],
+      queueCount: queuedSet.size,
+      runningCount: runningFlows.size,
+      maxConcurrency: runLimiter.limit,
+      globalWaiting: runLimiter.waiting,
+      dailySummary: store.meta.dailySummary || null,
+      unreadNotifications: store.listNotifications(1).unread,
+    };
   });
 
   // 站内通知（inbox 渠道）：列表 / 已读 / 清空
@@ -1751,16 +1781,19 @@ export function buildServer({ dataDir, port }) {
 
   // 备份/恢复：导出 flows/runs/templates（meta 密码不导出）；恢复以新 ID 导入避免覆盖
   // 备份（默认脱敏：cookie/token/密码等一律清空，适合分享与存档）
-  app.get('/api/system/backup', async () => ({
-    version: VERSION,
-    exportedAt: new Date().toISOString(),
-    masked: true,
-    note: '敏感凭据已脱敏；runs 为历史审计数据，恢复时不导入；如需完整迁移请用 POST /api/system/backup（需当前密码）',
-    flows: store.flows.map((f) => store.maskedFlow(f)),
-    runs: store.runs,
-    templates: store.templates.map((t) => store.maskedTemplate(t)),
-    channels: store.maskedSystemChannels(),
-  }));
+  app.get('/api/system/backup', async () => {
+    const secretsByFlow = new Map(store.flows.map((f) => [f.id, collectSecrets(f.vars)]));
+    return {
+      version: VERSION,
+      exportedAt: new Date().toISOString(),
+      masked: true,
+      note: '敏感凭据已脱敏；runs 仅保留审计摘要，恢复时不导入；如需完整迁移请用 POST /api/system/backup（需当前密码）',
+      flows: store.flows.map((f) => store.maskedFlow(f)),
+      runs: store.runs.map((r) => redactRunForExport(r, secretsByFlow.get(r.flowId) || [])),
+      templates: store.templates.map((t) => store.maskedTemplate(t)),
+      channels: store.maskedSystemChannels(),
+    };
+  });
 
   // 完整备份（含凭据）：需要再次输入当前密码，防止误下载/误分享
   app.post('/api/system/backup', async (req, reply) => {
@@ -1792,9 +1825,12 @@ export function buildServer({ dataDir, port }) {
       const nf = store.createFlow({
         name: `${f.name}（恢复）`,
         note: f.note || '从备份恢复',
+        group: f.group,
         cron: f.cron || '', timezone: f.timezone, jitterMinutes: f.jitterMinutes || 0,
         vars: f.vars || {}, nodes: f.nodes || [], edges: f.edges || [],
         notify: f.notify || {}, log: f.log || null, tplId: null,
+        retry: f.retry,
+        recovery: f.recovery ? { enabled: f.recovery.enabled, intervalMinutes: f.recovery.intervalMinutes, maxAttempts: f.recovery.maxAttempts } : undefined,
       });
       nf.enabled = false;
       createdFlows.push({ id: nf.id, name: nf.name });
@@ -1803,7 +1839,7 @@ export function buildServer({ dataDir, port }) {
     if (Array.isArray(b.templates)) {
       for (const t of b.templates) {
         if (!t?.name) continue;
-        const nt = store.createTemplate({ name: `${t.name}（恢复）`, desc: t.desc, vars: t.vars || {}, varNames: t.varNames, nodes: t.nodes || [], edges: t.edges || [], log: t.log || null });
+        const nt = store.createTemplate({ name: `${t.name}（恢复）`, desc: t.desc, vars: t.vars || {}, varNames: t.varNames, nodes: t.nodes || [], edges: t.edges || [], log: t.log || null, notify: t.notify || {} });
         createdTemplates.push({ id: nt.id, name: nt.name });
       }
     }
@@ -1848,6 +1884,8 @@ export function buildServer({ dataDir, port }) {
     const all = store.listRuns(f.id, 500);
     const runs = before ? all.slice(all.findIndex((r) => r.id === before) + 1) : all;
     const entries = [];
+    let lastRunId = null;
+    let consumed = 0;
     for (const r of runs) {
       const lines = (r.logs || []).map((l) => ({
         runId: r.id,
@@ -1861,17 +1899,26 @@ export function buildServer({ dataDir, port }) {
         ms: l.ms || 0,
         summary: r.summary || '',
         finalMessage: r.finalMessage || '',
+        diagnosis: r.diagnosis || null,
       }));
+      // 按「整次运行」分页：宁可少装一次，也不把一次运行的日志切到两页（避免翻页丢行/重行）
+      if (entries.length && entries.length + lines.length > limit) break;
       entries.push(...lines);
+      lastRunId = r.id;
+      consumed++;
       if (entries.length >= limit) break;
     }
     const truncated = entries.slice(0, limit);
+    const hasMore = runs.length > consumed;
     return {
       entries: truncated,
-      runs: runs.slice(0, 60).map((r) => ({ id: r.id, startedAt: r.startedAt, status: r.status, count: (r.logs || []).length, summary: r.summary || '', finalMessage: r.finalMessage || '' })),
-      hasMore: entries.length > truncated.length || runs.length > 60,
-      // 下一页从「本页最后一条展示的运行」之后继续（取 runs[59]，不是 runs[60]，否则第 61 条摘要被跳过）
-      nextBefore: runs.length ? runs[Math.min(runs.length - 1, 59)].id : null,
+      runs: runs.slice(0, Math.min(60, consumed)).map((r) => ({
+        id: r.id, startedAt: r.startedAt, status: r.status, count: (r.logs || []).length,
+        summary: r.summary || '', finalMessage: r.finalMessage || '', diagnosis: r.diagnosis || null,
+      })),
+      hasMore,
+      // 下一页从「本页最后一次完整运行」之后继续
+      nextBefore: lastRunId,
     };
   });
 
@@ -1995,7 +2042,7 @@ export function buildServer({ dataDir, port }) {
     const resolved = await resolveEntry(entry);
     if (!resolved.ok) return reply.code(400).send({ error: resolved.errors.join('；') });
 
-    const existing = store.templates.find((t) => t.market && t.market.sourceId === id);
+    const existing = store.templates.find((t) => t.market && t.market.sourceId === id && t.market.sourceUrl === url);
     if (existing && mode !== 'overwrite' && mode !== 'copy') {
       return reply.code(409).send({ error: `已经导入过「${existing.name}」`, conflict: { templateId: existing.id, name: existing.name } });
     }

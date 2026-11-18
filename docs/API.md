@@ -86,7 +86,7 @@ X-API-Key: <key>
 | GET | /api/system/settings | `{ hasApiKey, apiKey }` |
 | POST | /api/system/password | `{ oldPassword, newPassword }` |
 | POST | /api/system/apikey | 生成/重新生成 API Key，返回 `{ apiKey }` |
-| GET | /api/system/stats | `{ flows, enabledScheduled, templates, todayRuns, todaySuccess, todayFailed, successRate, nextRunAt, queuedFlows, queueCount, runningCount, maxConcurrency, globalWaiting, dailySummary }` |
+| GET | /api/system/stats | `{ flows, enabledScheduled, templates, todayRuns, todaySuccess, todayFailed, successRate, nextRunAt, runningFlowIds, queuedFlowIds, queuedFlows, queueCount, runningCount, maxConcurrency, globalWaiting, dailySummary }` |
 | GET/PUT | /api/system/ai | AI 助手配置（baseUrl/apiKey/model，key 打码回显） |
 | POST | /api/ai/generate | `{ sentence }` → LLM 生成流程草稿（≤6 节点，http URL 必填，草稿 enabled:false） |
 | GET/PUT | /api/system/daily-summary-config | 每日汇总定时配置（兼容一版；`targetFlowIds` 只读，不再写入；新代码用 `/api/system/notify`） |
@@ -104,7 +104,7 @@ X-API-Key: <key>
 | GET/PUT | /api/system/ui | 界面偏好（提示级别 toastLevel） |
 | GET/POST | /api/system/bootstrap | 首次启动初始化：查询是否需要建管理员 / 创建首个管理员账号 |
 | GET | /api/system/push-targets | 兼容一版：系统渠道摘要 `[{ id, type, title, enabled }]`（不再返回任务） |
-| GET | /api/flows/:id/logs | 连续日志流（多次运行的人话日志，支持 limit/before 翻页） |
+| GET | /api/flows/:id/logs | 连续日志流（多次运行的人话日志，支持 limit/before 翻页）；entries 与 runs 摘要带 `diagnosis`；按整次运行分页 |
 
 ### 任务 (Flows)
 | 方法 | 路径 | 说明 |
@@ -229,7 +229,7 @@ data: { "id":"run-xxx", "status":"success", "durationMs":..., "summary":"...", "
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | /api/system/push-targets | 兼容一版：系统渠道摘要 `[{ id, type, title, enabled }]` |
-| GET | /api/flows/:id/logs | 连续日志流（多次运行的人话日志） |
+| GET | /api/flows/:id/logs | 连续日志流（多次运行的人话日志；`before` 游标按整次运行推进） |
 | GET | /api/system/backup | 脱敏备份（凭据已清空） |
 | POST | /api/system/backup | 完整备份（需当前密码，含明文凭据） |
 

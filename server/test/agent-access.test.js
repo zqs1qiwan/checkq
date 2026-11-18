@@ -17,9 +17,12 @@ const { app, scheduler } = server;
 await app.ready();
 
 let passed = 0, failed = 0;
-const check = (name, cond, extra = '') => {
-  if (cond) { passed++; console.log(`  PASS ${name}`); }
-  else { failed++; console.log(`  FAIL ${name} ${extra}`); }
+const check = async (name, cond, extra = '') => {
+  try {
+    const result = typeof cond === 'function' ? await cond() : await cond;
+    assert.ok(result, extra || name);
+    passed++; console.log(`  PASS ${name}`);
+  } catch (err) { failed++; console.log(`  FAIL ${name}: ${err.message}`); }
 };
 
 const login = await app.inject({ method: 'POST', url: '/api/login', payload: { username: 'admin', password: 'test1234' } });
@@ -150,19 +153,19 @@ await check('OpenAPI 描述里标注了 API Key 认证与作用域', async () =>
 });
 
 await check('MCP 工具覆盖 agent 需要的操作', async () => {
-  const src = fs.readFileSync('mcp/checkq-mcp.cjs', 'utf8');
+  const src = fs.readFileSync(new URL('../../mcp/checkq-mcp.cjs', import.meta.url), 'utf8');
   const need = ['flows_list', 'flow_get', 'flow_run', 'flow_logs', 'flow_update_vars', 'flow_update', 'flow_toggle', 'flow_create', 'flow_notify_test', 'templates_list', 'template_get', 'runs_list', 'run_get', 'stats', 'notifications_list', 'whoami', 'health'];
   return need.every((n) => src.includes(`name: '${n}'`));
 });
 
 await check('MCP 支持 API Key 方式（CHECKQ_API_KEY）', async () => {
-  const src = fs.readFileSync('mcp/checkq-mcp.cjs', 'utf8');
+  const src = fs.readFileSync(new URL('../../mcp/checkq-mcp.cjs', import.meta.url), 'utf8');
   return src.includes('CHECKQ_API_KEY') && src.includes("h['x-api-key']");
 });
 
-await check('MCP 不提供删除任务的工具（避免误删）', async () => {
-  const src = fs.readFileSync('mcp/checkq-mcp.cjs', 'utf8');
-  return !src.includes("name: 'flow_delete'");
+await check('MCP 删除任务明确标注不可恢复及 write 权限', async () => {
+  const src = fs.readFileSync(new URL('../../mcp/checkq-mcp.cjs', import.meta.url), 'utf8');
+  return /name: 'flow_delete'.*不可恢复.*write/.test(src);
 });
 
 await app.close();
