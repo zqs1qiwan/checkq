@@ -10,9 +10,13 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT" /></a>
   <img src="https://img.shields.io/github/package-json/v/zqs1qiwan/checkq?label=version" alt="version" />
   <img src="https://img.shields.io/badge/node-22-339933.svg" alt="Node 22" />
+  <img src="https://img.shields.io/badge/MCP-20%20tools-6f42c1.svg" alt="MCP 20 tools" />
+  <img src="https://img.shields.io/badge/OpenAPI-3.1-85ea2d.svg" alt="OpenAPI 3.1" />
 </p>
 
 CheckQ 把签到、打卡、查询、监控、上报这类重复 HTTP 操作做成可视化流程：拖拽积木搭建，导入 HAR 自动生成，定时执行，失败能看到原因。Docker 单容器部署，数据落在本地 `/data`。不内置浏览器渲染、验证码识别、多语言运行时与集群能力；需要时请用外部服务。
+
+**它同时是一个给 AI 用的自动化平台**：MCP（20 个工具）+ REST（OpenAPI 3.1）+ 作用域 API Key。Claude / Cursor / 其他 Agent 可以直接建任务、改流程、运行、读日志、修断言；内置 AI 助手还能把一句描述变成可编辑草稿。人只负责确认结果和开启调度。
 
 - 文档站：<https://zqs1qiwan.github.io/checkq/>
 - 当前版本：`0.6.5`，变更见 [docs/CHANGELOG.md](docs/CHANGELOG.md)
@@ -21,6 +25,7 @@ CheckQ 把签到、打卡、查询、监控、上报这类重复 HTTP 操作做�
 ## 目录
 
 - [特性](#特性)
+- [AI / Agent 接入](#ai--agent-接入)
 - [步骤类型](#步骤类型)
 - [快速开始](#快速开始)
 - [项目结构](#项目结构)
@@ -32,6 +37,14 @@ CheckQ 把签到、打卡、查询、监控、上报这类重复 HTTP 操作做�
 - [English](#english)
 
 ## 特性
+
+### AI / Agent 接入
+
+- **MCP server** — `mcp/checkq-mcp.cjs` 零依赖 stdio 服务，20 个工具覆盖任务、模板、运行、连续日志、通知测试与身份自检；Claude Desktop / Cursor / OpenCode 等支持 MCP 的 Agent 可直接操作 CheckQ
+- **REST + OpenAPI 3.1** — `GET /api/openapi.json` 机器可读，任何能发 HTTP 的 Agent / 脚本 / CI 都能接入
+- **作用域 API Key** — `read` / `run` / `write` / `secrets` 四档，可限定任务或分组；给 Agent 的 Key 不必给账号密码
+- **内置 AI 助手** — 自带 OpenAI 兼容端点（DeepSeek / OpenAI / Ollama），一句话生成可编辑流程草稿；支持连接测试、超时与最大 tokens 配置
+- **安全边界** — AI 草稿默认停用、不自动运行、不接触真实凭据；所有 AI 调用进审计，Key 加密落盘、错误与日志脱敏
 
 ### 可视化流程搭建
 
@@ -74,6 +87,54 @@ CheckQ 把签到、打卡、查询、监控、上报这类重复 HTTP 操作做�
 
 - Docker 单容器，零数据库依赖；数据落在 `/data`（`flows.json`、`runs.json`、`templates.json`、`meta.json`、`notifications.json`、`channels.json`，以及权限 600 的 `.secret` 密钥文件）
 - 多阶段构建：前端产物打进服务端镜像，一个容器同时提供 API 与面板
+
+## AI / Agent 接入
+
+CheckQ 不只是给人点的面板，也是给 AI 直接操作的自动化平台。三种用法可以单独或组合：
+
+### 1. MCP：把 CheckQ 接到你的 AI 客户端
+
+`mcp/checkq-mcp.cjs` 是零依赖 stdio MCP server。给 Agent 两样东西即可：
+
+```json
+{
+  "mcpServers": {
+    "checkq": {
+      "command": "node",
+      "args": ["/绝对路径/CheckQ/mcp/checkq-mcp.cjs"],
+      "env": {
+        "CHECKQ_URL": "http://checkq.local:18888",
+        "CHECKQ_API_KEY": "cq_xxxxxxxxxxxxxxxxxxxx"
+      }
+    }
+  }
+}
+```
+
+然后可以直接说：
+
+- “帮我每天 8 点签到 example.com，看到「已签到」算成功；先跑一次，失败就把响应给我看。”
+- “这个任务昨天失败了，读一下日志，判断是 cookie 过期还是断言写错。”
+- “把模板「每日签到」创建 3 份任务，变量分别用这三个 token。”
+
+Agent 会调用 `flow_create` / `flow_update` / `flow_run` / `flow_logs` / `run_get` 等工具完成；你确认结果后再让它 `flow_toggle` 开启调度。
+
+### 2. REST：自建 Agent / 脚本 / CI
+
+所有面板能力都有 REST 端点；`GET /api/openapi.json` 可直接生成客户端。API Key 分作用域并可限定任务/分组：
+
+| 作用域 | 能做什么 |
+|---|---|
+| `read` | 看任务、模板、运行记录、日志、统计（凭据脱敏） |
+| `run` | 触发任务运行 |
+| `write` | 改变量 / 调度 / 新建任务 / 通知配置 |
+| `secrets` | 读取明文凭据（默认不给） |
+
+### 3. 内置 AI 助手：一句话生成草稿
+
+设置 → AI 助手填自己的 OpenAI 兼容端点（DeepSeek / OpenAI / Ollama 等），在快速组装里输入一句话生成流程草稿；预览后创建。草稿固定 `enabled:false`，不会自动运行。复杂站点可以先导入 HAR / cURL，再让 AI 修改流程。
+
+> **安全**：AI 只产出流程草稿或调用被授权的作用域接口；不会自动发起未确认的外部请求，也不会拿到未授权的凭据。给外部 Agent 请使用受限 API Key，不要给账号密码。详见 [docs/AGENT-ACCESS.md](docs/AGENT-ACCESS.md)、[docs/MCP.md](docs/MCP.md)、[docs/AI-ASSIST.md](docs/AI-ASSIST.md)。
 
 ## 步骤类型
 
@@ -178,7 +239,9 @@ npm run dev
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | 运行时架构、模块地图、不变量、扩展指南与验收命令 |
 | [MAINTENANCE.md](docs/MAINTENANCE.md) | 维护者手册：门禁、发版、社区健康、安全与文档站 |
 | [API.md](docs/API.md) | REST API、鉴权、API Key 作用域与调用示例 |
-| [MCP.md](docs/MCP.md) | stdio MCP server 接入与工具清单 |
+| [MCP.md](docs/MCP.md) | stdio MCP server 接入与 20 个工具清单 |
+| [AGENT-ACCESS.md](docs/AGENT-ACCESS.md) | 外部 Agent 接入：给什么、MCP/REST 对比、作用域与安全边界 |
+| [AI-ASSIST.md](docs/AI-ASSIST.md) | 内置 AI 助手、一句话生成草稿与模型接入 |
 | [SECURITY.md](docs/SECURITY.md) | 账号、会话、凭据加密、加固项、已知风险与运维手册 |
 | [CHANGELOG.md](docs/CHANGELOG.md) | 版本变更记录 |
 | [TEMPLATE-MARKET.md](docs/TEMPLATE-MARKET.md) | 模板索引与导入协议 |
@@ -237,14 +300,25 @@ CI：`.github/workflows/ci.yml` 跑单测 + 前端构建 + 文案/项目一致�
 
 CheckQ is an open-source, visual automation framework for repetitive HTTP work — check-ins, scheduled queries, monitoring and reporting. Build flows on a drag-and-drop canvas, import HAR / cURL / QD templates, schedule runs with cron, and read a plain-language diagnosis when something fails. Ships as a single Docker container with zero database dependency; data lives under `/data`.
 
+It is also an automation platform for AI agents: an MCP server (20 tools), a REST API with OpenAPI 3.1, and scoped API keys. Claude, Cursor or any MCP-capable agent can create tasks, edit flows, run them, read logs and fix assertions; the built-in AI assistant turns one sentence into an editable draft. Humans only confirm the result and enable the schedule.
+
 ### Features
 
 - Visual flow editor with ten step types: HTTP, condition, set, extract, delay, random delay, log, notify, script, foreach
 - HAR / cURL / QD template import; reusable templates with per-task variables; JSON export and CSV batch instantiation
+- AI / Agent access: MCP server with 20 tools, REST + OpenAPI 3.1, scoped API keys (`read` / `run` / `write` / `secrets`), and a built-in OpenAI-compatible assistant for one-sentence flow drafts
 - Per-task cron, timezone and jitter; exponential backoff, auto-pause, optional recovery probe, run cancel and global timeout
 - Nine-class failure diagnosis, continuous logs, live run drawer, redacted HAR export; credentials encrypted at rest (AES-256-GCM) and redacted in logs and backups
 - Multi-user roles, TOTP 2FA, revocable sessions, scoped API keys, audit log
 - 12 notification channels (inbox, Webhook, Bark, Telegram, Server酱, PushPlus, DingTalk, WeCom, Feishu, Gotify, ntfy, SMTP)
+
+### AI / Agent access
+
+- **MCP** — `mcp/checkq-mcp.cjs`, zero-dependency stdio server with 20 tools for tasks, templates, runs, continuous logs, notification tests and identity checks.
+- **REST + OpenAPI 3.1** — `GET /api/openapi.json` is machine-readable; any HTTP-capable agent, script or CI can integrate.
+- **Scoped API keys** — `read` / `run` / `write` / `secrets`, optionally limited to specific tasks or groups. Give an agent a restricted key, never your account password.
+- **Built-in AI assistant** — bring your own OpenAI-compatible endpoint (DeepSeek / OpenAI / Ollama); one sentence becomes an editable draft, disabled by default, never auto-run.
+- **Safety** — AI drafts do not touch real credentials; AI calls are audited, keys encrypted at rest, errors and logs redacted. See [docs/AGENT-ACCESS.md](docs/AGENT-ACCESS.md), [docs/MCP.md](docs/MCP.md), [docs/AI-ASSIST.md](docs/AI-ASSIST.md).
 
 ### Quick Start
 
