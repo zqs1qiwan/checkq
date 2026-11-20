@@ -1,85 +1,171 @@
 <!doctype html>
-<html lang="zh-CN" data-mode="dark">
+<html lang="zh-CN" data-mode="dark" data-base="./">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <meta name="color-scheme" content="dark light" />
+<meta name="theme-color" content="#0b0e11" media="(prefers-color-scheme: dark)" />
+<meta name="theme-color" content="#f3f5f6" media="(prefers-color-scheme: light)" />
 <title>任务与流程 · CheckQ 文档</title>
-<meta name="description" content="节点、变量、分组、调度、重试" />
+<meta name="description" content="CheckQ 任务与流程：节点类型、流程变量与表达式、任务分组与折叠、独立 cron 调度与任务级退避重试、模板自动跟随、编辑器效率与点选生成逻辑。" />
+<meta name="robots" content="index, follow" />
+<link rel="canonical" href="https://zqs1qiwan.github.io/checkq/tasks.html" />
+<meta property="og:type" content="article" />
+<meta property="og:site_name" content="CheckQ 文档" />
+<meta property="og:locale" content="zh_CN" />
+<meta property="og:title" content="任务与流程 · CheckQ 文档" />
+<meta property="og:description" content="CheckQ 任务与流程：节点类型、流程变量与表达式、任务分组与折叠、独立 cron 调度与任务级退避重试、模板自动跟随、编辑器效率与点选生成逻辑。" />
+<meta property="og:url" content="https://zqs1qiwan.github.io/checkq/tasks.html" />
+<meta property="og:image" content="https://zqs1qiwan.github.io/checkq/assets/social-preview.png" />
+<meta property="og:image:width" content="1280" />
+<meta property="og:image:height" content="640" />
+<meta property="og:image:alt" content="CheckQ 文档：开源的可视化 HTTP 自动化流程引擎" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="任务与流程 · CheckQ 文档" />
+<meta name="twitter:description" content="CheckQ 任务与流程：节点类型、流程变量与表达式、任务分组与折叠、独立 cron 调度与任务级退避重试、模板自动跟随、编辑器效率与点选生成逻辑。" />
+<meta name="twitter:image" content="https://zqs1qiwan.github.io/checkq/assets/social-preview.png" />
 <link rel="icon" href="./assets/brand/checkq-mark.svg" type="image/svg+xml" />
+<link rel="apple-touch-icon" href="./assets/brand/apple-touch-icon.png" />
 <link rel="stylesheet" href="./assets/style.css" />
-
+<link rel="sitemap" type="application/xml" href="https://zqs1qiwan.github.io/checkq/sitemap.xml" />
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebSite","@id":"https://zqs1qiwan.github.io/checkq/#website","url":"https://zqs1qiwan.github.io/checkq/","name":"CheckQ 文档","inLanguage":"zh-CN","description":"CheckQ 是开源的可视化 HTTP 自动化流程引擎：积木式流程、调度与失败重试、日志与通知、模板联动、REST API 与 MCP。","publisher":{"@type":"Organization","name":"CheckQ","url":"https://github.com/zqs1qiwan/checkq","logo":{"@type":"ImageObject","url":"https://zqs1qiwan.github.io/checkq/assets/brand/checkq-mark.svg","width":120,"height":120}}},{"@type":"TechArticle","@id":"https://zqs1qiwan.github.io/checkq/tasks.html#article","headline":"任务与流程","name":"任务与流程","description":"CheckQ 任务与流程：节点类型、流程变量与表达式、任务分组与折叠、独立 cron 调度与任务级退避重试、模板自动跟随、编辑器效率与点选生成逻辑。","url":"https://zqs1qiwan.github.io/checkq/tasks.html","mainEntityOfPage":"https://zqs1qiwan.github.io/checkq/tasks.html","inLanguage":"zh-CN","dateModified":"2026-11-20","isPartOf":{"@id":"https://zqs1qiwan.github.io/checkq/#website"},"image":"https://zqs1qiwan.github.io/checkq/assets/social-preview.png","publisher":{"@type":"Organization","name":"CheckQ","url":"https://github.com/zqs1qiwan/checkq"}}]}</script>
+<script>(function(){try{var k='checkq-wiki-theme';var s=window.localStorage.getItem(k);var m=(s==='light'||s==='dark')?s:((window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches)?'light':'dark');document.documentElement.setAttribute('data-mode',m);}catch(e){}document.documentElement.classList.add('js');})();</script>
+<noscript><style>.copy-btn,.search{display:none !important}</style></noscript>
 </head>
-<body>
-<div class="wrap">
-  <aside>
-    <div class="brand"><img src="./assets/brand/checkq-mark.svg" width="24" height="24" alt="" /><span class="brand-word">Check<em>Q</em></span></div>
-    <div class="brand-sub">开源可视化自动挂机与签到 · 文档</div>
-    <input id="search" type="search" placeholder="搜索文档…" autocomplete="off" />
-    <div id="results"></div>
-    <nav>
-<a class="" href="index.html">概览<em>CheckQ 能做什么</em></a>
-<a class="" href="quickstart.html">快速开始<em>3 步跑通第一个任务</em></a>
-<a class="on" href="tasks.html">任务与流程<em>节点、变量、分组、调度、重试</em></a>
-<a class="" href="logs.html">日志与通知<em>运行记录、连续日志、通知渠道</em></a>
-<a class="" href="security.html">账号与安全<em>多用户、两步验证、凭据保护</em></a>
-<a class="" href="api.html">API 与 MCP<em>给外部程序/Agent 用的接口</em></a>
-<a class="" href="deploy.html">部署与备份<em>Docker、数据目录、备份恢复</em></a>
-<a class="" href="faq.html">常见问题<em>排障速查</em></a>
-<a class="" href="changelog.html">更新日志<em>新功能与修复</em></a>
-<a class="" href="reference-api.html">API 参考<em>全部端点</em></a>
-<a class="" href="reference-mcp.html">MCP 工具<em>工具清单与接入</em></a>
-<a class="" href="reference-security.html">安全说明<em>威胁与防护全表</em></a>
-<a class="" href="reference-agent.html">Agent 接入指南<em>给外部 Agent 什么</em></a>
-    </nav>
-    <div class="brand-sub" style="margin-top:18px"><a href="https://github.com/zqs1qiwan/checkq">GitHub 仓库 →</a></div>
+<body id="top">
+<a class="skip-link" href="#main">跳到正文</a>
+<header class="topbar">
+  <button class="icon-btn nav-toggle" id="nav-toggle" type="button" aria-controls="sidenav" aria-expanded="false" aria-label="打开文档导航">
+    <svg class="ico" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path d="M4 7h16M4 12h16M4 17h16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+  </button>
+  <a class="brand" href="./index.html">
+    <img class="brand-mark" src="./assets/brand/checkq-mark.svg" width="26" height="26" alt="" />
+    <span class="brand-word">Check<em>Q</em></span>
+    <span class="brand-ver">v0.6.5</span>
+  </a>
+  <span class="topbar-title">文档</span>
+  <div class="topbar-links">
+    <a class="tb-link" href="https://github.com/zqs1qiwan/checkq" target="_blank" rel="noopener noreferrer">GitHub 仓库</a>
+    <a class="tb-link" href="https://github.com/zqs1qiwan/checkq/issues" target="_blank" rel="noopener noreferrer">Issues</a>
+  </div>
+  <button class="icon-btn theme-toggle" id="theme-toggle" type="button" aria-pressed="false" aria-label="切换深色 / 浅色主题" title="切换深色 / 浅色主题">
+    <svg class="ico ico-moon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
+    <svg class="ico ico-sun" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="4.2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12 2.6v2.2M12 19.2v2.2M4.2 4.2l1.6 1.6M18.2 18.2l1.6 1.6M2.6 12h2.2M19.2 12h2.2M4.2 19.8l1.6-1.6M18.2 5.8l1.6-1.6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+  </button>
+</header>
+<div class="shell">
+  <aside class="sidenav" id="sidenav" aria-label="文档导航">
+    <div class="sidenav-inner">
+      <div class="search">
+        <label class="sr-only" for="search">搜索文档</label>
+        <input id="search" class="search-input" type="search" placeholder="搜索文档…" autocomplete="off" spellcheck="false" role="combobox" aria-expanded="false" aria-controls="results" aria-autocomplete="list" aria-haspopup="listbox" />
+        <kbd class="search-hint" aria-hidden="true">/</kbd>
+        <div class="search-results" id="results" role="listbox" aria-label="搜索结果" hidden></div>
+        <p class="sr-only" id="search-status" role="status" aria-live="polite"></p>
+      </div>
+      <nav class="sidenav-nav" aria-label="文档页面">
+<p class="nav-group">入门</p><a class="nav-link" href="./index.html">概览<em>CheckQ 能做什么</em></a>
+<a class="nav-link" href="./quickstart.html">快速开始<em>3 步跑通第一个任务</em></a>
+<p class="nav-group">使用</p><a class="nav-link is-active" href="./tasks.html" aria-current="page">任务与流程<em>节点、变量、分组、调度、重试</em></a>
+<a class="nav-link" href="./logs.html">日志与通知<em>运行记录、连续日志、通知渠道</em></a>
+<a class="nav-link" href="./security.html">账号与安全<em>多用户、两步验证、凭据保护</em></a>
+<a class="nav-link" href="./deploy.html">部署与备份<em>Docker、数据目录、备份恢复</em></a>
+<p class="nav-group">参考</p><a class="nav-link" href="./api.html">API 与 MCP<em>给外部程序 / Agent 用的接口</em></a>
+<a class="nav-link" href="./reference-api.html">API 参考<em>全部端点</em></a>
+<a class="nav-link" href="./reference-mcp.html">MCP 工具<em>工具清单与接入</em></a>
+<a class="nav-link" href="./reference-agent.html">Agent 接入指南<em>给外部 Agent 什么</em></a>
+<a class="nav-link" href="./reference-security.html">安全说明<em>威胁与防护全表</em></a>
+<p class="nav-group">更多</p><a class="nav-link" href="./faq.html">常见问题<em>排障速查</em></a>
+<a class="nav-link" href="./changelog.html">更新日志<em>新功能与修复</em></a>
+      </nav>
+      <div class="sidenav-foot">
+        <a href="https://github.com/zqs1qiwan/checkq" target="_blank" rel="noopener noreferrer">GitHub 仓库</a>
+        <a href="https://github.com/zqs1qiwan/checkq/issues" target="_blank" rel="noopener noreferrer">反馈问题</a>
+      </div>
+    </div>
   </aside>
-  <main>
-<h1 id="任务与流程">任务与流程</h1>
-<h2 id="节点类型">节点类型</h2>
+  <div class="scrim" id="scrim" hidden></div>
+  <main class="main" id="main" tabindex="-1">
+    <nav class="crumbs" aria-label="面包屑"><a href="./index.html">文档</a><span class="sep" aria-hidden="true">/</span><span aria-current="page">任务与流程</span></nav>
+    <details class="toc-mobile">
+<summary>本页目录</summary>
+<nav class="toc-nav toc-nav-mobile" aria-label="本页目录"><p class="toc-title">本页目录</p>
+<a class="toc-l2" href="#节点类型">节点类型</a>
+<a class="toc-l2" href="#变量与表达式">变量与表达式</a>
+<a class="toc-l2" href="#任务分组-折叠">任务分组 / 折叠</a>
+<a class="toc-l2" href="#调度与失败重试">调度与失败重试</a>
+<a class="toc-l2" href="#模板">模板</a>
+<a class="toc-l2" href="#编辑器效率">编辑器效率</a>
+<a class="toc-l2" href="#点选生成逻辑">点选生成逻辑</a>
+</nav>
+</details>
+    <article class="doc">
+<h1 id="任务与流程">任务与流程<a class="h-anchor" href="#任务与流程" aria-label="本节永久链接">#</a></h1>
+<p class="doc-meta"><span>v0.6.5</span><span>更新于 2026-11-20</span><a class="edit-link" href="https://github.com/zqs1qiwan/checkq/edit/main/tools/build-wiki.cjs" target="_blank" rel="noopener noreferrer">在 GitHub 编辑此页 ↗</a></p>
+<h2 id="节点类型">节点类型<a class="h-anchor" href="#节点类型" aria-label="本节永久链接">#</a></h2>
 <div class="table-wrap"><table><thead><tr><th>类型</th><th>用途</th></tr></thead><tbody><tr><td>HTTP 请求</td><td>方法 / URL / 头 / 体 / 断言 / 超时 / 后端(fetch·curl) / 编码 / 代理 / 重试</td></tr><tr><td>条件判断</td><td>jexl 表达式分流（真→true 出口，假→false 出口）</td></tr><tr><td>赋值</td><td>变量或表达式求值</td></tr><tr><td>提取</td><td>正则 / JSON 路径 / 响应头 / Set-Cookie</td></tr><tr><td>延迟 / 随机延迟</td><td>固定或区间等待（避开整点风控）</td></tr><tr><td>日志</td><td>输出人话日志（默认唯一可见的日志）</td></tr><tr><td>通知</td><td>流程内自定义推送</td></tr><tr><td>脚本</td><td>JS 沙箱（vars/last/steps 只读，1s 超时）</td></tr><tr><td>遍历</td><td>数组逐项循环（上限 50 轮）</td></tr></tbody></table></div>
-<h2 id="变量与表达式">变量与表达式</h2>
+<h2 id="变量与表达式">变量与表达式<a class="h-anchor" href="#变量与表达式" aria-label="本节永久链接">#</a></h2>
 <ul><li>流程变量在编辑器「流程变量」面板维护；敏感值（cookie / token / 密码）<strong>落盘加密</strong>，API 返回明文以便编辑。</li><li>模板语法：<code>{{var}}</code>、<code>{{x|urlencode}}</code>、<code>{{x|num}}</code>、<code>{{x|sha256}}</code>、<code>{{now:%Y-%m-%d}}</code></li><li>表达式：<code>=last.json.code == 0</code>（<code>vars.xxx</code> 取变量，<code>last</code> 是上一个响应）</li></ul>
-<h2 id="任务分组-折叠">任务分组 / 折叠</h2>
+<h2 id="任务分组-折叠">任务分组 / 折叠<a class="h-anchor" href="#任务分组-折叠" aria-label="本节永久链接">#</a></h2>
 <ul><li>每个任务可设置 <code>分组</code>（≤40 字符；留空=未分组）；批量勾选后「分组…」可一次归入。</li><li>列表按组折叠：组头显示任务数、启用数、今日成功 / 失败 / 成功率、下次调度；点击组头或「展开/折叠」切换。</li><li>≥8 个任务的分组默认收起；折叠状态保存在浏览器本地；搜索/筛选时自动展开，避免搜到的任务藏在收起组里。</li><li>只影响列表展示，不改变调度与执行；今日统计按服务器本地日期实时计算。</li></ul>
-<h2 id="调度与失败重试">调度与失败重试</h2>
+<h2 id="调度与失败重试">调度与失败重试<a class="h-anchor" href="#调度与失败重试" aria-label="本节永久链接">#</a></h2>
 <ul><li>每个任务独立 cron + 时区 + 抖动（0-N 分钟）；空 cron = 只手动运行。</li><li>调度弹窗里可随时启用 / 停用；首页健康条显示「下一次调度」及是哪个任务。</li><li><strong>任务级失败重试</strong>（默认开启）：最多 3 次尝试、指数退避 5 秒起、随机抖动、单次等待上限 5 分钟；只有最后一次仍失败才判定任务失败。可选线性 / 固定间隔，也可关闭。</li><li>调试运行不重试；上一次运行或退避尚未结束时，调度会跳过这一拍，避免堆积。</li><li>节点级重试（http 节点配置）是同一次执行内立刻重发，与任务级重试互补。</li></ul>
-<h2 id="模板">模板</h2>
-<ul><li>存为模板会带走节点 / 连线 / 变量 / 日志 / 通知。</li><li>派生任务 = 模板 + 各自参数：<strong>模板一改，所有派生任务立刻跟随，无需任何同步操作</strong>；没有「更新到模板版本」按钮或「待更新」标记。</li><li>派生任务改了脚本内容（忽略节点坐标）会自动转成独立任务；变量值、通知渠道保留，日志配置随模板。</li><li>模板删除后，已建任务回退到自己保存的最后一份流程图，不受影响。</li><li>从模板创建任务时逐个覆盖变量；敏感默认值在模板导出时自动脱敏。</li><li>模板市场：「模板」页可从 JSON 索引地址批量导入。</li></ul>
-<h2 id="编辑器效率">编辑器效率</h2>
+<h2 id="模板">模板<a class="h-anchor" href="#模板" aria-label="本节永久链接">#</a></h2>
+<ul><li>存为模板会带走节点 / 连线 / 变量 / 日志 / 通知。</li><li>派生任务 = 模板 + 各自参数：<strong>模板的流程图与日志配置一改，所有派生任务立刻跟随，无需任何同步操作</strong>；没有「更新到模板版本」按钮或「待更新」标记。通知渠道在创建时复制，之后各任务独立维护；默认变量只补缺、不覆盖任务已有值。</li><li>派生任务改了脚本内容（忽略节点坐标）会自动转成独立任务；变量值、通知渠道保留，日志配置随模板。</li><li>模板删除后，已建任务回退到自己保存的最后一份流程图，不受影响。</li><li>从模板创建任务时逐个覆盖变量；敏感默认值在模板导出时自动脱敏。</li><li>模板市场：「模板」页可从 JSON 索引地址批量导入。</li></ul>
+<aside class="callout callout-important" role="note"><p class="callout-title">模板就是唯一真相</p><p>模板一改，派生任务的流程图与日志配置立刻跟随；不存在也不需要「同步模板」这类手动操作。</p></aside>
+<h2 id="编辑器效率">编辑器效率<a class="h-anchor" href="#编辑器效率" aria-label="本节永久链接">#</a></h2>
 <ul><li><strong>撤销 / 重做</strong>：Ctrl+Z / Ctrl+Shift+Z（或 Ctrl+Y），保留 50 步；「更多」菜单也有按钮。</li><li><strong>复制 / 粘贴节点</strong>：Ctrl+C / Ctrl+V；复制选中节点与两端都在选区内的连线，粘贴自动偏移 24px。</li><li><strong>整理布局</strong>：按连线层级从左到右自动排列（「整理」按钮或「更多 → 整理布局」），完成后自动 fitView。</li><li><strong>MiniMap</strong>：右下角缩略图，可拖拽定位。</li><li><strong>画布 ↔ 日志联动</strong>：点击日志步骤 → 画布选中并居中；点击画布节点 → 日志抽屉滚到对应步骤并短暂高亮。</li><li><strong>导出 HAR</strong>：运行抽屉「导出 HAR」，只含本次运行的 HTTP 步骤，敏感值替换为 <code>***</code>，响应体沿用日志截断长度。</li></ul>
-<h2 id="点选生成逻辑">点选生成逻辑</h2>
+<h2 id="点选生成逻辑">点选生成逻辑<a class="h-anchor" href="#点选生成逻辑" aria-label="本节永久链接">#</a></h2>
 <p>在编辑器里运行一次 → 日志里展开响应 → 点任意 JSON 值或划选文字 → 选择用途（存为变量 / 断言成功 / 记录到日志 / 加进通知）→ 自动生成标准节点并接到链尾。</p>
-    <div class="foot">CheckQ 文档 · 由 <code>tools/build-wiki.cjs</code> 生成 · <a href="https://github.com/zqs1qiwan/checkq/issues">反馈问题</a></div>
+    </article>
+<nav class="pager" aria-label="页面翻页">
+<a class="pager-link prev" href="./quickstart.html" rel="prev"><span class="dir">← 上一页</span><span class="ttl">快速开始</span></a><a class="pager-link next" href="./logs.html" rel="next"><span class="dir">下一页 →</span><span class="ttl">日志与通知</span></a>
+</nav>
+    <footer class="site-foot" role="contentinfo">
+      <div class="foot-grid">
+        <div class="foot-about">
+          <a class="foot-logo" href="./index.html"><img src="./assets/brand/checkq-mark.svg" width="22" height="22" alt="" /><span>Check<em>Q</em></span></a>
+          <p>开源的可视化 HTTP 自动化流程引擎。本站只讲框架能力，不含具体签到脚本、站点规则或账号信息。</p>
+        </div>
+        <div class="foot-links">
+          <p class="foot-title">项目</p>
+          <ul>
+            <li><a href="https://github.com/zqs1qiwan/checkq" target="_blank" rel="noopener noreferrer">GitHub 仓库</a></li>
+            <li><a href="https://github.com/zqs1qiwan/checkq/issues" target="_blank" rel="noopener noreferrer">Issues</a></li>
+            <li><a href="https://github.com/zqs1qiwan/checkq/releases" target="_blank" rel="noopener noreferrer">版本发布</a></li>
+            <li><a href="https://github.com/zqs1qiwan/checkq/blob/main/docs/SECURITY.md" target="_blank" rel="noopener noreferrer">安全说明</a></li>
+            <li><a href="https://github.com/zqs1qiwan/checkq/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">MIT 许可证</a></li>
+          </ul>
+        </div>
+        <div class="foot-links">
+          <p class="foot-title">文档</p>
+          <ul>
+            <li><a href="./quickstart.html">快速开始</a></li>
+            <li><a href="./reference-api.html">API 参考</a></li>
+            <li><a href="./reference-mcp.html">MCP 工具</a></li>
+            <li><a href="./faq.html">常见问题</a></li>
+            <li><a href="./changelog.html">更新日志</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="foot-meta">
+        <p>v0.6.5 · 生成于 2026-11-20 05:01 UTC · 由 <code>tools/build-wiki.cjs</code> 从 <code>docs/</code> 与内置页面生成</p>
+        <p><a class="to-top" href="#top">↑ 返回顶部</a></p>
+      </div>
+    </footer>
   </main>
+  <aside class="toc-col" aria-label="本页目录">
+<nav class="toc-nav" aria-label="本页目录"><p class="toc-title">本页目录</p>
+<a class="toc-l2" href="#节点类型">节点类型</a>
+<a class="toc-l2" href="#变量与表达式">变量与表达式</a>
+<a class="toc-l2" href="#任务分组-折叠">任务分组 / 折叠</a>
+<a class="toc-l2" href="#调度与失败重试">调度与失败重试</a>
+<a class="toc-l2" href="#模板">模板</a>
+<a class="toc-l2" href="#编辑器效率">编辑器效率</a>
+<a class="toc-l2" href="#点选生成逻辑">点选生成逻辑</a>
+</nav>
+</aside>
 </div>
-<script>
-(function () {
-  var input = document.getElementById('search');
-  var box = document.getElementById('results');
-  var index = [];
-  fetch('./search-index.json').then(function (r) { return r.json(); }).then(function (d) { index = d; });
-  function esc(s) { return s.replace(/[&<>]/g, function (c) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]; }); }
-  function run() {
-    var q = input.value.trim().toLowerCase();
-    if (!q) { box.classList.remove('on'); box.innerHTML = ''; return; }
-    var hits = [];
-    for (var i = 0; i < index.length; i++) {
-      var it = index[i];
-      var pos = it.text.toLowerCase().indexOf(q);
-      if (pos < 0 && it.title.toLowerCase().indexOf(q) < 0) continue;
-      var start = Math.max(0, pos - 40);
-      var snippet = (pos >= 0 ? it.text.slice(start, start + 120) : it.text.slice(0, 120));
-      hits.push('<a href="' + it.file + '">' + esc(it.title) + '<em>' + esc(snippet) + '…</em></a>');
-      if (hits.length >= 8) break;
-    }
-    box.innerHTML = hits.join('') || '<a href="javascript:void(0)">没有匹配</a>';
-    box.classList.add('on');
-  }
-  input.addEventListener('input', run);
-  input.addEventListener('keydown', function (e) { if (e.key === 'Escape') { input.value = ''; run(); input.blur(); } });
-  document.addEventListener('click', function (e) { if (!box.contains(e.target) && e.target !== input) box.classList.remove('on'); });
-})();
-</script>
+<script src="./assets/site.js" defer></script>
 </body>
 </html>

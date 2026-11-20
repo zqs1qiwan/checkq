@@ -28,19 +28,36 @@
 
 **用户自带 OpenAI 兼容端点**（DeepSeek / OpenAI / Ollama 等），不内置供应商、不代付费用。
 
-| 端点 | 行为 |
-|---|---|
-| `GET /api/system/ai` | 返回 `configured`、`baseUrl`、`model`；`apiKey` 只回显前缀（`sk-abc…`） |
-| `PUT /api/system/ai` | 保存 `{baseUrl, apiKey, model}`；传打码占位时保留旧 Key；不打印到日志 |
-| `POST /api/ai/generate` | 代理调用 `POST {baseUrl}/chat/completions`，60s 超时；未配置时返回中文提示 |
+| 端点 | 权限 | 行为 |
+|---|---|---|
+| `GET /api/system/ai` | 登录用户 | 返回 `configured`、`baseUrl`、`model`、`timeoutSec`、`maxTokens`、`hasKey`；`apiKey` 只回显前缀（`sk-abc…`），永不返回明文 |
+| `PUT /api/system/ai` | **仅 admin** | 保存 `{baseUrl, apiKey, model, timeoutSec?, maxTokens?}`；`baseUrl` 仅 http(s)，自动去尾 `/`，兼容 `.../v1` 与 `.../v1/chat/completions`；`model` 必填；`timeoutSec` 5–120（默认 60）、`maxTokens` 1–4096（默认 1024）；传打码占位时保留旧 Key，三个字段全空=清空；审计 `ai.config.save` |
+| `POST /api/ai/test` | **仅 admin** | 用已保存配置发一条「只回复 ok」的最小请求 → `{ ok, latencyMs, model, sample, usage }`；body 可带 `{ timeoutSec }`（1–120）仅本次覆盖；401/404/超时/非 JSON 返回中文错误；审计 `ai.test` |
+| `POST /api/ai/generate` | 登录用户（API Key 需 `write` 作用域） | 代理调用 `POST {baseUrl}/chat/completions`，超时读配置（默认 60s），`max_tokens` 读配置（默认 1024）；30 次/分钟；审计 `ai.generate`（只记输入长度/结果，不记 prompt） |
 
 **服务端结构校验（任何 AI 产物都必须过）**
 
 1. 输出必须是 JSON（自动剥离 Markdown 代码围栏）；
-2. 节点类型仅限 `http / log / set / delay`，节点数 ≤ 6；
-3. 必须含一个合法 `http` 节点，URL 为绝对 `http(s)`；
-4. 统一补齐 `timezone: Asia/Shanghai`、`enabled: false`、`vars: {}`；
-5. 校验失败 → 返回可读错误，**不落库**。
+2. 节点类型仅限 `http / log / set / delay`，节点数 ≤ 6，节点 id 唯一；
+3. `edges` 的 source/target 必须存在于 nodes，自环/重复/悬空引用直接丢弃（最多 8 条）；
+4. `cron` 只接受 5 段或空串；
+5. 必须含一个合法 `http` 节点，URL 为绝对 `http(s)`；
+6. 过滤 `__proto__ / constructor / prototype` 等危险键，防原型污染；
+7. 统一补齐 `timezone: Asia/Shanghai`、`enabled: false`、`vars: {}`；
+8. 校验失败 → 返回可读中文错误，**不落库**；错误文案不含 Key。
+
+**超时与错误**
+
+| 场景 | 返回 |
+|---|---|
+| 未配置 | 400「未配置 AI：请先填写 Base URL / API Key / 模型并保存」 |
+| 上游 401 | 502「LLM 接口错误 401（API Key 无效或未授权）」 |
+| 上游 404 | 502「…404（接口地址不存在，请确认 Base URL 是否指向 OpenAI 兼容的 /v1）」 |
+| 超时 | 504「AI 接口超时（N 秒未响应）」 |
+| 返回非 JSON | 502「LLM 返回的不是 JSON（请检查 Base URL…）」 |
+| 调用过频 | 429「AI 调用过于频繁（每分钟最多 30 次）」 |
+
+所有错误都会用 `***` 替换 Key / Authorization 头；审计只记录模型、输入长度、节点数与耗时，不记录 Key 与完整 prompt。
 
 **用户流程**：一句话 →「AI 生成流程」→ 预览（名称 / 节点数 / cron / 节点链）→「用 AI 结果创建」→ 落库为**停用**任务。
 
@@ -52,7 +69,7 @@
 
 | 项 | 现状 | 处理 |
 |---|---|---|
-| Key 存储 | 存于 `meta.json`，通过 `encryptMeta/decryptMeta` 使用 AES-256-GCM 加密，内存解密、响应打码 | 已交付；回归覆盖见 `server/test/credential-meta.test.js` |
+| Key 存储 | 存于 `meta.json`，通过 `encryptMeta/decryptMeta` 使用 AES-256-GCM 加密，内存解密、响应打码 | 已交付；回归覆盖见 `server/test/credential-meta.test.js` 与 `server/test/ai.test.js` |
 | 模型幻觉 | 可能生成不存在的域名或错误方法 | 服务端结构校验 + 用户确认预览 + 任务默认停用 |
 | 提示注入 | 当前只接收用户一句话，不接收页面内容，注入面很小 | 若未来把响应体喂给模型，必须先做隔离与白名单，并单独评审 |
 | 数据外发 | 只有用户主动点「AI 生成」才会把**那句话**发给其自配端点 | 界面明确提示；不做后台调用 |
@@ -83,5 +100,6 @@
 ## 6. 维护提示
 
 - 改动快速组装逻辑时，同时更新 `wizard-logic.js` 与 `server/test/wizard.test.js`（共用一份逻辑，禁止复制）。
+- 改动 AI 接口（权限/超时/配置项/结构收敛）时，同时更新 `server/src/openapi.js`、`docs/API.md` 与 `server/test/ai.test.js`。
 - 改动 AI 校验白名单时，同时更新本文与 `docs/PRD.md` §5 的相关验收。
 - Key 的加密方案落地后，必须回头修改本文 §3 的"明文"描述，并补一条回归测试。

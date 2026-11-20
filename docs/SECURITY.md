@@ -1,8 +1,12 @@
-# CheckQ 安全说明（v0.6.4）
+# CheckQ 安全说明（v0.6.5）
 
 > 覆盖：账号体系、密码存储、TOTP 两步验证、会话、权限、已知风险与自查结论、运维手册。
 
-> **2026-11-18 审计补充**：`0.6.3` 已修复日志/默认备份脱敏与来源 IP 信任边界（T02/T03/T04）；`0.6.4` 进一步补齐 `script` 子进程隔离（T01）、API Key 任务范围与 `secrets` 作用域（T05）、HTTP 响应体字节上限（T09）、运行取消/整体超时/在途持久化（T12）、保存失败阻止运行与版本冲突（T15）。完整清单见 [全项目审查](PROJECT-REVIEW-2026-11-18.md)。
+> **2026-11-18 审计补充**：`0.6.3` 已修复日志/默认备份脱敏与来源 IP 信任边界（T02/T03/T04）；`0.6.4` 进一步补齐 `script` 子进程隔离（T01）、API Key 任务范围与 `secrets` 作用域（T05）、HTTP 响应体字节上限（T09）、运行取消/整体超时/在途持久化（T12）、保存失败阻止运行与版本冲突（T15）。完整清单见下文 [§7 自查：已发现并修复的问题](#7-自查已发现并修复的问题) 与 [更新日志](CHANGELOG.md) 的 0.6.4 条目。
+
+## 0. 报告安全问题
+
+请使用 GitHub Security Advisories 私密报告：<https://github.com/zqs1qiwan/checkq/security/advisories/new>。不要在公开 Issue 中粘贴真实凭据或可直接利用的复现细节；报告请附版本、部署方式、复现步骤与影响范围。
 
 ## 1. 账号体系
 
@@ -103,7 +107,7 @@
 
 > 调研对象：`whyour/qinglong`（develop 分支 `back/api/user.ts`、`back/services/user.ts`、`back/shared/password.ts`、`src/pages/setting/security.tsx`）与 `binux/qiandao`（`web/handlers/login.py`、`libs/mcrypto.py`）。
 
-### 7.1 qinglong（青龙）
+### 8.1 qinglong（青龙）
 
 | 能力 | qinglong 做法 | CheckQ 做法 |
 |---|---|---|
@@ -118,7 +122,7 @@
 | 通知 | 登录成功/失败也会推送到通知渠道 | 任务成功/失败推送；**登录事件尚未推送**（可作为下一步） |
 | 头像 | 支持上传裁剪 | 未做（不影响安全） |
 
-### 7.2 qiandao（签到）
+### 8.2 qiandao（签到）
 
 | 能力 | qiandao 做法 | CheckQ 做法 |
 |---|---|---|
@@ -129,7 +133,7 @@
 | 失败处理 | 登录失败计数 `evil(+5)`，有次数限制 | IP + 账号双层限流/锁定 |
 | 角色 | user 表有 role 字段 | admin / operator / viewer，viewer 写操作直接 403 |
 
-### 7.3 结论与取舍
+### 8.3 结论与取舍
 
 - **我们比两者多**：多用户 + 角色、只读账号、审计日志、会话可吊销、CSRF/安全头、API Key 只存摘要、一次性恢复码；
 - **我们少（有意为之）**：邮箱验证/找回（无邮件服务）、二维码（避免密钥外泄）、IP 黑名单、头像；
@@ -198,7 +202,7 @@ ssh root@checkq.local 'docker exec checkq node -e "
 
 > 调研对象：`binux/qiandao`（`db/user.py`、`db/task.py`、`web/handlers/task.py`、`libs/mcrypto.py`）、`whyour/qinglong`（`back/services/env.ts`、`back/config/index.ts`）。
 
-### 13.1 三个产品怎么存「签到资源」
+### 12.1 三个产品怎么存「签到资源」
 
 | 维度 | qiandao（签到） | qinglong（青龙） | CheckQ（本项目） |
 |---|---|---|---|
@@ -211,7 +215,7 @@ ssh root@checkq.local 'docker exec checkq node -e "
 | 备份 | DB 备份 | `data.tgz`（含明文 env） | ✅ **备份默认脱敏**；完整备份需再输一次当前密码 |
 | 密钥文件保护 | `userkey` 用全局 `aes_key` 加密 | `auth.json`/`env.sh` 在 `blackFileList`（脚本不可读写） | `data/.secret` 600 权限，不在任何 API 返回里 |
 
-### 13.2 我们的做法（已实现）
+### 12.2 我们的做法（已实现）
 
 **加密范围**（`server/src/secret.js`）：
 - **变量**：名字命中 `cookie|token|sess|auth|password|passwd|secret|api_key|credential|jwt|bearer|refresh`，或值形态像凭据（长 base64/hex、JWT `eyJ…`、含 `sess=`/`token=` 的 cookie 串）→ 加密；
@@ -240,7 +244,7 @@ ssh root@checkq.local 'docker exec checkq node -e "
 - 登录日志不记录凭据；审计日志只记动作与账号，不记值；
 - 数据目录文件权限已收紧为 `600`（`meta.json / flows.json / runs.json / templates.json / notifications.json`）。
 
-### 13.3 与两者相比，我们更强 / 更弱的地方
+### 12.3 与两者相比，我们更强 / 更弱的地方
 
 **更强**：
 1. 凭据静态加密（AES-256-GCM）+ 认证标签 —— qiandao 用的是 AES-CBC（无认证标签），qinglong 干脆明文；
@@ -254,7 +258,7 @@ ssh root@checkq.local 'docker exec checkq node -e "
 3. 加密只覆盖「流程变量 + 通知渠道」，**运行历史里的响应体仍可能有站点返回的凭据**（如某些站点在响应里回显 token）—— 已做日志级脱敏，但不是全量加密；
 4. 加密发生在应用层，**磁盘备份/快照工具（如 NAS 快照）仍能看到密文**，只有拿到 `.secret` 才能解 —— 这一点与 qiandao 相同（密钥与密文同机）。
 
-### 13.4 建议的后续动作（可选）
+### 12.4 建议的后续动作（可选）
 
 | 建议 | 价值 | 成本 |
 |---|---|---|

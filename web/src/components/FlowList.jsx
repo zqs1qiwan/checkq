@@ -18,7 +18,7 @@ import VarsQuickModal from './flow-list/vars-quick.jsx';
 import MarketPanel from './flow-list/market.jsx';
 import { InstantiateModal, CurlImportModal, CsvImportModal, NotificationsModal, RestoreModal, TemplateEditorModal, BackupFullModal, GroupAssignModal } from './flow-list/modals.jsx';
 
-export default function FlowList({ onOpen, onLogout }) {
+export default function FlowList({ onOpen, onEditTemplate, onLogout }) {
   const [flows, setFlows] = useState(null);
   const [templates, setTemplates] = useState(null);
   const [modal, setModal] = useState(null); // 'new' | 'import' | 'template-editor' | {type:'instantiate', tpl} | {type:'result', run}
@@ -430,10 +430,17 @@ export default function FlowList({ onOpen, onLogout }) {
                   </span>
                 </div>
                 <div className="tpl-actions">
-                  <button className="small primary" onClick={() => setModal({ type: 'instantiate', tpl: t })}>+ 创建任务</button>
+                  <button className="small primary" disabled={readOnly} onClick={() => setModal({ type: 'instantiate', tpl: t })}>+ 创建任务</button>
+                  {!readOnly && (
+                    <button
+                      className="small primary tpl-edit-btn"
+                      onClick={() => onEditTemplate?.(t.id)}
+                      title="打开流程图编辑器，改模板的步骤、变量、日志与通知"
+                    >编辑</button>
+                  )}
                   <Dropdown trigger={<IconMore />} triggerClass="dd-row" align="right" width={170} ariaLabel="模板更多操作">
-                    <button onClick={() => setModal({ type: 'csv', tpl: t })}>批量创建</button>
-                    <button onClick={() => setModal({ type: 'template-editor', tpl: t })}>管理模板</button>
+                    {!readOnly && <button onClick={() => onEditTemplate?.(t.id)}>编辑模板</button>}
+                    {!readOnly && <button onClick={() => setModal({ type: 'csv', tpl: t })}>批量创建</button>}
                     <button onClick={async () => {
                       try {
                         const data = await api.exportTemplate(t.id);
@@ -442,11 +449,17 @@ export default function FlowList({ onOpen, onLogout }) {
                         setToast({ kind: 'fail', text: `导出失败: ${e.message}` });
                       }
                     }}>导出 JSON</button>
-                    <button className="danger-text" onClick={async () => {
-                      if (!(await confirmDialog({ title: '删除模板', message: `删除模板「${t.name}」？已创建的任务不受影响。`, confirmText: '删除', danger: true }))) return;
-                      await api.deleteTemplate(t.id);
-                      load();
-                    }}>删除模板</button>
+                    {!readOnly && (
+                      <>
+                        <div className="menu-sep" />
+                        <button onClick={() => setModal({ type: 'template-editor', tpl: t })} title="改模板名称、描述和默认变量">模板设置…</button>
+                        <button className="danger-text" onClick={async () => {
+                          if (!(await confirmDialog({ title: '删除模板', message: `删除模板「${t.name}」？已创建的任务不受影响。`, confirmText: '删除', danger: true }))) return;
+                          await api.deleteTemplate(t.id);
+                          load();
+                        }}>删除模板</button>
+                      </>
+                    )}
                   </Dropdown>
                 </div>
               </div>

@@ -1346,70 +1346,348 @@ export function buildServer({ dataDir, port }) {
     return { apiKey: key };
   });
 
-  // AI 助手（快速组装 LLM）：OpenAI 兼容接口配置，key 只存 meta、返回时打码
-  app.get('/api/system/ai', async () => {
+  // ---- AI 助手（快速组装 LLM）：OpenAI 兼容接口 ----
+  // 安全边界：Key 只存 meta（落盘加密）、读取只回显前缀；写配置/测试连接仅 admin；
+  // generate 需登录（API Key 需 write 作用域）；所有调用统一超时、错误脱敏、审计（不记 Key 与完整 prompt）。
+  const AI_TIMEOUT_MIN = 5;
+  const AI_TIMEOUT_MAX = 120;
+  const AI_TIMEOUT_DEFAULT = 60;
+  const AI_MAXTOKENS_MIN = 1;
+  const AI_MAXTOKENS_MAX = 4096;
+  const AI_MAXTOKENS_DEFAULT = 1024;
+  const AI_MAX_NODES = 6;
+  const AI_MAX_EDGES = 8;
+  const AI_NODE_TYPES = new Set(['http', 'log', 'set', 'delay']);
+  const AI_BAD_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+  const AI_RATE_LIMIT = 30;             // 每账号/Key 每分钟最多 30 次 AI 调用（generate + test）
+  const AI_RATE_WINDOW = 60e3;
+  const aiHits = new Map(); // `${actor}:${action}` -> { count, firstAt }
+
+  const aiActor = (req) => req.user?.username || (req.apiKey ? `key:${req.apiKey.prefix}` : '') || clientIp(req);
+  const aiInt = (v, min, max, fallback) => {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.min(max, Math.max(min, Math.round(n)));
+  };
+  const aiConfig = () => {
     const a = store.meta.ai || {};
-    return { configured: !!(a.baseUrl && a.apiKey && a.model), baseUrl: a.baseUrl || '', model: a.model || '', apiKey: a.apiKey ? a.apiKey.slice(0, 6) + '…' : '' };
-  });
-  app.put('/api/system/ai', async (req) => {
-    const { baseUrl, apiKey, model } = req.body || {};
-    const prev = store.meta.ai || {};
-    // apiKey 传空或打码占位时保留旧 key
-    const key = String(apiKey || '').trim();
-    store.meta.ai = {
-      baseUrl: String(baseUrl || '').trim(),
-      apiKey: key && !key.endsWith('…') ? key : (prev.apiKey || ''),
-      model: String(model || '').trim(),
+    return {
+      baseUrl: String(a.baseUrl || ''),
+      apiKey: String(a.apiKey || ''),
+      model: String(a.model || ''),
+      timeoutSec: aiInt(a.timeoutSec, AI_TIMEOUT_MIN, AI_TIMEOUT_MAX, AI_TIMEOUT_DEFAULT),
+      maxTokens: aiInt(a.maxTokens, AI_MAXTOKENS_MIN, AI_MAXTOKENS_MAX, AI_MAXTOKENS_DEFAULT),
     };
-    store.flush();
-    return { ok: true };
+  };
+  const maskAiKey = (key) => {
+    const s = String(key || '');
+    if (!s) return '';
+    // 短 Key 不暴露任何字符；长 Key 只留 4 位前缀，避免「打码」泄露过多
+    return s.length <= 12 ? '***…' : s.slice(0, 4) + '…';
+  };
+  /** 错误/审计文案脱敏：去掉 Key、Authorization 头，截断长度 */
+  const aiSafeText = (text, key = '') => {
+    let s = String(text || '');
+    if (key) s = s.split(String(key)).join('***');
+    s = s.replace(/Bearer\s+[A-Za-z0-9._\-]+/gi, 'Bearer ***');
+    s = s.replace(/sk-[A-Za-z0-9._\-]{6,}/g, 'sk-***');
+    return s.slice(0, 300);
+  };
+  /** baseUrl 归一化：只接受 http(s)，去尾部 /，兼容用户填 .../v1 或 .../v1/chat/completions */
+  const normalizeAiBaseUrl = (raw) => {
+    const s = String(raw || '').trim();
+    if (!s) return { url: '' };
+    let u;
+    try { u = new URL(s); } catch { return { error: 'Base URL 不是合法地址（例：https://api.deepseek.com/v1）' }; }
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return { error: 'Base URL 只支持 http(s)' };
+    if (u.username || u.password) return { error: 'Base URL 不能包含账号密码' };
+    u.search = '';
+    u.hash = '';
+    let url = u.toString().replace(/\/+$/, '');
+    if (/\/chat\/completions$/i.test(url)) url = url.replace(/\/chat\/completions$/i, '');
+    return { url };
+  };
+  class AiError extends Error {
+    constructor(message, status = 502) { super(message); this.status = status; }
+  }
+  /** 有上限地读取响应体，避免异常端点用超大错误页拖垮内存 */
+  const aiReadText = async (res, limit = 65536) => {
+    if (!res.body || typeof res.body.getReader !== 'function') return '';
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let out = '';
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        out += dec.decode(value, { stream: true });
+        if (out.length >= limit) {
+          try { await reader.cancel(); } catch { /* ignore */ }
+          break;
+        }
+      }
+      out += dec.decode();
+    } catch { /* 读取中断时保留已读内容 */ }
+    return out.slice(0, limit);
+  };
+  /** 调 OpenAI 兼容 /chat/completions：统一超时、中文错误与 Key 脱敏 */
+  const aiChat = async (cfg, { messages, maxTokens, timeoutMs, temperature = 0.2 }) => {
+    const url = cfg.baseUrl.replace(/\/+$/, '') + '/chat/completions';
+    const started = Date.now();
+    let r;
+    try {
+      r = await fetch(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: 'Bearer ' + cfg.apiKey },
+        body: JSON.stringify({ model: cfg.model, temperature, max_tokens: maxTokens, messages }),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch (e) {
+      const name = String(e?.name || '');
+      if (name === 'TimeoutError' || name === 'AbortError' || e?.code === 'ABORT_ERR' || e?.code === 'UND_ERR_HEADERS_TIMEOUT') {
+        throw new AiError(`AI 接口超时（${Math.round(timeoutMs / 1000)} 秒未响应）`, 504);
+      }
+      throw new AiError(`无法连接 AI 接口：${aiSafeText(e?.message || e, cfg.apiKey)}`, 502);
+    }
+    const raw = await aiReadText(r, r.ok ? 1_000_000 : 65536).catch(() => '');
+    if (!r.ok) {
+      const hint = r.status === 401 ? '（API Key 无效或未授权）'
+        : r.status === 404 ? '（接口地址不存在，请确认 Base URL 是否指向 OpenAI 兼容的 /v1）'
+          : r.status === 429 ? '（已被上游限流，请稍后再试）'
+            : r.status === 400 ? '（请求被上游拒绝，请检查模型名/参数）' : '';
+      throw new AiError(`LLM 接口错误 ${r.status}${hint}: ${aiSafeText(raw, cfg.apiKey)}`, 502);
+    }
+    let data;
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      throw new AiError('LLM 返回的不是 JSON（请检查 Base URL 是否指向 OpenAI 兼容接口）', 502);
+    }
+    return { data, latencyMs: Date.now() - started };
+  };
+  const aiRateLimited = (req, action) => {
+    const who = `${aiActor(req) || 'anon'}:${action}`;
+    const now = Date.now();
+    // 顺手清掉过期窗口，避免 Map 随账号/Key 数量无限增长
+    if (aiHits.size > 500) {
+      for (const [k, v] of aiHits) if (now - v.firstAt > AI_RATE_WINDOW) aiHits.delete(k);
+    }
+    const rec = aiHits.get(who);
+    if (!rec || now - rec.firstAt > AI_RATE_WINDOW) { aiHits.set(who, { count: 1, firstAt: now }); return false; }
+    rec.count++;
+    return rec.count > AI_RATE_LIMIT;
+  };
+  /** 去掉危险键（防原型污染）并限制深度/数组长度 */
+  const sanitizeAiJson = (value, depth = 0) => {
+    if (value === null || typeof value !== 'object') return value;
+    if (depth >= 6) return null;
+    if (Array.isArray(value)) return value.slice(0, 50).map((v) => sanitizeAiJson(v, depth + 1));
+    const out = {};
+    for (const [k, v] of Object.entries(value)) {
+      if (AI_BAD_KEYS.has(k)) continue;
+      out[k] = sanitizeAiJson(v, depth + 1);
+    }
+    return out;
+  };
+  /** 草稿结构收敛：≤6 节点、id 唯一、edges 只引用存在节点且去重、cron 仅 5 段 */
+  const normalizeAiDraft = (raw) => {
+    const nodes = [];
+    const usedIds = new Set();
+    for (const n of (Array.isArray(raw.nodes) ? raw.nodes : []).slice(0, AI_MAX_NODES)) {
+      if (!n || typeof n !== 'object') continue;
+      let id = String(n.id || `n${nodes.length}`).slice(0, 32);
+      if (!id || AI_BAD_KEYS.has(id) || usedIds.has(id)) id = `n${nodes.length}`;
+      let dedupe = 0;
+      while (usedIds.has(id)) { dedupe++; id = `n${nodes.length}_${dedupe}`; }
+      usedIds.add(id);
+      const type = AI_NODE_TYPES.has(n.type) ? n.type : 'log';
+      const rawConfig = n.config && typeof n.config === 'object' ? n.config : {};
+      const config = sanitizeAiJson(rawConfig);
+      nodes.push({
+        id,
+        type,
+        name: String(n.name || type || '节点').slice(0, 60),
+        x: Number(n.x) || 80 + nodes.length * 280,
+        y: Number(n.y) || 60,
+        config: config && typeof config === 'object' && !Array.isArray(config) ? config : {},
+      });
+    }
+    const ids = new Set(nodes.map((n) => n.id));
+    const byId = new Map(nodes.map((n) => [n.id, n]));
+    const edges = [];
+    const seen = new Set();
+    for (const e of (Array.isArray(raw.edges) ? raw.edges : []).slice(0, 50)) {
+      if (!e || typeof e !== 'object') continue;
+      const source = String(e.source || '');
+      const target = String(e.target || '');
+      if (!ids.has(source) || !ids.has(target) || source === target) continue;
+      const type = byId.get(source)?.type;
+      const handleRaw = String(e.sourceHandle || '').slice(0, 20);
+      // http 只有 success/failed 两个出口；其余节点统一 next（与 FlowEditor 默认出口一致）
+      const sourceHandle = type === 'http'
+        ? (['success', 'failed'].includes(handleRaw) ? handleRaw : 'success')
+        : 'next';
+      const key = `${source}|${sourceHandle}|${target}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      edges.push({ id: `e${edges.length}`, source, sourceHandle, target });
+      if (edges.length >= AI_MAX_EDGES) break;
+    }
+    return { nodes, edges };
+  };
+  const normalizeAiCron = (raw) => {
+    if (typeof raw !== 'string') return '';
+    const s = raw.trim().replace(/\s+/g, ' ');
+    if (!s) return '';
+    return s.split(' ').length === 5 ? s.slice(0, 40) : '';
+  };
+  /** 草稿里必须有一个 http 节点，且 URL 是绝对 http(s) */
+  const aiDraftHttpUrlOk = (nodes) => {
+    const first = nodes.find((n) => n.type === 'http');
+    return /^https?:\/\//i.test(String(first?.config?.url || ''));
+  };
+
+  // 读取：任意登录用户；只返回 configured/baseUrl/model/打码 Key 与可选参数
+  app.get('/api/system/ai', async () => {
+    const a = aiConfig();
+    return {
+      configured: !!(a.baseUrl && a.apiKey && a.model),
+      baseUrl: a.baseUrl,
+      model: a.model,
+      apiKey: maskAiKey(a.apiKey),
+      hasKey: !!a.apiKey,
+      timeoutSec: a.timeoutSec,
+      maxTokens: a.maxTokens,
+    };
   });
+  // 保存：仅管理员
+  app.put('/api/system/ai', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return;
+    const body = req.body || {};
+    const prev = store.meta.ai || {};
+    const rawBase = String(body.baseUrl ?? '').trim();
+    const rawKey = String(body.apiKey ?? '').trim();
+    const model = String(body.model ?? '').trim();
+    // 三个字段都为空 = 清空配置（保留超时/最大 tokens 偏好）
+    if (!rawBase && !rawKey && !model) {
+      store.meta.ai = {
+        baseUrl: '',
+        apiKey: '',
+        model: '',
+        timeoutSec: aiInt(prev.timeoutSec, AI_TIMEOUT_MIN, AI_TIMEOUT_MAX, AI_TIMEOUT_DEFAULT),
+        maxTokens: aiInt(prev.maxTokens, AI_MAXTOKENS_MIN, AI_MAXTOKENS_MAX, AI_MAXTOKENS_DEFAULT),
+      };
+      store.flush();
+      store.audit('ai.config.save', '已清空 AI 配置', aiActor(req));
+      return { ok: true, cleared: true, configured: false, timeoutSec: store.meta.ai.timeoutSec, maxTokens: store.meta.ai.maxTokens };
+    }
+    const base = normalizeAiBaseUrl(rawBase);
+    if (base.error) return reply.code(400).send({ error: base.error });
+    if (!base.url) return reply.code(400).send({ error: '请填写 Base URL（OpenAI 兼容接口，例：https://api.deepseek.com/v1）' });
+    if (!model) return reply.code(400).send({ error: '请填写模型名称（例：deepseek-chat / gpt-4o-mini）' });
+    if (model.length > 100) return reply.code(400).send({ error: '模型名称过长（最多 100 字）' });
+    // 打码占位 / 空 = 保留旧 Key；否则替换
+    const keepKey = !rawKey || rawKey.endsWith('…') || rawKey === '***';
+    const apiKey = keepKey ? String(prev.apiKey || '') : rawKey;
+    if (!apiKey) return reply.code(400).send({ error: '请填写 API Key（本地 Ollama 可填任意占位符，如 ollama）' });
+    let timeoutSec = aiInt(prev.timeoutSec, AI_TIMEOUT_MIN, AI_TIMEOUT_MAX, AI_TIMEOUT_DEFAULT);
+    if (body.timeoutSec !== undefined && body.timeoutSec !== null && body.timeoutSec !== '') {
+      const n = Number(body.timeoutSec);
+      if (!Number.isFinite(n) || n < AI_TIMEOUT_MIN || n > AI_TIMEOUT_MAX) {
+        return reply.code(400).send({ error: `超时需在 ${AI_TIMEOUT_MIN}-${AI_TIMEOUT_MAX} 秒之间` });
+      }
+      timeoutSec = Math.round(n);
+    }
+    let maxTokens = aiInt(prev.maxTokens, AI_MAXTOKENS_MIN, AI_MAXTOKENS_MAX, AI_MAXTOKENS_DEFAULT);
+    if (body.maxTokens !== undefined && body.maxTokens !== null && body.maxTokens !== '') {
+      const n = Number(body.maxTokens);
+      if (!Number.isFinite(n) || n < AI_MAXTOKENS_MIN || n > AI_MAXTOKENS_MAX) {
+        return reply.code(400).send({ error: `最大输出 tokens 需在 ${AI_MAXTOKENS_MIN}-${AI_MAXTOKENS_MAX} 之间` });
+      }
+      maxTokens = Math.round(n);
+    }
+    store.meta.ai = { baseUrl: base.url, apiKey, model: model.slice(0, 100), timeoutSec, maxTokens };
+    store.flush();
+    store.audit('ai.config.save', `baseUrl=${base.url} 模型=${model.slice(0, 100)} Key=${keepKey ? '保留' : '更新'} 超时=${timeoutSec}s 最大tokens=${maxTokens}`, aiActor(req));
+    return { ok: true, configured: true, baseUrl: base.url, model: model.slice(0, 100), timeoutSec, maxTokens, apiKey: maskAiKey(apiKey) };
+  });
+  // 连接测试：仅管理员；用已保存配置发一条最小请求（可选 timeoutSec 即时覆盖 1-120 秒）
+  app.post('/api/ai/test', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return;
+    const cfg = aiConfig();
+    if (!cfg.baseUrl || !cfg.apiKey || !cfg.model) {
+      return reply.code(400).send({ error: '未配置 AI：请先填写 Base URL / API Key / 模型并保存' });
+    }
+    if (aiRateLimited(req, 'test')) return reply.code(429).send({ error: `AI 调用过于频繁（每分钟最多 ${AI_RATE_LIMIT} 次），请稍后再试` });
+    const override = Number((req.body || {}).timeoutSec);
+    const timeoutSec = Number.isFinite(override) && override > 0 ? Math.min(120, Math.max(1, Math.round(override))) : cfg.timeoutSec;
+    try {
+      const { data, latencyMs } = await aiChat(cfg, {
+        messages: [{ role: 'user', content: '只回复 ok' }],
+        maxTokens: 16,
+        timeoutMs: timeoutSec * 1000,
+        temperature: 0,
+      });
+      const sample = String(data.choices?.[0]?.message?.content || '').trim().slice(0, 120);
+      store.audit('ai.test', `模型=${cfg.model} 结果=ok 耗时=${latencyMs}ms`, aiActor(req));
+      return { ok: true, latencyMs, model: cfg.model, sample, usage: data.usage || null };
+    } catch (e) {
+      const msg = aiSafeText(e?.message || e, cfg.apiKey);
+      store.audit('ai.test', `模型=${cfg.model} 结果=fail 原因=${msg.slice(0, 160)}`, aiActor(req));
+      return reply.code(e instanceof AiError ? e.status : 502).send({ ok: false, error: msg });
+    }
+  });
+  // 生成草稿：登录用户即可（API Key 需 write 作用域，由全局鉴权钩子保证）
   app.post('/api/ai/generate', async (req, reply) => {
-    const a = store.meta.ai || {};
-    if (!a.baseUrl || !a.apiKey || !a.model) return reply.code(400).send({ error: '未配置 AI：请到「设置 → AI 助手」填 Base URL / API Key / 模型' });
+    const cfg = aiConfig();
+    if (!cfg.baseUrl || !cfg.apiKey || !cfg.model) {
+      return reply.code(400).send({ error: '未配置 AI：请到「设置 → AI 助手」填 Base URL / API Key / 模型' });
+    }
     const sentence = String((req.body || {}).sentence || '').trim();
     if (!sentence) return reply.code(400).send({ error: '请先输入一句话描述' });
+    if (sentence.length > 500) return reply.code(400).send({ error: '描述太长（最多 500 字）' });
+    if (aiRateLimited(req, 'generate')) return reply.code(429).send({ error: `AI 调用过于频繁（每分钟最多 ${AI_RATE_LIMIT} 次），请稍后再试` });
     const sys = 'You generate CheckQ automation flow JSON. Output ONLY compact JSON, no markdown fences. Shape: '
       + '{"name":"<short task name>","cron":"<5-field cron e.g. 0 8 * * *>","nodes":[{"id":"n0","type":"http","name":"<short>","x":80,"y":60,"config":{"method":"GET","url":"<absolute https url from user text>","headers":[{"name":"user-agent","value":"Mozilla/5.0","enabled":true}],"body":"","asserts":[]}},{"id":"n1","type":"log","name":"记录结果","x":360,"y":60,"config":{"text":"完成：{{last.status}}"}}],"edges":[{"id":"e0","source":"n0","sourceHandle":"success","target":"n1"}]} '
-      + 'Rules: only node types http,log,set,delay; first node must be http with a real absolute url from the user text; if user says 看到X算成功 set asserts:[{"res":["X"],"from":"content"}]; <=5 nodes; JSON only.';
+      + 'Rules: only node types http,log,set,delay; first node must be http with a real absolute url from the user text; node ids must be unique; edges may only reference existing node ids (sourceHandle success/failed for http, next for others); cron must be a 5-field cron or empty string; if user says 看到X算成功 set asserts:[{"res":["X"],"from":"content"}]; <=5 nodes; JSON only.';
     try {
-      const r = await fetch(a.baseUrl.replace(/\/+$/, '') + '/chat/completions', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', authorization: 'Bearer ' + a.apiKey },
-        body: JSON.stringify({ model: a.model, temperature: 0.2, messages: [{ role: 'system', content: sys }, { role: 'user', content: sentence }] }),
-        signal: AbortSignal.timeout(60000),
+      const { data } = await aiChat(cfg, {
+        messages: [{ role: 'system', content: sys }, { role: 'user', content: sentence }],
+        maxTokens: cfg.maxTokens,
+        timeoutMs: cfg.timeoutSec * 1000,
+        temperature: 0.2,
       });
-      if (!r.ok) {
-        const t = await r.text();
-        return reply.code(502).send({ error: `LLM 接口错误 ${r.status}: ${t.slice(0, 200)}` });
-      }
-      const data = await r.json();
       let text = String(data.choices?.[0]?.message?.content || '');
       text = text.replace(/^```(json)?/i, '').replace(/```\s*$/, '').trim();
-      const start = text.indexOf('{'); const end = text.lastIndexOf('}');
-      if (start < 0 || end <= start) return reply.code(502).send({ error: 'LLM 未返回 JSON' });
-      const draft = JSON.parse(text.slice(start, end + 1));
-      if (!Array.isArray(draft.nodes) || !draft.nodes.length) return reply.code(502).send({ error: 'LLM JSON 缺少 nodes' });
-      const okTypes = new Set(['http', 'log', 'set', 'delay']);
-      draft.nodes = draft.nodes.slice(0, 6).map((n, i) => ({
-        id: String(n.id || 'n' + i),
-        type: okTypes.has(n.type) ? n.type : 'log',
-        name: String(n.name || n.type || '节点').slice(0, 60),
-        x: Number(n.x) || 80 + i * 280,
-        y: Number(n.y) || 60,
-        config: n.config && typeof n.config === 'object' ? n.config : {},
-      }));
-      draft.edges = Array.isArray(draft.edges) ? draft.edges.slice(0, 8) : [];
-      const first = draft.nodes.find((n) => n.type === 'http');
-      if (!first || !/^https?:\/\//.test(String(first.config?.url || ''))) return reply.code(502).send({ error: 'LLM 未给出有效 HTTP 节点/URL' });
-      draft.name = String(draft.name || 'AI 生成任务').slice(0, 60);
-      draft.cron = typeof draft.cron === 'string' ? draft.cron.slice(0, 40) : '';
-      draft.timezone = 'Asia/Shanghai';
-      draft.enabled = false;
-      draft.vars = {};
+      const start = text.indexOf('{');
+      const end = text.lastIndexOf('}');
+      if (start < 0 || end <= start) throw new AiError('LLM 未返回 JSON', 502);
+      let parsed;
+      try {
+        parsed = JSON.parse(text.slice(start, end + 1));
+      } catch {
+        throw new AiError('LLM 返回的 JSON 无法解析', 502);
+      }
+      const clean = sanitizeAiJson(parsed);
+      if (!clean || !Array.isArray(clean.nodes) || !clean.nodes.length) throw new AiError('LLM JSON 缺少 nodes', 502);
+      const { nodes, edges } = normalizeAiDraft(clean);
+      if (!nodes.length) throw new AiError('LLM JSON 缺少 nodes', 502);
+      if (!aiDraftHttpUrlOk(nodes)) throw new AiError('LLM 未给出有效 HTTP 节点/URL（需要绝对 http(s) 地址）', 502);
+      const draft = {
+        name: String(clean.name || 'AI 生成任务').slice(0, 60),
+        cron: normalizeAiCron(clean.cron),
+        timezone: 'Asia/Shanghai',
+        enabled: false,
+        vars: {},
+        nodes,
+        edges,
+      };
+      store.audit('ai.generate', `模型=${cfg.model} 输入=${sentence.length}字 结果=ok 节点=${nodes.length} 连线=${edges.length} 超时=${cfg.timeoutSec}s`, aiActor(req));
       return { draft };
     } catch (e) {
-      return reply.code(502).send({ error: 'LLM 调用失败: ' + e.message });
+      const msg = aiSafeText(e?.message || e, cfg.apiKey);
+      store.audit('ai.generate', `模型=${cfg.model} 输入=${sentence.length}字 结果=fail 原因=${msg.slice(0, 160)}`, aiActor(req));
+      return reply.code(e instanceof AiError ? e.status : 502).send({ error: e instanceof AiError ? msg : 'LLM 调用失败: ' + msg });
     }
   });
 

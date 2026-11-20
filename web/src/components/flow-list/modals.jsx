@@ -277,7 +277,10 @@ function RestoreModal({ onClose, onDone }) {
     </Modal>
   );
 }
-/** 模板管理：改名/描述/默认变量编辑/节点数（PRD §4.3 默认变量编辑） */
+/**
+ * 模板设置：改名/描述/默认变量编辑（PRD §4.3 默认变量编辑）。
+ * 变量行用 grid（变量名 | 默认值 | 删除），窄屏自动单列；保存成功后提示并关闭。
+ */
 function TemplateEditorModal({ tpl, onDone }) {
   const [name, setName] = useState(tpl.name);
   const [desc, setDesc] = useState(tpl.desc || '');
@@ -285,83 +288,135 @@ function TemplateEditorModal({ tpl, onDone }) {
   const [vars, setVars] = useState([]); // [{name, value}]
   const [newVarName, setNewVarName] = useState('');
   const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
 
   useEffect(() => {
     api.template(tpl.id).then((t) => {
       setDetail(t);
       const names = t.varNames && t.varNames.length ? t.varNames : Object.keys(t.vars || {});
       setVars(names.map((n) => ({ name: n, value: (t.vars || {})[n] ?? '' })));
-    }).catch((e) => setErr(e.message));
+    }).catch((e) => setErr(`加载模板失败：${e.message}`));
   }, [tpl.id]);
 
+  const addVar = () => {
+    const n = newVarName.trim() || `var${vars.length + 1}`;
+    setVars((cur) => [...cur, { name: n, value: '' }]);
+    setNewVarName('');
+    setErr('');
+  };
+
   const save = async () => {
+    const nm = name.trim();
+    if (!nm) { setErr('模板名称不能为空'); return; }
+    // 变量名去空格后不能重复，否则保存后会被后一个覆盖
+    const seen = new Set();
+    for (const v of vars) {
+      const key = v.name.trim();
+      if (!key) { setErr('变量名不能为空：请填写或删除空白行'); return; }
+      if (seen.has(key)) { setErr(`变量名重复：${key}`); return; }
+      seen.add(key);
+    }
+    setBusy(true);
+    setErr('');
     try {
       const varsObj = {};
       for (const v of vars) if (v.name.trim()) varsObj[v.name.trim()] = v.value;
-      await api.updateTemplate(tpl.id, { name, desc, vars: varsObj, varNames: Object.keys(varsObj) });
-      onDone();
-    } catch (e) { setErr(e.message); }
+      await api.updateTemplate(tpl.id, {
+        name: nm,
+        desc,
+        vars: varsObj,
+        varNames: Object.keys(varsObj),
+      });
+      setToast(`模板「${nm}」已保存`, 'ok');
+      // 提示级别默认只显示错误：弹窗内再给一次「已保存」反馈，然后自动关闭
+      setSaved(true);
+      window.setTimeout(onDone, 600);
+    } catch (e) {
+      setErr(`保存失败：${e.message}`);
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
     <Modal
-      title={`管理模板：${tpl.name}`}
-      subtitle={detail ? `${detail.nodes.length} 个节点，${vars.length} 个默认变量` : ''}
+      title={`模板设置：${tpl.name}`}
+      subtitle={detail ? `${(detail.nodes || []).length} 个步骤，${vars.length} 个默认变量` : '正在加载模板…'}
       onClose={onDone}
+      className="tpl-editor-modal"
+      bodyClassName="tpl-editor"
       footer={
         <>
-          <button onClick={onDone}>取消</button>
-          <button className="primary" onClick={save}>保存</button>
+          <button onClick={onDone} disabled={saved}>取消</button>
+          <button className="primary" disabled={busy || saved || !detail} onClick={save}>{saved ? '已保存' : busy ? '保存中…' : '保存'}</button>
         </>
       }
     >
-        <div className="field">
-          <label>模板名</label>
-          <input value={name} onChange={(e) => setName(e.target.value)} />
-        </div>
-        <div className="field">
-          <label>描述</label>
-          <input value={desc} onChange={(e) => setDesc(e.target.value)} />
-        </div>
-        <div className="field">
-          <label title="敏感项建议留空，实例化时再填真实值">默认变量值</label>
+      <div className="field">
+        <label>模板名</label>
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="如：每日签到模板" />
+      </div>
+      <div className="field">
+        <label>描述</label>
+        <input value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="一句话说明这个模板做什么（可留空）" />
+      </div>
+      <div className="field">
+        <label title="敏感项（cookie/token 等）建议留空，实例化时再填真实值">默认变量值</label>
+        {detail && vars.length === 0 && (
+          <p className="hint tpl-vars-empty">还没有默认变量。模板里用到的 {'{{变量}}'} 会在这里列出，可在下方添加。</p>
+        )}
+        {vars.length > 0 && (
+          <div className="tpl-vars-head" aria-hidden="true">
+            <span>变量名</span>
+            <span>默认值</span>
+            <span />
+          </div>
+        )}
+        <div className="tpl-vars">
           {vars.map((v, i) => (
-            <div key={i} style={{ marginBottom: 8 }}>
-              <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                <input className="mono" style={{ fontSize: 11, padding: '4px 6px' }} value={v.name} onChange={(e) => setVars(vars.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} />
-                <button className="small danger" style={{ padding: '2px 7px' }} onClick={() => setVars(vars.filter((_, j) => j !== i))}>×</button>
-              </div>
-              <textarea className="mono" style={{ fontSize: 11, padding: '4px 6px', marginTop: 3 }} rows={1} value={v.value} onChange={(e) => setVars(vars.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)))} />
+            <div className="tpl-var-row" key={i}>
+              <input
+                className="mono"
+                value={v.name}
+                placeholder="变量名"
+                aria-label={`第 ${i + 1} 个变量名`}
+                onChange={(e) => setVars(vars.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))}
+              />
+              <textarea
+                className="mono"
+                rows={2}
+                value={v.value}
+                placeholder="默认值（敏感项建议留空）"
+                aria-label={`变量 ${v.name || i + 1} 的默认值`}
+                onChange={(e) => setVars(vars.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)))}
+              />
+              <button
+                type="button"
+                className="small danger tpl-var-del"
+                title={`删除变量「${v.name || i + 1}」`}
+                aria-label={`删除变量「${v.name || i + 1}」`}
+                onClick={() => setVars(vars.filter((_, j) => j !== i))}
+              >×</button>
             </div>
           ))}
-          <div style={{ display: 'flex', gap: 6 }}>
-            <input
-              style={{ fontSize: 11, padding: '4px 6px' }}
-              placeholder="新变量名"
-              value={newVarName}
-              onChange={(e) => setNewVarName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault();
-                  const n = newVarName.trim() || `var${vars.length + 1}`;
-                  setVars([...vars, { name: n, value: '' }]);
-                  setNewVarName('');
-                }
-              }}
-            />
-            <button
-              className="small"
-              onClick={() => {
-                const n = newVarName.trim() || `var${vars.length + 1}`;
-                setVars([...vars, { name: n, value: '' }]);
-                setNewVarName('');
-              }}
-            >
-              + 添加变量
-            </button>
-          </div>
         </div>
-        {err && <p style={{ color: 'var(--fail)', fontSize: 12 }}>{err}</p>}
+        <div className="tpl-var-add">
+          <input
+            className="mono"
+            placeholder="新变量名"
+            aria-label="新变量名"
+            value={newVarName}
+            onChange={(e) => setNewVarName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') { e.preventDefault(); addVar(); }
+            }}
+          />
+          <button type="button" className="small" onClick={addVar}>+ 添加变量</button>
+        </div>
+      </div>
+      {err && <p className="form-error">{err}</p>}
+      {saved && <p className="form-ok">模板已保存，正在关闭…</p>}
     </Modal>
   );
 }

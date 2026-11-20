@@ -3,5 +3,11 @@ web/node_modules
 server/node_modules
 web/dist
 data
+server/data
+server/public
 *.log
 .git
+.agents
+docs/agent-notes
+*.local.json
+tools/private-terms.local.txt

@@ -141,6 +141,7 @@ export const api = {
   changePassword: (oldPassword, newPassword) => req('POST', '/api/system/password', { oldPassword, newPassword }),
   aiSettings: () => req('GET', '/api/system/ai'),
   saveAiSettings: (cfg) => req('PUT', '/api/system/ai', cfg),
+  testAi: (opts) => req('POST', '/api/ai/test', opts || {}),
   aiGenerate: (sentence) => req('POST', '/api/ai/generate', { sentence }),
   dailySummaryConfig: () => req('GET', '/api/system/daily-summary-config'),
   saveDailySummaryConfig: (cfg) => req('PUT', '/api/system/daily-summary-config', cfg),

@@ -13,10 +13,14 @@ const scopes = {
 };
 
 const errorResponses = {
+  400: { description: '参数错误（中文 error 说明）' },
   401: { description: '未登录、API Key 无效或已过期回收' },
-  403: { description: '权限不足（API Key 作用域不包含所需能力）' },
+  403: { description: '权限不足（API Key 作用域不包含所需能力，或需要管理员）' },
   404: { description: '资源不存在' },
-  429: { description: '登录限流' },
+  409: { description: '状态冲突（如运行已结束、取消无效）' },
+  429: { description: '请求过于频繁（登录限流 / AI 调用限流）' },
+  502: { description: '上游或外部接口失败（如 LLM 接口错误、返回非 JSON）' },
+  504: { description: '上游接口超时' },
 };
 
 function op(summary, extra = {}) {
@@ -31,6 +35,7 @@ function op(summary, extra = {}) {
       ...(extra.errors || []).reduce((acc, code) => ({ ...acc, [code]: errorResponses[code] }), {}),
     },
     'x-required-scope': extra.scope || 'read',
+    ...(extra.role ? { 'x-required-role': extra.role } : {}),
   };
 }
 
@@ -47,7 +52,8 @@ export function buildOpenApi() {
       description:
         'CheckQ 自动化签到引擎的对外接口。认证二选一：① 请求头 `x-api-key: <key>`（推荐，可按作用域发放）；② 浏览器会话 Cookie（登录后自动带上）。\n' +
         'API Key 作用域：' + Object.entries(scopes).map(([k, v]) => `\`${k}\` = ${v}`).join('；') + '。\n' +
-        '写操作需 `write`，运行任务需 `run`，只读操作用 `read`。过期 Key 会被自动回收。',
+        '写操作需 `write`，运行任务需 `run`，只读操作用 `read`。过期 Key 会被自动回收。\n' +
+        '标注 `x-required-role: admin` 的端点（如 AI 配置写入、AI 连接测试）只接受管理员浏览器会话，API Key 不能代替。',
       contact: { name: 'CheckQ', url: 'http://localhost:8888/' },
     },
     servers: [
@@ -93,6 +99,40 @@ export function buildOpenApi() {
             runId: { type: 'string' }, startedAt: { type: 'integer' }, status: { type: 'string' },
             index: { type: 'integer' }, name: { type: 'string' }, message: { type: 'string' },
             type: { type: 'string' }, ok: { type: 'boolean' }, ms: { type: 'integer' },
+          },
+        },
+        AiConfig: {
+          type: 'object',
+          description: 'AI 助手配置（读取时 API Key 只回显前缀，永不返回明文）',
+          properties: {
+            configured: { type: 'boolean', description: 'baseUrl / apiKey / model 是否都已填写' },
+            baseUrl: { type: 'string', description: 'OpenAI 兼容端点，已归一化（去尾 /，兼容 .../v1 与 .../v1/chat/completions）' },
+            model: { type: 'string' },
+            apiKey: { type: 'string', description: '打码前缀，例如 sk-abc…' },
+            hasKey: { type: 'boolean' },
+            timeoutSec: { type: 'integer', minimum: 5, maximum: 120, description: 'LLM 调用超时（默认 60 秒）' },
+            maxTokens: { type: 'integer', minimum: 1, maximum: 4096, description: '生成草稿时的最大输出 tokens（默认 1024）' },
+          },
+        },
+        AiConfigInput: {
+          type: 'object',
+          properties: {
+            baseUrl: { type: 'string', description: '仅 http(s)；可填 .../v1 或 .../v1/chat/completions' },
+            apiKey: { type: 'string', description: '传空或打码占位（以 … 结尾）时保留旧 Key；全空 = 清空配置' },
+            model: { type: 'string', description: '必填（有 baseUrl/apiKey 时）' },
+            timeoutSec: { type: 'integer', minimum: 5, maximum: 120, default: 60 },
+            maxTokens: { type: 'integer', minimum: 1, maximum: 4096, default: 1024 },
+          },
+        },
+        AiDraft: {
+          type: 'object',
+          description: 'AI 生成的流程草稿：始终 enabled=false、vars={}，不会落库',
+          properties: {
+            name: { type: 'string' }, cron: { type: 'string', description: '仅 5 段 cron 或空串' },
+            timezone: { type: 'string', const: 'Asia/Shanghai' }, enabled: { type: 'boolean', const: false },
+            vars: { type: 'object', additionalProperties: { type: 'string' } },
+            nodes: { type: 'array', maxItems: 6, items: { type: 'object' } },
+            edges: { type: 'array', maxItems: 8, description: '仅保留 source/target 都存在且去重后的连线（最多 8 条）', items: { type: 'object' } },
           },
         },
       },
@@ -154,6 +194,62 @@ export function buildOpenApi() {
       '/api/notifications': { get: op('站内通知列表', { tags: ['meta'], parameters: [{ name: 'limit', in: 'query', schema: { type: 'integer', default: 50 } }], schema: { type: 'object' } }) },
       '/api/system/stats': { get: op('运维统计（任务数/今日运行/成功率/下次调度）', { tags: ['meta'], schema: { type: 'object' } }) },
       '/api/system/push-targets': { get: op('可推送单位（带通知渠道的任务）', { tags: ['meta'], schema: { type: 'array', items: { type: 'object' } } }) },
+      // ---- AI 助手 ----
+      '/api/system/ai': {
+        get: op('读取 AI 助手配置（登录用户；API Key 只回显前缀，绝不返回明文）', {
+          tags: ['ai'], schema: { $ref: '#/components/schemas/AiConfig' }, errors: [401],
+        }),
+        put: op('保存 AI 配置（仅管理员）：baseUrl 仅 http(s)、自动去尾 / 并兼容 /v1 与 /v1/chat/completions；Key 传空或打码占位保留旧值；全空=清空', {
+          tags: ['ai'], scope: 'write', role: 'admin',
+          requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/AiConfigInput' } } } },
+          schema: {
+            type: 'object',
+            properties: {
+              ok: { type: 'boolean' }, configured: { type: 'boolean' }, cleared: { type: 'boolean' },
+              baseUrl: { type: 'string' }, model: { type: 'string' }, apiKey: { type: 'string' },
+              timeoutSec: { type: 'integer' }, maxTokens: { type: 'integer' },
+            },
+          },
+          errors: [400, 401, 403],
+        }),
+      },
+      '/api/ai/test': {
+        post: op('测试 AI 连接（仅管理员）：用已保存配置发一条最小请求；401/404/超时/非 JSON 返回中文错误且不回显 Key', {
+          tags: ['ai'], scope: 'write', role: 'admin',
+          requestBody: {
+            required: false,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: { timeoutSec: { type: 'integer', minimum: 1, maximum: 120, description: '仅本次测试的超时覆盖（默认取配置）' } },
+                },
+              },
+            },
+          },
+          schema: {
+            type: 'object',
+            properties: {
+              ok: { type: 'boolean' }, latencyMs: { type: 'integer' }, model: { type: 'string' },
+              sample: { type: 'string', description: '模型回复的前 120 字' },
+              usage: { type: ['object', 'null'], description: '上游返回的 token 用量（可能为空）' },
+              error: { type: 'string', description: '失败时的中文原因（已脱敏）' },
+            },
+          },
+          errors: [400, 401, 403, 429, 502, 504],
+        }),
+      },
+      '/api/ai/generate': {
+        post: op('一句话生成流程草稿（登录用户；API Key 需 write 作用域）：≤6 节点、edges 仅引用存在的节点并去重、cron 仅 5 段、草稿 enabled=false/vars={}', {
+          tags: ['ai'], scope: 'write',
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { type: 'object', properties: { sentence: { type: 'string', maxLength: 500 } }, required: ['sentence'] } } },
+          },
+          schema: { type: 'object', properties: { draft: { $ref: '#/components/schemas/AiDraft' } } },
+          errors: [400, 401, 403, 429, 502],
+        }),
+      },
       '/api/system/apikeys': {
         get: op('API Key 列表（管理员；含作用域与回收日期）', { tags: ['keys'], errors: [401, 403] }),
         post: op('生成 API Key（管理员；可指定 scopes 与回收日期，明文只返回一次）', {

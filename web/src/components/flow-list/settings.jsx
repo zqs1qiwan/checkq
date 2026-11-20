@@ -59,7 +59,7 @@ function SettingsModal({ onClose }) {
 
         {tab === 'metrics' && <MetricsPanel />}
 
-        {tab === 'ai' && <AiSettings />}
+        {tab === 'ai' && <AiSettings isAdmin={me?.role === 'admin'} />}
 
         {tab === 'security' && <AccountPanel onToast={(text) => { setMsg(text); setErr(''); }} />}
 
@@ -74,44 +74,176 @@ function SettingsModal({ onClose }) {
   );
 }
 
-/** 设置内：AI 助手（快速组装 LLM，OpenAI 兼容接口；key 只存服务端） */
-function AiSettings() {
-  const [cfg, setCfg] = useState({ baseUrl: '', apiKey: '', model: '' });
+/** AI 供应商预设（只填 Base URL / 模型，Key 由用户自己填） */
+const AI_PRESETS = [
+  { id: 'custom', label: '自定义', baseUrl: '', model: '' },
+  { id: 'deepseek', label: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat' },
+  { id: 'openai', label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
+  { id: 'ollama', label: 'Ollama（本地）', baseUrl: 'http://localhost:11434/v1', model: 'llama3.1' },
+];
+
+function presetOf(baseUrl) {
+  const b = String(baseUrl || '').replace(/\/+$/, '').replace(/\/chat\/completions$/i, '');
+  const hit = AI_PRESETS.find((p) => p.baseUrl && p.baseUrl === b);
+  return hit ? hit.id : 'custom';
+}
+
+/** 设置内：AI 助手（快速组装 LLM，OpenAI 兼容接口；key 只存服务端，写入/测试仅管理员） */
+function AiSettings({ isAdmin = false }) {
+  const [cfg, setCfg] = useState({ baseUrl: '', apiKey: '', model: '', timeoutSec: 60, maxTokens: 1024 });
   const [configured, setConfigured] = useState(false);
+  const [preset, setPreset] = useState('custom');
   const [msg, setMsg] = useState('');
-  useEffect(() => {
-    api.aiSettings().then((s) => { setConfigured(s.configured); setCfg({ baseUrl: s.baseUrl, apiKey: s.apiKey, model: s.model }); }).catch(() => {});
-  }, []);
-  const save = async () => {
-    setMsg('');
-    try {
-      await api.saveAiSettings(cfg);
-      const s = await api.aiSettings();
-      setConfigured(s.configured); setCfg({ baseUrl: s.baseUrl, apiKey: s.apiKey, model: s.model });
-      setMsg('AI 配置已保存');
-    } catch (e) { setMsg('保存失败: ' + e.message); }
+  const [test, setTest] = useState(null); // { ok, text }
+  const [busy, setBusy] = useState(false);
+
+  const load = async () => {
+    const s = await api.aiSettings();
+    setConfigured(!!s.configured);
+    setCfg({
+      baseUrl: s.baseUrl || '',
+      apiKey: s.apiKey || '',
+      model: s.model || '',
+      timeoutSec: s.timeoutSec ?? 60,
+      maxTokens: s.maxTokens ?? 1024,
+    });
+    setPreset(presetOf(s.baseUrl));
   };
+
+  useEffect(() => { load().catch(() => {}); }, []);
+
+  const set = (patch) => {
+    setCfg((c) => ({ ...c, ...patch }));
+    setMsg('');
+    setTest(null);
+  };
+
+  const applyPreset = (id) => {
+    setPreset(id);
+    const p = AI_PRESETS.find((x) => x.id === id);
+    if (p && p.baseUrl) set({ baseUrl: p.baseUrl, model: p.model });
+  };
+
+  const save = async () => {
+    setBusy(true);
+    setMsg('');
+    setTest(null);
+    try {
+      await api.saveAiSettings({
+        baseUrl: cfg.baseUrl,
+        apiKey: cfg.apiKey,
+        model: cfg.model,
+        timeoutSec: Number(cfg.timeoutSec) || 60,
+        maxTokens: Number(cfg.maxTokens) || 1024,
+      });
+      await load();
+      setMsg('AI 配置已保存');
+    } catch (e) {
+      setMsg('保存失败：' + (e.data?.error || e.message));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const runTest = async () => {
+    setBusy(true);
+    setTest(null);
+    try {
+      const r = await api.testAi();
+      setTest({
+        ok: true,
+        text: `连接成功 · ${r.model || cfg.model} · ${r.latencyMs}ms${r.sample ? ' · 返回：' + r.sample : ''}`,
+      });
+    } catch (e) {
+      setTest({ ok: false, text: '连接失败：' + (e.data?.error || e.message) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <>
       <div className="field">
-        <label title="快速组装用的 LLM，OpenAI 兼容接口">AI 助手（{configured ? '已配置' : '未配置'}）</label>
-        <input placeholder="Base URL，例：https://api.deepseek.com/v1" value={cfg.baseUrl} onChange={(e) => setCfg({ ...cfg, baseUrl: e.target.value })} />
+        <label>供应商预设</label>
+        <select value={preset} onChange={(e) => applyPreset(e.target.value)} disabled={!isAdmin || busy}>
+          {AI_PRESETS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+        </select>
       </div>
-      <div className="field-inline">
+      <div className="field">
+        <label title="快速组装用的 LLM，OpenAI 兼容接口">
+          Base URL
+          <span style={{ marginLeft: 8, color: configured ? 'var(--ok)' : 'var(--muted)', fontWeight: 400 }}>
+            {configured ? '已配置' : '未配置'}
+          </span>
+        </label>
+        <input
+          placeholder="https://api.deepseek.com/v1"
+          value={cfg.baseUrl}
+          onChange={(e) => set({ baseUrl: e.target.value })}
+          disabled={!isAdmin || busy}
+        />
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
         <div className="field">
           <label>API Key</label>
-          <input type="password" autoComplete="off" placeholder={cfg.apiKey || 'sk-…'} value={cfg.apiKey} onChange={(e) => setCfg({ ...cfg, apiKey: e.target.value })} />
+          <input
+            type="password"
+            autoComplete="off"
+            placeholder={cfg.apiKey || 'sk-…'}
+            value={cfg.apiKey}
+            onChange={(e) => set({ apiKey: e.target.value })}
+            disabled={!isAdmin || busy}
+          />
         </div>
         <div className="field">
           <label>模型</label>
-          <input placeholder="deepseek-chat / gpt-4o-mini" value={cfg.model} onChange={(e) => setCfg({ ...cfg, model: e.target.value })} />
+          <input
+            placeholder="deepseek-chat / gpt-4o-mini"
+            value={cfg.model}
+            onChange={(e) => set({ model: e.target.value })}
+            disabled={!isAdmin || busy}
+          />
         </div>
       </div>
-      <div style={{ color: 'var(--muted)', fontSize: 11, marginBottom: 8, lineHeight: 1.5 }}>
-        支持 OpenAI 兼容接口（DeepSeek / OpenAI / Ollama 等）。Key 只存服务端 meta.json，不回显明文。未配置时快速组装走本地规则模式（不耗 API）。
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+        <div className="field">
+          <label title="5-120 秒，默认 60">超时（秒）</label>
+          <input
+            type="number" min="5" max="120"
+            value={cfg.timeoutSec}
+            onChange={(e) => set({ timeoutSec: e.target.value })}
+            disabled={!isAdmin || busy}
+          />
+        </div>
+        <div className="field">
+          <label title="1-4096，默认 1024">最大输出 tokens</label>
+          <input
+            type="number" min="1" max="4096"
+            value={cfg.maxTokens}
+            onChange={(e) => set({ maxTokens: e.target.value })}
+            disabled={!isAdmin || busy}
+          />
+        </div>
       </div>
-      <button className="small" onClick={save}>保存 AI 配置</button>
+      <div style={{ color: 'var(--muted)', fontSize: 11, margin: '4px 0 10px', lineHeight: 1.6 }}>
+        Base URL 可填 <code>.../v1</code> 或 <code>.../v1/chat/completions</code>，保存时自动归一化。
+        Key 只存服务端（加密落盘），不回显明文；「测试连接」使用已保存的配置。
+        本地 Ollama 无需真实 Key，可填任意占位符（如 <code>ollama</code>）；未配置时快速组装走本地规则模式（不耗 API）。
+      </div>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <button className="small" onClick={save} disabled={!isAdmin || busy}>{busy ? '处理中…' : '保存 AI 配置'}</button>
+        <button
+          className="small"
+          onClick={runTest}
+          disabled={!isAdmin || busy || !configured}
+          title={configured ? '用已保存的配置发一条最小请求' : '请先保存配置'}
+        >
+          测试连接
+        </button>
+        {!isAdmin && <span style={{ color: 'var(--muted)', fontSize: 12 }}>仅管理员可修改 AI 配置</span>}
+      </div>
       {msg && <p style={{ color: msg.startsWith('保存失败') ? 'var(--fail)' : 'var(--ok)', fontSize: 12 }}>{msg}</p>}
+      {test && <p style={{ color: test.ok ? 'var(--ok)' : 'var(--fail)', fontSize: 12, wordBreak: 'break-word' }}>{test.text}</p>}
     </>
   );
 }

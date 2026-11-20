@@ -1,83 +1,167 @@
 <!doctype html>
-<html lang="zh-CN" data-mode="dark">
+<html lang="zh-CN" data-mode="dark" data-base="./">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <meta name="color-scheme" content="dark light" />
+<meta name="theme-color" content="#0b0e11" media="(prefers-color-scheme: dark)" />
+<meta name="theme-color" content="#f3f5f6" media="(prefers-color-scheme: light)" />
 <title>快速开始 · CheckQ 文档</title>
-<meta name="description" content="3 步跑通第一个任务" />
+<meta name="description" content="三步跑通第一个 CheckQ 任务：建任务、跑一次、定调度与重试；另有通知配置、存为模板与外部 Agent 接入。" />
+<meta name="robots" content="index, follow" />
+<link rel="canonical" href="https://zqs1qiwan.github.io/checkq/quickstart.html" />
+<meta property="og:type" content="article" />
+<meta property="og:site_name" content="CheckQ 文档" />
+<meta property="og:locale" content="zh_CN" />
+<meta property="og:title" content="快速开始 · CheckQ 文档" />
+<meta property="og:description" content="三步跑通第一个 CheckQ 任务：建任务、跑一次、定调度与重试；另有通知配置、存为模板与外部 Agent 接入。" />
+<meta property="og:url" content="https://zqs1qiwan.github.io/checkq/quickstart.html" />
+<meta property="og:image" content="https://zqs1qiwan.github.io/checkq/assets/social-preview.png" />
+<meta property="og:image:width" content="1280" />
+<meta property="og:image:height" content="640" />
+<meta property="og:image:alt" content="CheckQ 文档：开源的可视化 HTTP 自动化流程引擎" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="快速开始 · CheckQ 文档" />
+<meta name="twitter:description" content="三步跑通第一个 CheckQ 任务：建任务、跑一次、定调度与重试；另有通知配置、存为模板与外部 Agent 接入。" />
+<meta name="twitter:image" content="https://zqs1qiwan.github.io/checkq/assets/social-preview.png" />
 <link rel="icon" href="./assets/brand/checkq-mark.svg" type="image/svg+xml" />
+<link rel="apple-touch-icon" href="./assets/brand/apple-touch-icon.png" />
 <link rel="stylesheet" href="./assets/style.css" />
-
+<link rel="sitemap" type="application/xml" href="https://zqs1qiwan.github.io/checkq/sitemap.xml" />
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebSite","@id":"https://zqs1qiwan.github.io/checkq/#website","url":"https://zqs1qiwan.github.io/checkq/","name":"CheckQ 文档","inLanguage":"zh-CN","description":"CheckQ 是开源的可视化 HTTP 自动化流程引擎：积木式流程、调度与失败重试、日志与通知、模板联动、REST API 与 MCP。","publisher":{"@type":"Organization","name":"CheckQ","url":"https://github.com/zqs1qiwan/checkq","logo":{"@type":"ImageObject","url":"https://zqs1qiwan.github.io/checkq/assets/brand/checkq-mark.svg","width":120,"height":120}}},{"@type":"TechArticle","@id":"https://zqs1qiwan.github.io/checkq/quickstart.html#article","headline":"快速开始","name":"快速开始","description":"三步跑通第一个 CheckQ 任务：建任务、跑一次、定调度与重试；另有通知配置、存为模板与外部 Agent 接入。","url":"https://zqs1qiwan.github.io/checkq/quickstart.html","mainEntityOfPage":"https://zqs1qiwan.github.io/checkq/quickstart.html","inLanguage":"zh-CN","dateModified":"2026-11-20","isPartOf":{"@id":"https://zqs1qiwan.github.io/checkq/#website"},"image":"https://zqs1qiwan.github.io/checkq/assets/social-preview.png","publisher":{"@type":"Organization","name":"CheckQ","url":"https://github.com/zqs1qiwan/checkq"}}]}</script>
+<script>(function(){try{var k='checkq-wiki-theme';var s=window.localStorage.getItem(k);var m=(s==='light'||s==='dark')?s:((window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches)?'light':'dark');document.documentElement.setAttribute('data-mode',m);}catch(e){}document.documentElement.classList.add('js');})();</script>
+<noscript><style>.copy-btn,.search{display:none !important}</style></noscript>
 </head>
-<body>
-<div class="wrap">
-  <aside>
-    <div class="brand"><img src="./assets/brand/checkq-mark.svg" width="24" height="24" alt="" /><span class="brand-word">Check<em>Q</em></span></div>
-    <div class="brand-sub">开源可视化自动挂机与签到 · 文档</div>
-    <input id="search" type="search" placeholder="搜索文档…" autocomplete="off" />
-    <div id="results"></div>
-    <nav>
-<a class="" href="index.html">概览<em>CheckQ 能做什么</em></a>
-<a class="on" href="quickstart.html">快速开始<em>3 步跑通第一个任务</em></a>
-<a class="" href="tasks.html">任务与流程<em>节点、变量、分组、调度、重试</em></a>
-<a class="" href="logs.html">日志与通知<em>运行记录、连续日志、通知渠道</em></a>
-<a class="" href="security.html">账号与安全<em>多用户、两步验证、凭据保护</em></a>
-<a class="" href="api.html">API 与 MCP<em>给外部程序/Agent 用的接口</em></a>
-<a class="" href="deploy.html">部署与备份<em>Docker、数据目录、备份恢复</em></a>
-<a class="" href="faq.html">常见问题<em>排障速查</em></a>
-<a class="" href="changelog.html">更新日志<em>新功能与修复</em></a>
-<a class="" href="reference-api.html">API 参考<em>全部端点</em></a>
-<a class="" href="reference-mcp.html">MCP 工具<em>工具清单与接入</em></a>
-<a class="" href="reference-security.html">安全说明<em>威胁与防护全表</em></a>
-<a class="" href="reference-agent.html">Agent 接入指南<em>给外部 Agent 什么</em></a>
-    </nav>
-    <div class="brand-sub" style="margin-top:18px"><a href="https://github.com/zqs1qiwan/checkq">GitHub 仓库 →</a></div>
+<body id="top">
+<a class="skip-link" href="#main">跳到正文</a>
+<header class="topbar">
+  <button class="icon-btn nav-toggle" id="nav-toggle" type="button" aria-controls="sidenav" aria-expanded="false" aria-label="打开文档导航">
+    <svg class="ico" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path d="M4 7h16M4 12h16M4 17h16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+  </button>
+  <a class="brand" href="./index.html">
+    <img class="brand-mark" src="./assets/brand/checkq-mark.svg" width="26" height="26" alt="" />
+    <span class="brand-word">Check<em>Q</em></span>
+    <span class="brand-ver">v0.6.5</span>
+  </a>
+  <span class="topbar-title">文档</span>
+  <div class="topbar-links">
+    <a class="tb-link" href="https://github.com/zqs1qiwan/checkq" target="_blank" rel="noopener noreferrer">GitHub 仓库</a>
+    <a class="tb-link" href="https://github.com/zqs1qiwan/checkq/issues" target="_blank" rel="noopener noreferrer">Issues</a>
+  </div>
+  <button class="icon-btn theme-toggle" id="theme-toggle" type="button" aria-pressed="false" aria-label="切换深色 / 浅色主题" title="切换深色 / 浅色主题">
+    <svg class="ico ico-moon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
+    <svg class="ico ico-sun" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="4.2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12 2.6v2.2M12 19.2v2.2M4.2 4.2l1.6 1.6M18.2 18.2l1.6 1.6M2.6 12h2.2M19.2 12h2.2M4.2 19.8l1.6-1.6M18.2 5.8l1.6-1.6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+  </button>
+</header>
+<div class="shell">
+  <aside class="sidenav" id="sidenav" aria-label="文档导航">
+    <div class="sidenav-inner">
+      <div class="search">
+        <label class="sr-only" for="search">搜索文档</label>
+        <input id="search" class="search-input" type="search" placeholder="搜索文档…" autocomplete="off" spellcheck="false" role="combobox" aria-expanded="false" aria-controls="results" aria-autocomplete="list" aria-haspopup="listbox" />
+        <kbd class="search-hint" aria-hidden="true">/</kbd>
+        <div class="search-results" id="results" role="listbox" aria-label="搜索结果" hidden></div>
+        <p class="sr-only" id="search-status" role="status" aria-live="polite"></p>
+      </div>
+      <nav class="sidenav-nav" aria-label="文档页面">
+<p class="nav-group">入门</p><a class="nav-link" href="./index.html">概览<em>CheckQ 能做什么</em></a>
+<a class="nav-link is-active" href="./quickstart.html" aria-current="page">快速开始<em>3 步跑通第一个任务</em></a>
+<p class="nav-group">使用</p><a class="nav-link" href="./tasks.html">任务与流程<em>节点、变量、分组、调度、重试</em></a>
+<a class="nav-link" href="./logs.html">日志与通知<em>运行记录、连续日志、通知渠道</em></a>
+<a class="nav-link" href="./security.html">账号与安全<em>多用户、两步验证、凭据保护</em></a>
+<a class="nav-link" href="./deploy.html">部署与备份<em>Docker、数据目录、备份恢复</em></a>
+<p class="nav-group">参考</p><a class="nav-link" href="./api.html">API 与 MCP<em>给外部程序 / Agent 用的接口</em></a>
+<a class="nav-link" href="./reference-api.html">API 参考<em>全部端点</em></a>
+<a class="nav-link" href="./reference-mcp.html">MCP 工具<em>工具清单与接入</em></a>
+<a class="nav-link" href="./reference-agent.html">Agent 接入指南<em>给外部 Agent 什么</em></a>
+<a class="nav-link" href="./reference-security.html">安全说明<em>威胁与防护全表</em></a>
+<p class="nav-group">更多</p><a class="nav-link" href="./faq.html">常见问题<em>排障速查</em></a>
+<a class="nav-link" href="./changelog.html">更新日志<em>新功能与修复</em></a>
+      </nav>
+      <div class="sidenav-foot">
+        <a href="https://github.com/zqs1qiwan/checkq" target="_blank" rel="noopener noreferrer">GitHub 仓库</a>
+        <a href="https://github.com/zqs1qiwan/checkq/issues" target="_blank" rel="noopener noreferrer">反馈问题</a>
+      </div>
+    </div>
   </aside>
-  <main>
-<h1 id="快速开始">快速开始</h1>
-<h2 id="1-建任务">1. 建任务</h2>
+  <div class="scrim" id="scrim" hidden></div>
+  <main class="main" id="main" tabindex="-1">
+    <nav class="crumbs" aria-label="面包屑"><a href="./index.html">文档</a><span class="sep" aria-hidden="true">/</span><span aria-current="page">快速开始</span></nav>
+    <details class="toc-mobile">
+<summary>本页目录</summary>
+<nav class="toc-nav toc-nav-mobile" aria-label="本页目录"><p class="toc-title">本页目录</p>
+<a class="toc-l2" href="#1-建任务">1. 建任务</a>
+<a class="toc-l2" href="#2-跑一次">2. 跑一次</a>
+<a class="toc-l2" href="#3-定调度与重试">3. 定调度与重试</a>
+<a class="toc-l2" href="#4-收通知">4. 收通知</a>
+<a class="toc-l2" href="#5-变成模板可选">5. 变成模板（可选）</a>
+<a class="toc-l2" href="#6-自动化可选">6. 自动化（可选）</a>
+</nav>
+</details>
+    <article class="doc">
+<h1 id="快速开始">快速开始<a class="h-anchor" href="#快速开始" aria-label="本节永久链接">#</a></h1>
+<p class="doc-meta"><span>v0.6.5</span><span>更新于 2026-11-20</span><a class="edit-link" href="https://github.com/zqs1qiwan/checkq/edit/main/tools/build-wiki.cjs" target="_blank" rel="noopener noreferrer">在 GitHub 编辑此页 ↗</a></p>
+<h2 id="1-建任务">1. 建任务<a class="h-anchor" href="#1-建任务" aria-label="本节永久链接">#</a></h2>
 <p>顶栏「+ 新建任务」→ 画布自带「HTTP 请求 → 日志」两个节点 → 点 HTTP 节点填 URL、请求头（需要登录态时带上 cookie）。</p>
-<h2 id="2-跑一次">2. 跑一次</h2>
+<h2 id="2-跑一次">2. 跑一次<a class="h-anchor" href="#2-跑一次" aria-label="本节永久链接">#</a></h2>
 <p>顶栏「运行」。成功时日志只有一行人话；失败时点日志步骤可看响应体。</p>
-<h2 id="3-定调度与重试">3. 定调度与重试</h2>
-<p>编辑器顶栏「调度」→ 填 cron（如 <code>30 8 <em> </em> *</code> = 每天 08:30）→ 启用。同一个弹窗里可配置<strong>失败重试</strong>：默认最多 3 次、指数退避 5 秒起、随机抖动；跑满次数仍失败才判定任务失败，逐次尝试与等待时长会写进日志与通知。调试运行不重试。</p>
-<h2 id="4-收通知">4. 收通知</h2>
+<h2 id="3-定调度与重试">3. 定调度与重试<a class="h-anchor" href="#3-定调度与重试" aria-label="本节永久链接">#</a></h2>
+<p>编辑器顶栏「调度」→ 填 cron（如 <code>30 8 * * *</code> = 每天 08:30）→ 启用。同一个弹窗里可配置<strong>失败重试</strong>：默认最多 3 次、指数退避 5 秒起、随机抖动；跑满次数仍失败才判定任务失败，逐次尝试与等待时长会写进日志与通知。调试运行不重试。</p>
+<aside class="callout callout-tip" role="note"><p class="callout-title">先调试，再定稿</p><p>「调试运行」记录每步请求 / 响应并展开过程窗口；日常「运行」只输出配置好的日志。任务行「日志」还能把多次运行拍平成一条时间线。</p></aside>
+<h2 id="4-收通知">4. 收通知<a class="h-anchor" href="#4-收通知" aria-label="本节永久链接">#</a></h2>
 <p>编辑器「更多 → 通知渠道」→ 选类型（站内通知零依赖）→ 填地址 →「测试发送」。</p>
-<h2 id="5-变成模板-可选">5. 变成模板（可选）</h2>
-<p>编辑器「更多 → 存为模板」→ 之后从模板创建任务时，各自填自己的变量（如 token）。模板一改，已派生的任务立刻跟随。</p>
-<h2 id="6-自动化-可选">6. 自动化（可选）</h2>
+<h2 id="5-变成模板可选">5. 变成模板（可选）<a class="h-anchor" href="#5-变成模板可选" aria-label="本节永久链接">#</a></h2>
+<p>编辑器「更多 → 存为模板」→ 之后从模板创建任务时，各自填自己的变量（如 token）。模板一改，已派生任务的流程图与日志配置立刻跟随；通知渠道在创建时复制，之后可在任务里单独调整。</p>
+<h2 id="6-自动化可选">6. 自动化（可选）<a class="h-anchor" href="#6-自动化可选" aria-label="本节永久链接">#</a></h2>
 <ul><li><strong>调试运行</strong>：编辑器顶栏「调试运行」记录每步请求/响应并展开过程窗口；日常「运行」只输出配置好的日志。</li><li><strong>连续日志流</strong>：任务行「日志」→ 多次运行滚动在一起，可上翻历史、导出。</li><li><strong>外部 Agent</strong>：设置 → API 密钥 → 生成（只读 + 可运行）→ 配合 <a href="api.html">API 与 MCP</a>。</li><li><strong>窄屏</strong>：顶栏「+ / ⋯ / 设置」三个图标按钮；主题、站内通知、文档中心、登录身份都在「⋯」里。</li></ul>
-    <div class="foot">CheckQ 文档 · 由 <code>tools/build-wiki.cjs</code> 生成 · <a href="https://github.com/zqs1qiwan/checkq/issues">反馈问题</a></div>
+    </article>
+<nav class="pager" aria-label="页面翻页">
+<a class="pager-link prev" href="./index.html" rel="prev"><span class="dir">← 上一页</span><span class="ttl">概览</span></a><a class="pager-link next" href="./tasks.html" rel="next"><span class="dir">下一页 →</span><span class="ttl">任务与流程</span></a>
+</nav>
+    <footer class="site-foot" role="contentinfo">
+      <div class="foot-grid">
+        <div class="foot-about">
+          <a class="foot-logo" href="./index.html"><img src="./assets/brand/checkq-mark.svg" width="22" height="22" alt="" /><span>Check<em>Q</em></span></a>
+          <p>开源的可视化 HTTP 自动化流程引擎。本站只讲框架能力，不含具体签到脚本、站点规则或账号信息。</p>
+        </div>
+        <div class="foot-links">
+          <p class="foot-title">项目</p>
+          <ul>
+            <li><a href="https://github.com/zqs1qiwan/checkq" target="_blank" rel="noopener noreferrer">GitHub 仓库</a></li>
+            <li><a href="https://github.com/zqs1qiwan/checkq/issues" target="_blank" rel="noopener noreferrer">Issues</a></li>
+            <li><a href="https://github.com/zqs1qiwan/checkq/releases" target="_blank" rel="noopener noreferrer">版本发布</a></li>
+            <li><a href="https://github.com/zqs1qiwan/checkq/blob/main/docs/SECURITY.md" target="_blank" rel="noopener noreferrer">安全说明</a></li>
+            <li><a href="https://github.com/zqs1qiwan/checkq/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">MIT 许可证</a></li>
+          </ul>
+        </div>
+        <div class="foot-links">
+          <p class="foot-title">文档</p>
+          <ul>
+            <li><a href="./quickstart.html">快速开始</a></li>
+            <li><a href="./reference-api.html">API 参考</a></li>
+            <li><a href="./reference-mcp.html">MCP 工具</a></li>
+            <li><a href="./faq.html">常见问题</a></li>
+            <li><a href="./changelog.html">更新日志</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="foot-meta">
+        <p>v0.6.5 · 生成于 2026-11-20 05:01 UTC · 由 <code>tools/build-wiki.cjs</code> 从 <code>docs/</code> 与内置页面生成</p>
+        <p><a class="to-top" href="#top">↑ 返回顶部</a></p>
+      </div>
+    </footer>
   </main>
+  <aside class="toc-col" aria-label="本页目录">
+<nav class="toc-nav" aria-label="本页目录"><p class="toc-title">本页目录</p>
+<a class="toc-l2" href="#1-建任务">1. 建任务</a>
+<a class="toc-l2" href="#2-跑一次">2. 跑一次</a>
+<a class="toc-l2" href="#3-定调度与重试">3. 定调度与重试</a>
+<a class="toc-l2" href="#4-收通知">4. 收通知</a>
+<a class="toc-l2" href="#5-变成模板可选">5. 变成模板（可选）</a>
+<a class="toc-l2" href="#6-自动化可选">6. 自动化（可选）</a>
+</nav>
+</aside>
 </div>
-<script>
-(function () {
-  var input = document.getElementById('search');
-  var box = document.getElementById('results');
-  var index = [];
-  fetch('./search-index.json').then(function (r) { return r.json(); }).then(function (d) { index = d; });
-  function esc(s) { return s.replace(/[&<>]/g, function (c) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]; }); }
-  function run() {
-    var q = input.value.trim().toLowerCase();
-    if (!q) { box.classList.remove('on'); box.innerHTML = ''; return; }
-    var hits = [];
-    for (var i = 0; i < index.length; i++) {
-      var it = index[i];
-      var pos = it.text.toLowerCase().indexOf(q);
-      if (pos < 0 && it.title.toLowerCase().indexOf(q) < 0) continue;
-      var start = Math.max(0, pos - 40);
-      var snippet = (pos >= 0 ? it.text.slice(start, start + 120) : it.text.slice(0, 120));
-      hits.push('<a href="' + it.file + '">' + esc(it.title) + '<em>' + esc(snippet) + '…</em></a>');
-      if (hits.length >= 8) break;
-    }
-    box.innerHTML = hits.join('') || '<a href="javascript:void(0)">没有匹配</a>';
-    box.classList.add('on');
-  }
-  input.addEventListener('input', run);
-  input.addEventListener('keydown', function (e) { if (e.key === 'Escape') { input.value = ''; run(); input.blur(); } });
-  document.addEventListener('click', function (e) { if (!box.contains(e.target) && e.target !== input) box.classList.remove('on'); });
-})();
-</script>
+<script src="./assets/site.js" defer></script>
 </body>
 </html>

@@ -17,7 +17,7 @@
 | 作用域 | `read` 查看 / `run` 运行任务 / `write` 改配置 / `secrets` 读明文凭据；权限不足返回 403。旧 Key 未声明作用域时默认 `read/run/write`，**不含 `secrets`** |
 | 任务范围 | `flowIds` 指定任务、`groups` 指定分组（两者都填取并集；都为空 = 全部任务）。受限 Key 不能创建/克隆任务或模板，也不能改分组逃逸范围 |
 | 回收日期 | 到期自动失效并从列表移除（过期请求返回 401「已过期并被回收」） |
-| 限流 | 登录 5 次/10 分钟（IP）+ 8 次/15 分钟（账号）；API 调用无固定限流 |
+| 限流 | 登录 5 次/10 分钟（IP）+ 8 次/15 分钟（账号）；AI 生成/连接测试 30 次/分钟（每账号或 Key），其余 API 调用无固定限流 |
 | IP 名单 | 每把 Key 可设 **IP 允许名单**（CIDR）；另有**全局 IP 黑名单**（登录与 API Key 同时生效）；名单外返回 403 |
 
 最小示例：
@@ -89,8 +89,10 @@ X-API-Key: <key>
 | POST | /api/system/password | `{ oldPassword, newPassword }` |
 | POST | /api/system/apikey | 生成/重新生成 API Key，返回 `{ apiKey }` |
 | GET | /api/system/stats | `{ flows, enabledScheduled, templates, todayRuns, todaySuccess, todayFailed, successRate, nextRunAt, runningFlowIds, queuedFlowIds, queuedFlows, queueCount, runningCount, maxConcurrency, globalWaiting, dailySummary }` |
-| GET/PUT | /api/system/ai | AI 助手配置（baseUrl/apiKey/model，key 打码回显） |
-| POST | /api/ai/generate | `{ sentence }` → LLM 生成流程草稿（≤6 节点，http URL 必填，草稿 enabled:false） |
+| GET | /api/system/ai | AI 助手配置（任意登录用户）：`{ configured, baseUrl, model, apiKey(打码前缀…), hasKey, timeoutSec, maxTokens }`；API Key 永不回显明文 |
+| PUT | /api/system/ai | 保存 AI 配置（**仅 admin**）：`{ baseUrl, apiKey, model, timeoutSec?, maxTokens? }`。`baseUrl` 仅 http(s)，自动去尾 `/` 并兼容 `.../v1` 与 `.../v1/chat/completions`；`timeoutSec` 5–120（默认 60）、`maxTokens` 1–4096（默认 1024）；`model` 必填；`apiKey` 传空或打码占位保留旧 Key，三个字段全空=清空配置；审计 `ai.config.save`（不记 Key） |
+| POST | /api/ai/test | 测试连接（**仅 admin**）：用已保存配置发一条最小请求，body 可带 `{ timeoutSec }`（1–120，仅本次覆盖）→ `{ ok, latencyMs, model, sample, usage }`。上游 401/404/超时/非 JSON 返回中文 `error`（已脱敏，不含 Key）；审计 `ai.test` |
+| POST | /api/ai/generate | `{ sentence }` → `{ draft }`。登录用户可用，API Key 需 `write` 作用域；≤6 节点、`edges` 只保留 source/target 都存在且去重后的连线、`cron` 仅 5 段或空、过滤 `__proto__/constructor/prototype`，草稿固定 `enabled:false`、`vars:{}`；超时读配置；审计 `ai.generate`（只记输入长度/结果，不记 prompt） |
 | GET/PUT | /api/system/daily-summary-config | 每日汇总定时配置（兼容一版；`targetFlowIds` 只读，不再写入；新代码用 `/api/system/notify`） |
 | GET/PUT | /api/system/notify | 系统通知设置：`{ daily, channels, migratedFrom, lastResult }`；GET 任意登录用户，PUT 需 admin；`channels` 含内置 `inbox`，外部渠道最多 10 条 |
 | POST | /api/system/notify/preview | `{ date? }` → `{ text, window, counts, skipped? }`（任意登录用户） |
@@ -137,7 +139,7 @@ X-API-Key: <key>
 | POST | /api/templates | 新建模板（body = 完整模板 JSON：`name, desc, vars, varNames, nodes, edges, log, notify`） |
 | POST | /api/templates/from-flow/:flowId | 从已有流程另存为模板 `{ name?, desc? }` |
 | GET | /api/templates/:id | 详情 |
-| PUT | /api/templates/:id | 更新 —— 派生任务立刻跟随（无需同步动作） |
+| PUT | /api/templates/:id | 更新 —— 派生任务的流程图 / 日志配置立刻跟随；通知渠道在创建任务时复制，之后各任务独立维护（无需同步动作） |
 | DELETE | /api/templates/:id | 删除（派生任务保留最后一份流程，照常可跑） |
 | POST | /api/templates/:id/instantiate | `{ vars? }` 实例化为任务（任务 = 模板 + 自己的参数） |
 | POST | /api/templates/:id/instantiate-csv | CSV 批量实例化 |

@@ -1,91 +1,178 @@
 <!doctype html>
-<html lang="zh-CN" data-mode="dark">
+<html lang="zh-CN" data-mode="dark" data-base="./">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <meta name="color-scheme" content="dark light" />
+<meta name="theme-color" content="#0b0e11" media="(prefers-color-scheme: dark)" />
+<meta name="theme-color" content="#f3f5f6" media="(prefers-color-scheme: light)" />
 <title>安全说明 · CheckQ 文档</title>
-<meta name="description" content="威胁与防护全表" />
+<meta name="description" content="CheckQ 安全模型与威胁清单：凭据加密、会话、API Key、网络暴露、备份与审计的防护措施与运维建议。" />
+<meta name="robots" content="index, follow" />
+<link rel="canonical" href="https://zqs1qiwan.github.io/checkq/reference-security.html" />
+<meta property="og:type" content="article" />
+<meta property="og:site_name" content="CheckQ 文档" />
+<meta property="og:locale" content="zh_CN" />
+<meta property="og:title" content="安全说明 · CheckQ 文档" />
+<meta property="og:description" content="CheckQ 安全模型与威胁清单：凭据加密、会话、API Key、网络暴露、备份与审计的防护措施与运维建议。" />
+<meta property="og:url" content="https://zqs1qiwan.github.io/checkq/reference-security.html" />
+<meta property="og:image" content="https://zqs1qiwan.github.io/checkq/assets/social-preview.png" />
+<meta property="og:image:width" content="1280" />
+<meta property="og:image:height" content="640" />
+<meta property="og:image:alt" content="CheckQ 文档：开源的可视化 HTTP 自动化流程引擎" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="安全说明 · CheckQ 文档" />
+<meta name="twitter:description" content="CheckQ 安全模型与威胁清单：凭据加密、会话、API Key、网络暴露、备份与审计的防护措施与运维建议。" />
+<meta name="twitter:image" content="https://zqs1qiwan.github.io/checkq/assets/social-preview.png" />
 <link rel="icon" href="./assets/brand/checkq-mark.svg" type="image/svg+xml" />
+<link rel="apple-touch-icon" href="./assets/brand/apple-touch-icon.png" />
 <link rel="stylesheet" href="./assets/style.css" />
-
+<link rel="sitemap" type="application/xml" href="https://zqs1qiwan.github.io/checkq/sitemap.xml" />
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebSite","@id":"https://zqs1qiwan.github.io/checkq/#website","url":"https://zqs1qiwan.github.io/checkq/","name":"CheckQ 文档","inLanguage":"zh-CN","description":"CheckQ 是开源的可视化 HTTP 自动化流程引擎：积木式流程、调度与失败重试、日志与通知、模板联动、REST API 与 MCP。","publisher":{"@type":"Organization","name":"CheckQ","url":"https://github.com/zqs1qiwan/checkq","logo":{"@type":"ImageObject","url":"https://zqs1qiwan.github.io/checkq/assets/brand/checkq-mark.svg","width":120,"height":120}}},{"@type":"TechArticle","@id":"https://zqs1qiwan.github.io/checkq/reference-security.html#article","headline":"安全说明","name":"安全说明","description":"CheckQ 安全模型与威胁清单：凭据加密、会话、API Key、网络暴露、备份与审计的防护措施与运维建议。","url":"https://zqs1qiwan.github.io/checkq/reference-security.html","mainEntityOfPage":"https://zqs1qiwan.github.io/checkq/reference-security.html","inLanguage":"zh-CN","dateModified":"2026-11-20","isPartOf":{"@id":"https://zqs1qiwan.github.io/checkq/#website"},"image":"https://zqs1qiwan.github.io/checkq/assets/social-preview.png","publisher":{"@type":"Organization","name":"CheckQ","url":"https://github.com/zqs1qiwan/checkq"}}]}</script>
+<script>(function(){try{var k='checkq-wiki-theme';var s=window.localStorage.getItem(k);var m=(s==='light'||s==='dark')?s:((window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches)?'light':'dark');document.documentElement.setAttribute('data-mode',m);}catch(e){}document.documentElement.classList.add('js');})();</script>
+<noscript><style>.copy-btn,.search{display:none !important}</style></noscript>
 </head>
-<body>
-<div class="wrap">
-  <aside>
-    <div class="brand"><img src="./assets/brand/checkq-mark.svg" width="24" height="24" alt="" /><span class="brand-word">Check<em>Q</em></span></div>
-    <div class="brand-sub">开源可视化自动挂机与签到 · 文档</div>
-    <input id="search" type="search" placeholder="搜索文档…" autocomplete="off" />
-    <div id="results"></div>
-    <nav>
-<a class="" href="index.html">概览<em>CheckQ 能做什么</em></a>
-<a class="" href="quickstart.html">快速开始<em>3 步跑通第一个任务</em></a>
-<a class="" href="tasks.html">任务与流程<em>节点、变量、分组、调度、重试</em></a>
-<a class="" href="logs.html">日志与通知<em>运行记录、连续日志、通知渠道</em></a>
-<a class="" href="security.html">账号与安全<em>多用户、两步验证、凭据保护</em></a>
-<a class="" href="api.html">API 与 MCP<em>给外部程序/Agent 用的接口</em></a>
-<a class="" href="deploy.html">部署与备份<em>Docker、数据目录、备份恢复</em></a>
-<a class="" href="faq.html">常见问题<em>排障速查</em></a>
-<a class="" href="changelog.html">更新日志<em>新功能与修复</em></a>
-<a class="" href="reference-api.html">API 参考<em>全部端点</em></a>
-<a class="" href="reference-mcp.html">MCP 工具<em>工具清单与接入</em></a>
-<a class="on" href="reference-security.html">安全说明<em>威胁与防护全表</em></a>
-<a class="" href="reference-agent.html">Agent 接入指南<em>给外部 Agent 什么</em></a>
-    </nav>
-    <div class="brand-sub" style="margin-top:18px"><a href="https://github.com/zqs1qiwan/checkq">GitHub 仓库 →</a></div>
+<body id="top">
+<a class="skip-link" href="#main">跳到正文</a>
+<header class="topbar">
+  <button class="icon-btn nav-toggle" id="nav-toggle" type="button" aria-controls="sidenav" aria-expanded="false" aria-label="打开文档导航">
+    <svg class="ico" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path d="M4 7h16M4 12h16M4 17h16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+  </button>
+  <a class="brand" href="./index.html">
+    <img class="brand-mark" src="./assets/brand/checkq-mark.svg" width="26" height="26" alt="" />
+    <span class="brand-word">Check<em>Q</em></span>
+    <span class="brand-ver">v0.6.5</span>
+  </a>
+  <span class="topbar-title">文档</span>
+  <div class="topbar-links">
+    <a class="tb-link" href="https://github.com/zqs1qiwan/checkq" target="_blank" rel="noopener noreferrer">GitHub 仓库</a>
+    <a class="tb-link" href="https://github.com/zqs1qiwan/checkq/issues" target="_blank" rel="noopener noreferrer">Issues</a>
+  </div>
+  <button class="icon-btn theme-toggle" id="theme-toggle" type="button" aria-pressed="false" aria-label="切换深色 / 浅色主题" title="切换深色 / 浅色主题">
+    <svg class="ico ico-moon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
+    <svg class="ico ico-sun" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="4.2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12 2.6v2.2M12 19.2v2.2M4.2 4.2l1.6 1.6M18.2 18.2l1.6 1.6M2.6 12h2.2M19.2 12h2.2M4.2 19.8l1.6-1.6M18.2 5.8l1.6-1.6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+  </button>
+</header>
+<div class="shell">
+  <aside class="sidenav" id="sidenav" aria-label="文档导航">
+    <div class="sidenav-inner">
+      <div class="search">
+        <label class="sr-only" for="search">搜索文档</label>
+        <input id="search" class="search-input" type="search" placeholder="搜索文档…" autocomplete="off" spellcheck="false" role="combobox" aria-expanded="false" aria-controls="results" aria-autocomplete="list" aria-haspopup="listbox" />
+        <kbd class="search-hint" aria-hidden="true">/</kbd>
+        <div class="search-results" id="results" role="listbox" aria-label="搜索结果" hidden></div>
+        <p class="sr-only" id="search-status" role="status" aria-live="polite"></p>
+      </div>
+      <nav class="sidenav-nav" aria-label="文档页面">
+<p class="nav-group">入门</p><a class="nav-link" href="./index.html">概览<em>CheckQ 能做什么</em></a>
+<a class="nav-link" href="./quickstart.html">快速开始<em>3 步跑通第一个任务</em></a>
+<p class="nav-group">使用</p><a class="nav-link" href="./tasks.html">任务与流程<em>节点、变量、分组、调度、重试</em></a>
+<a class="nav-link" href="./logs.html">日志与通知<em>运行记录、连续日志、通知渠道</em></a>
+<a class="nav-link" href="./security.html">账号与安全<em>多用户、两步验证、凭据保护</em></a>
+<a class="nav-link" href="./deploy.html">部署与备份<em>Docker、数据目录、备份恢复</em></a>
+<p class="nav-group">参考</p><a class="nav-link" href="./api.html">API 与 MCP<em>给外部程序 / Agent 用的接口</em></a>
+<a class="nav-link" href="./reference-api.html">API 参考<em>全部端点</em></a>
+<a class="nav-link" href="./reference-mcp.html">MCP 工具<em>工具清单与接入</em></a>
+<a class="nav-link" href="./reference-agent.html">Agent 接入指南<em>给外部 Agent 什么</em></a>
+<a class="nav-link is-active" href="./reference-security.html" aria-current="page">安全说明<em>威胁与防护全表</em></a>
+<p class="nav-group">更多</p><a class="nav-link" href="./faq.html">常见问题<em>排障速查</em></a>
+<a class="nav-link" href="./changelog.html">更新日志<em>新功能与修复</em></a>
+      </nav>
+      <div class="sidenav-foot">
+        <a href="https://github.com/zqs1qiwan/checkq" target="_blank" rel="noopener noreferrer">GitHub 仓库</a>
+        <a href="https://github.com/zqs1qiwan/checkq/issues" target="_blank" rel="noopener noreferrer">反馈问题</a>
+      </div>
+    </div>
   </aside>
-  <main>
-<h1 id="checkq-安全说明-v0-4-3">CheckQ 安全说明（v0.4.3）</h1>
-<blockquote>覆盖：账号体系、密码存储、TOTP 两步验证、会话、权限、已知风险与自查结论、运维手册。</blockquote>
-<h2 id="1-账号体系">1. 账号体系</h2>
+  <div class="scrim" id="scrim" hidden></div>
+  <main class="main" id="main" tabindex="-1">
+    <nav class="crumbs" aria-label="面包屑"><a href="./index.html">文档</a><span class="sep" aria-hidden="true">/</span><span aria-current="page">安全说明</span></nav>
+    <details class="toc-mobile">
+<summary>本页目录</summary>
+<nav class="toc-nav toc-nav-mobile" aria-label="本页目录"><p class="toc-title">本页目录</p>
+<a class="toc-l2" href="#0-报告安全问题">0. 报告安全问题</a>
+<a class="toc-l2" href="#1-账号体系">1. 账号体系</a>
+<a class="toc-l2" href="#2-密码存储">2. 密码存储</a>
+<a class="toc-l2" href="#3-两步验证totprfc-6238">3. 两步验证（TOTP，RFC 6238）</a>
+<a class="toc-l2" href="#4-会话与鉴权">4. 会话与鉴权</a>
+<a class="toc-l2" href="#5-权限矩阵">5. 权限矩阵</a>
+<a class="toc-l2" href="#6-web-安全加固">6. Web 安全加固</a>
+<a class="toc-l3" href="#61-执行隔离与资源上限064">6.1 执行隔离与资源上限（0.6.4）</a>
+<a class="toc-l3" href="#62-ip-访问控制v043">6.2 IP 访问控制（v0.4.3）</a>
+<a class="toc-l2" href="#7-自查已发现并修复的问题">7. 自查：已发现并修复的问题</a>
+<a class="toc-l2" href="#8-与-qinglong-qiandao-的做法对照2026-11-调研">8. 与 qinglong / qiandao 的做法对照（2026-11 调研）</a>
+<a class="toc-l3" href="#81-qinglong青龙">8.1 qinglong（青龙）</a>
+<a class="toc-l3" href="#82-qiandao签到">8.2 qiandao（签到）</a>
+<a class="toc-l3" href="#83-结论与取舍">8.3 结论与取舍</a>
+<a class="toc-l2" href="#9-修改用户名-密码怎么做面板操作">9. 修改用户名 / 密码怎么做（面板操作）</a>
+<a class="toc-l2" href="#10-仍存在的风险与建议需要你决策外部动作">10. 仍存在的风险与建议（需要你决策/外部动作）</a>
+<a class="toc-l2" href="#11-运维手册">11. 运维手册</a>
+<a class="toc-l2" href="#12-签到凭据cookie-token-脚本怎么存怎么保安全">12. 签到凭据（cookie / token / 脚本）怎么存、怎么保安全</a>
+<a class="toc-l3" href="#121-三个产品怎么存签到资源">12.1 三个产品怎么存「签到资源」</a>
+<a class="toc-l3" href="#122-我们的做法已实现">12.2 我们的做法（已实现）</a>
+<a class="toc-l3" href="#123-与两者相比我们更强-更弱的地方">12.3 与两者相比，我们更强 / 更弱的地方</a>
+<a class="toc-l3" href="#124-建议的后续动作可选">12.4 建议的后续动作（可选）</a>
+<a class="toc-l2" href="#13-自测">13. 自测</a>
+</nav>
+</details>
+    <article class="doc">
+<h1 id="checkq-安全说明v065">CheckQ 安全说明（v0.6.5）<a class="h-anchor" href="#checkq-安全说明v065" aria-label="本节永久链接">#</a></h1>
+<p class="doc-meta"><span>v0.6.5</span><span>更新于 2026-11-20</span><a class="edit-link" href="https://github.com/zqs1qiwan/checkq/edit/main/docs/SECURITY.md" target="_blank" rel="noopener noreferrer">在 GitHub 编辑此页 ↗</a></p>
+<blockquote><p>覆盖：账号体系、密码存储、TOTP 两步验证、会话、权限、已知风险与自查结论、运维手册。</p></blockquote>
+<blockquote><p><strong>2026-11-18 审计补充</strong>：<code>0.6.3</code> 已修复日志/默认备份脱敏与来源 IP 信任边界（T02/T03/T04）；<code>0.6.4</code> 进一步补齐 <code>script</code> 子进程隔离（T01）、API Key 任务范围与 <code>secrets</code> 作用域（T05）、HTTP 响应体字节上限（T09）、运行取消/整体超时/在途持久化（T12）、保存失败阻止运行与版本冲突（T15）。完整清单见下文 <a href="#7-自查已发现并修复的问题">§7 自查：已发现并修复的问题</a> 与 <a href="./changelog.html">更新日志</a> 的 0.6.4 条目。</p></blockquote>
+<h2 id="0-报告安全问题">0. 报告安全问题<a class="h-anchor" href="#0-报告安全问题" aria-label="本节永久链接">#</a></h2>
+<p>请使用 GitHub Security Advisories 私密报告：&lt;https://github.com/zqs1qiwan/checkq/security/advisories/new&gt;。不要在公开 Issue 中粘贴真实凭据或可直接利用的复现细节；报告请附版本、部署方式、复现步骤与影响范围。</p>
+<h2 id="1-账号体系">1. 账号体系<a class="h-anchor" href="#1-账号体系" aria-label="本节永久链接">#</a></h2>
 <div class="table-wrap"><table><thead><tr><th>项</th><th>说明</th></tr></thead><tbody><tr><td>账号</td><td>多用户，存 <code>meta.json</code> 的 <code>users[]</code>；每账号含用户名 / 显示名 / 角色 / 密码哈希 / 2FA / 恢复码 / 失败计数 / 最后登录</td></tr><tr><td>角色</td><td><code>admin</code>（全部，含用户管理）/ <code>operator</code>（不能管账号与用户）/ <code>viewer</code>（<strong>只读</strong>，任何写操作 403）</td></tr><tr><td>登录</td><td>用户名 + 密码；启用了 2FA 的账号再要 6 位动态码或一次性恢复码</td></tr><tr><td>兼容</td><td>只传密码也能登录（唯一账号时自动匹配）；旧版 <code>meta.passwordHash</code> 在启动时<strong>自动迁移</strong>为 <code>admin</code> 用户</td></tr><tr><td>首次启动</td><td>无任何账号时进入「创建管理员」：用户名 + 强密码（≥10 位、两类字符、不在弱口令表、不含用户名）</td></tr></tbody></table></div>
-<h2 id="2-密码存储">2. 密码存储</h2>
+<h2 id="2-密码存储">2. 密码存储<a class="h-anchor" href="#2-密码存储" aria-label="本节永久链接">#</a></h2>
 <ul><li>算法：<strong>scrypt</strong>（N=16384, r=8, p=1, 32 字节输出），每账号 <strong>16 字节随机盐</strong>，存储格式 <code>salt:hash</code>（hex）；</li><li>比较：<code>crypto.timingSafeEqual</code> 常量时间；<strong>用户不存在时也会执行一次等价 scrypt</strong>，避免用响应时间枚举用户名；</li><li><strong>明文密码永不落盘</strong>：旧版的 <code>meta.plainHint</code> 已删除；初始密码只在启动日志里打印一次，也不写入 <code>meta.firstRunPassword</code>；</li><li>改密后：其它设备的会话立即失效；新密码不能与当前密码相同；</li><li>生产实测：<code>meta.json</code> 内 <code>root has passwordHash: false | plainHint: false</code>，<code>passwordHash 格式: scrypt salt:hash ✓</code>，<code>明文密码出现在 meta: false</code>。</li></ul>
-<h2 id="3-两步验证-totp-rfc-6238">3. 两步验证（TOTP，RFC 6238）</h2>
+<h2 id="3-两步验证totprfc-6238">3. 两步验证（TOTP，RFC 6238）<a class="h-anchor" href="#3-两步验证totprfc-6238" aria-label="本节永久链接">#</a></h2>
 <ul><li>参数：HMAC-SHA1 / 30 秒 / 6 位，兼容 Google Authenticator、Authy、Aegis、1Password 等；</li><li>实现：<code>server/src/totp.js</code>（零依赖，含 base32 编解码与 <code>otpauth://</code> URI 生成）；</li><li>绑定流程：<strong>账号密码 → 生成密钥（此时未启用）→ 验证器录入 → 输入 6 位码确认 → 启用</strong>；</li><li>恢复码：启用时生成 10 个一次性码，<strong>明文只显示一次</strong>，服务端只存 sha256 摘要，用后即废；</li><li>关闭 / 重置恢复码：都需要「账号密码 + 当前动态码」；</li><li>管理员可在「用户管理」重置他人 2FA（用户丢失验证器时用），该动作进审计。</li></ul>
-<h2 id="4-会话与鉴权">4. 会话与鉴权</h2>
-<div class="table-wrap"><table><thead><tr><th>项</th><th>说明</th></tr></thead><tbody><tr><td>会话 Cookie</td><td><code>qsid</code>，<strong>httpOnly + SameSite=Strict</strong>，7 天绝对有效期 + 24 小时空闲失效</td></tr><tr><td>服务端存储</td><td>按用户记录（创建时间 / 最近活跃 / IP / UA），可列出、可吊销、可「退出所有设备」</td></tr><tr><td>停用 / 删号 / 改密 / 重置 2FA</td><td>立即吊销该用户所有会话</td></tr><tr><td>API Key</td><td>多把、可命名；<strong>服务端只存 sha256 摘要</strong>，明文只在创建时返回一次；可单独吊销；带 <code>x-api-key</code> 头访问。旧版单条 <code>meta.apiKey</code> 已改为密文落盘</td></tr><tr><td>登录限流</td><td>按 IP：10 分钟内 5 次失败即 429；按账号：连续 8 次失败锁定 15 分钟</td></tr></tbody></table></div>
-<h2 id="5-权限矩阵">5. 权限矩阵</h2>
+<h2 id="4-会话与鉴权">4. 会话与鉴权<a class="h-anchor" href="#4-会话与鉴权" aria-label="本节永久链接">#</a></h2>
+<div class="table-wrap"><table><thead><tr><th>项</th><th>说明</th></tr></thead><tbody><tr><td>会话 Cookie</td><td><code>qsid</code>，<strong>httpOnly + SameSite=Strict</strong>，7 天绝对有效期 + 24 小时空闲失效</td></tr><tr><td>服务端存储</td><td>按用户记录（创建时间 / 最近活跃 / IP / UA），可列出、可吊销、可「退出所有设备」</td></tr><tr><td>停用 / 删号 / 改密 / 重置 2FA</td><td>立即吊销该用户所有会话</td></tr><tr><td>API Key</td><td>多把、可命名；<strong>服务端只存 sha256 摘要</strong>，明文只在创建时返回一次；可单独吊销；带 <code>x-api-key</code> 头访问。作用域为 <code>read/run/write/secrets</code>，可绑定任务（<code>flowIds</code>）或分组（<code>groups</code>）；旧 Key 未声明作用域时默认 <code>read/run/write</code>，不包含读取明文凭据的 <code>secrets</code>。旧版单条 <code>meta.apiKey</code> 已改为密文落盘</td></tr><tr><td>登录限流</td><td>按 IP：10 分钟内 5 次失败即 429；按账号：连续 8 次失败锁定 15 分钟</td></tr></tbody></table></div>
+<h2 id="5-权限矩阵">5. 权限矩阵<a class="h-anchor" href="#5-权限矩阵" aria-label="本节永久链接">#</a></h2>
 <div class="table-wrap"><table><thead><tr><th>能力</th><th>admin</th><th>operator</th><th>viewer</th><th>API Key</th></tr></thead><tbody><tr><td>查看任务 / 运行记录 / 统计</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td></tr><tr><td>增删改任务、运行、导入导出</td><td>✅</td><td>✅</td><td>❌</td><td>✅</td></tr><tr><td>通知渠道 / 模板 / 批量操作</td><td>✅</td><td>✅</td><td>❌</td><td>✅</td></tr><tr><td>系统设置（AI、提示级别、每日汇总推送）</td><td>✅</td><td>✅</td><td>❌</td><td>✅</td></tr><tr><td>账号安全（自己的密码 / 2FA / 会话）</td><td>✅</td><td>✅</td><td>❌</td><td>❌</td></tr><tr><td>用户管理（建号 / 角色 / 停用 / 重置密码与 2FA / 删除）</td><td>✅</td><td>❌</td><td>❌</td><td>❌</td></tr><tr><td>审计日志</td><td>✅</td><td>❌</td><td>❌</td><td>❌</td></tr></tbody></table></div>
-<h2 id="6-web-安全加固">6. Web 安全加固</h2>
-<ul><li><strong>响应头</strong>（每个响应）：<code>X-Content-Type-Options: nosniff</code>、<code>X-Frame-Options: DENY</code>、<code>Referrer-Policy: same-origin</code>、<code>Permissions-Policy</code>、<code>Cross-Origin-Opener-Policy: same-origin</code>、CSP（<code>default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'</code>）；</li><li><strong>CSRF</strong>：写操作（POST/PUT/DELETE）校验 <code>Origin</code> 必须同源，跨站一律 403（浏览器表单/图片攻击不带同源 Origin）；会话 Cookie 同时 <code>SameSite=Strict</code>；</li><li><strong>CSP 与内联样式</strong>：组件里存在少量内联 <code>style</code>，因此 <code>style-src</code> 保留 <code>'unsafe-inline'</code>；<code>script-src</code> 严格 <code>'self'</code>（无内联脚本、无第三方 CDN）；</li><li><strong>注入面</strong>：HTTP 节点的 URL/头/体为用户自有配置，属于「用户对自己目标的主动请求」，不属于服务端注入；引擎内不使用 <code>eval</code> 渲染模板（表达式走白名单函数 + jexl 沙箱，1s 超时）；</li><li><strong>敏感信息脱敏</strong>：运行日志里的 cookie / authorization 头自动脱敏（保留前 12 字符），变量快照同样脱敏。</li></ul>
-<h3 id="6-1-ip-访问控制-v0-4-3">6.1 IP 访问控制（v0.4.3）</h3>
-<div class="table-wrap"><table><thead><tr><th>能力</th><th>说明</th></tr></thead><tbody><tr><td>Key 级 <strong>IP 允许名单</strong></td><td>每把 API Key 可设来源 IP / CIDR 列表（空=不限）；名单外 → 403「IP 不在该 API Key 的允许名单内」</td></tr><tr><td>全局 <strong>IP 黑名单</strong></td><td>设置 → 账号安全 →「访问控制」；被拉黑的 IP <strong>登录与 API Key 同时被拦</strong>（403）</td></tr><tr><td>实现</td><td><code>server/src/iprange.js</code>：IPv4/IPv6 + CIDR 解析匹配，IPv4-mapped IPv6 归一，非法条目忽略</td></tr><tr><td>来源 IP 判定</td><td>优先 <code>X-Forwarded-For</code> 第一个地址，其次 <code>req.ip</code>；⚠️ Docker 端口映射下容器只看到网关地址，需调用方带 XFF 或改用 <code>--network host</code></td></tr></tbody></table></div>
-<h2 id="7-自查-已发现并修复的问题">7. 自查：已发现并修复的问题</h2>
+<h2 id="6-web-安全加固">6. Web 安全加固<a class="h-anchor" href="#6-web-安全加固" aria-label="本节永久链接">#</a></h2>
+<ul><li><strong>响应头</strong>（每个响应）：<code>X-Content-Type-Options: nosniff</code>、<code>X-Frame-Options: DENY</code>、<code>Referrer-Policy: same-origin</code>、<code>Permissions-Policy</code>、<code>Cross-Origin-Opener-Policy: same-origin</code>、CSP（<code>default-src &#39;self&#39;; script-src &#39;self&#39;; style-src &#39;self&#39; &#39;unsafe-inline&#39;; frame-ancestors &#39;none&#39;; base-uri &#39;none&#39;; form-action &#39;self&#39;</code>）；</li><li><strong>CSRF</strong>：写操作（POST/PUT/DELETE）校验 <code>Origin</code> 必须同源，跨站一律 403（浏览器表单/图片攻击不带同源 Origin）；会话 Cookie 同时 <code>SameSite=Strict</code>；</li><li><strong>CSP 与内联样式</strong>：组件里存在少量内联 <code>style</code>，因此 <code>style-src</code> 保留 <code>&#39;unsafe-inline&#39;</code>；<code>script-src</code> 严格 <code>&#39;self&#39;</code>（无内联脚本、无第三方 CDN）；</li><li><strong>注入面</strong>：HTTP 节点的 URL/头/体为用户自有配置，属于「用户对自己目标的主动请求」，不属于服务端注入；引擎内不使用 <code>eval</code> 渲染模板（表达式走白名单函数 + jexl 沙箱，1s 超时）；</li><li><strong>敏感信息脱敏</strong>：运行日志在写盘和 SSE 推送前统一脱敏（<code>server/src/redact.js</code>）：Cookie / Set-Cookie / Authorization / API Key 等请求与响应头、URL userinfo 与敏感 query、JSON/表单请求体和响应体、动态提取值、断言证据与关键字摘要；执行内部变量保持原值，避免破坏提取链。变量快照敏感名统一显示 <code>***</code>，不保留前缀。</li></ul>
+<h3 id="61-执行隔离与资源上限064">6.1 执行隔离与资源上限（0.6.4）<a class="h-anchor" href="#61-执行隔离与资源上限064" aria-label="本节永久链接">#</a></h3>
+<div class="table-wrap"><table><thead><tr><th>项</th><th>约束</th></tr></thead><tbody><tr><td><code>script</code> 节点</td><td>独立子进程执行，不接触服务端主进程：64MB 内存、1 秒执行、64KB 脚本、256KB 结果；上下文用 <code>Object.create(null)</code> 构造，禁用 <code>eval</code> / <code>Function</code> / <code>wasm</code>，只传入 JSON 快照</td></tr><tr><td>HTTP 响应体</td><td>默认 2MB 上限（节点 <code>maxRespBytes</code> 可设 64KB–8MB）；fetch 流式读取、curl <code>--max-filesize</code>，超限立即中断并明确报错</td></tr><tr><td>整体运行</td><td>默认 30 分钟超时（<code>CHECKQ_RUN_TIMEOUT_MS</code>，60 秒–24 小时）；取消会中断 fetch/curl、delay、节点重试与任务级退避</td></tr><tr><td>API Key 读凭据</td><td>只有带 <code>secrets</code> 作用域才返回明文；其余 Key 读任务/模板时返回脱敏副本（节点内联 Cookie/Authorization 也在内）</td></tr></tbody></table></div>
+<h3 id="62-ip-访问控制v043">6.2 IP 访问控制（v0.4.3）<a class="h-anchor" href="#62-ip-访问控制v043" aria-label="本节永久链接">#</a></h3>
+<div class="table-wrap"><table><thead><tr><th>能力</th><th>说明</th></tr></thead><tbody><tr><td>Key 级 <strong>IP 允许名单</strong></td><td>每把 API Key 可设来源 IP / CIDR 列表（空=不限）；名单外 → 403「IP 不在该 API Key 的允许名单内」</td></tr><tr><td>全局 <strong>IP 黑名单</strong></td><td>设置 → 账号安全 →「访问控制」；被拉黑的 IP <strong>登录与 API Key 同时被拦</strong>（403）</td></tr><tr><td>实现</td><td><code>server/src/iprange.js</code>：IPv4/IPv6 + CIDR 解析匹配，IPv4-mapped IPv6 归一，非法条目忽略</td></tr><tr><td>来源 IP 判定</td><td>默认：连接来源是本机/私有网段（含 Docker 网关、局域网反代）时，读取 <code>X-Forwarded-For</code> 第一个地址；公网直连不信任该头。需要显式信任时可设 <code>CHECKQ_TRUST_PROXY=1</code>、<code>=0</code> 或 CIDR 列表；实现见 <code>iprange.js</code> / <code>api.js clientIp</code></td></tr></tbody></table></div>
+<h2 id="7-自查已发现并修复的问题">7. 自查：已发现并修复的问题<a class="h-anchor" href="#7-自查已发现并修复的问题" aria-label="本节永久链接">#</a></h2>
 <div class="table-wrap"><table><thead><tr><th>#</th><th>问题</th><th>严重度</th><th>处理</th></tr></thead><tbody><tr><td>1</td><td><code>meta.plainHint</code> 明文保存初始密码</td><td>高</td><td>已删除；初始密码只在启动日志打印一次</td></tr><tr><td>2</td><td>单一共享密码（无身份、无法单独吊销）</td><td>高</td><td>已升级为多用户 + 角色 + 会话吊销</td></tr><tr><td>3</td><td>改密码不清除会话</td><td>高</td><td>已改为「改密后其它设备立即失效」</td></tr><tr><td>4</td><td><code>POST /api/logout</code> 清空<strong>所有</strong>用户的会话</td><td>中</td><td>已改为只登出当前会话；另提供「退出所有设备」</td></tr><tr><td>5</td><td>API Key 明文存盘</td><td>中</td><td>改为只存 sha256 摘要 + 前缀展示</td></tr><tr><td>6</td><td>无 2FA</td><td>中</td><td>已实现 TOTP + 恢复码</td></tr><tr><td>7</td><td>无安全响应头 / 无 CSRF 防护</td><td>中</td><td>已加 CSP/XFO/nosniff + Origin 同源校验</td></tr><tr><td>8</td><td>用户名可被枚举（错误信息 + 响应时间不同）</td><td>中</td><td>统一错误文案 + 用户不存在时同样执行 scrypt</td></tr><tr><td>9</td><td>登录失败只按 IP 限流，可绕过</td><td>低</td><td>增加账号级失败计数与锁定</td></tr><tr><td>10</td><td>会话无过期/无空闲超时</td><td>低</td><td>绝对 7 天 + 空闲 24 小时</td></tr><tr><td>11</td><td><code>verifyPwd</code> 对畸形 hash 可能抛异常</td><td>低</td><td>改为安全兜底（假比较后返回 false）</td></tr><tr><td>12</td><td>无审计日志</td><td>低</td><td>新增审计（登录/改密/2FA/用户/API Key 等，保留 500 条）</td></tr><tr><td>13</td><td>密码策略仅 8 位</td><td>低</td><td>提升为 ≥10 位 + 两类字符 + 弱口令库 + 禁含用户名</td></tr><tr><td>14</td><td>Cookie <code>sameSite=lax</code></td><td>低</td><td>改为 <code>strict</code> + <code>httpOnly</code></td></tr></tbody></table></div>
-<h2 id="8-与-qinglong-qiandao-的做法对照-2026-11-调研">8. 与 qinglong / qiandao 的做法对照（2026-11 调研）</h2>
-<blockquote>调研对象：<code>whyour/qinglong</code>（develop 分支 <code>back/api/user.ts</code>、<code>back/services/user.ts</code>、<code>back/shared/password.ts</code>、<code>src/pages/setting/security.tsx</code>）与 <code>binux/qiandao</code>（<code>web/handlers/login.py</code>、<code>libs/mcrypto.py</code>）。</blockquote>
-<h3 id="7-1-qinglong-青龙">7.1 qinglong（青龙）</h3>
+<h2 id="8-与-qinglong-qiandao-的做法对照2026-11-调研">8. 与 qinglong / qiandao 的做法对照（2026-11 调研）<a class="h-anchor" href="#8-与-qinglong-qiandao-的做法对照2026-11-调研" aria-label="本节永久链接">#</a></h2>
+<blockquote><p>调研对象：<code>whyour/qinglong</code>（develop 分支 <code>back/api/user.ts</code>、<code>back/services/user.ts</code>、<code>back/shared/password.ts</code>、<code>src/pages/setting/security.tsx</code>）与 <code>binux/qiandao</code>（<code>web/handlers/login.py</code>、<code>libs/mcrypto.py</code>）。</p></blockquote>
+<h3 id="81-qinglong青龙">8.1 qinglong（青龙）<a class="h-anchor" href="#81-qinglong青龙" aria-label="本节永久链接">#</a></h3>
 <div class="table-wrap"><table><thead><tr><th>能力</th><th>qinglong 做法</th><th>CheckQ 做法</th></tr></thead><tbody><tr><td>账号模型</td><td><strong>单账号</strong>：用户名密码存在系统配置里（<code>authConfig</code>）</td><td><strong>多用户 + 角色</strong>（admin/operator/viewer），存在 <code>meta.users[]</code></td></tr><tr><td>改用户名密码</td><td>设置 → 安全设置 →「修改用户名密码」表单（用户名 + 新密码，<strong>不校验旧密码</strong>），保存后清空 token 强制重新登录</td><td>设置 → 账号安全 →「修改用户名 / 显示名」（改用户名<strong>需当前密码</strong>）+「修改密码」（需旧密码）；改用户名后吊销全部会话强制重新登录</td></tr><tr><td>密码哈希</td><td>scrypt，格式 <code>scrypt$salt$hash</code>，64 字节输出（<code>shared/password.ts</code>）</td><td>scrypt N=16384 + 16 字节盐，<code>salt:hash</code>，32 字节输出（<code>server/src/auth.js</code>）</td></tr><tr><td>两步验证</td><td><code>/user/two-factor/init</code> 返回 <code>{secret, url}</code>，前端显示 <strong>QR Code</strong> + 密钥，三步向导（装 App → 扫码 → 输 6 位码）；启用/禁用</td><td><code>/api/system/2fa/enroll</code> 返回 <code>{secret, uri}</code> + 一次性恢复码；<strong>不显示二维码</strong>（避免把密钥交给第三方二维码服务），提供 <code>otpauth://</code> 链接与 Base32 密钥，可被 Aegis/Authy 手动粘贴导入</td></tr><tr><td>2FA 登录</td><td>两步式：先登录返回 420，再调 <code>/user/two-factor/login</code> 带 code；用 <code>lastTwoFactorStep</code> 防同一 30 秒窗口重放</td><td>单次登录请求里带 <code>code</code>；恢复码一次性消费；窗口 ±30s 校验</td></tr><tr><td>登录限流</td><td><code>LoginThrottle</code>：失败次数 + 退避秒数，返回 410 + 等待时间</td><td>IP 5 次/10 分钟 + 账号 8 次锁定 15 分钟，返回 429</td></tr><tr><td>登录日志</td><td>独立页面「登录日志」（时间/IP/归属地/平台/成败）</td><td>审计日志（含 login.ok / login.fail），管理员可看</td></tr><tr><td>IP 黑名单</td><td><code>GET/PUT/DELETE /user/ip-blacklist</code></td><td>未做（局域网单用户场景，暂不需要）</td></tr><tr><td>通知</td><td>登录成功/失败也会推送到通知渠道</td><td>任务成功/失败推送；<strong>登录事件尚未推送</strong>（可作为下一步）</td></tr><tr><td>头像</td><td>支持上传裁剪</td><td>未做（不影响安全）</td></tr></tbody></table></div>
-<h3 id="7-2-qiandao-签到">7.2 qiandao（签到）</h3>
+<h3 id="82-qiandao签到">8.2 qiandao（签到）<a class="h-anchor" href="#82-qiandao签到" aria-label="本节永久链接">#</a></h3>
 <div class="table-wrap"><table><thead><tr><th>能力</th><th>qiandao 做法</th><th>CheckQ 做法</th></tr></thead><tbody><tr><td>账号标识</td><td><strong>邮箱</strong>（注册 + 邮箱验证链接，30 天有效）</td><td>用户名（3-32 位）；无邮件服务，故不做邮箱验证</td></tr><tr><td>找回密码</td><td>邮件发重置链接（1 小时有效，带加密签名 + mtime 校验）</td><td>无邮件服务 → <strong>当前密码确认</strong>；或管理员在「用户管理」重置；或容器内命令重置（见 §9）</td></tr><tr><td>密码哈希</td><td>PBKDF2 + 16 字节随机盐，输出 32 字节</td><td>scrypt（更强、更抗 GPU），盐 16 字节，输出 32 字节</td></tr><tr><td>Cookie</td><td>httponly，https 下加 secure</td><td>httponly + SameSite=Strict，https 需在反代层加 secure</td></tr><tr><td>失败处理</td><td>登录失败计数 <code>evil(+5)</code>，有次数限制</td><td>IP + 账号双层限流/锁定</td></tr><tr><td>角色</td><td>user 表有 role 字段</td><td>admin / operator / viewer，viewer 写操作直接 403</td></tr></tbody></table></div>
-<h3 id="7-3-结论与取舍">7.3 结论与取舍</h3>
+<h3 id="83-结论与取舍">8.3 结论与取舍<a class="h-anchor" href="#83-结论与取舍" aria-label="本节永久链接">#</a></h3>
 <ul><li><strong>我们比两者多</strong>：多用户 + 角色、只读账号、审计日志、会话可吊销、CSRF/安全头、API Key 只存摘要、一次性恢复码；</li><li><strong>我们少（有意为之）</strong>：邮箱验证/找回（无邮件服务）、二维码（避免密钥外泄）、IP 黑名单、头像；</li><li><strong>已按 qinglong 的交互补齐</strong>：可自助修改用户名（原本只有改密码），改用户名后强制重新登录；</li><li><strong>可借鉴的后续项</strong>：登录成功/失败也走通知渠道（qinglong 有）、API Key 分平台（qinglong 按平台分组 token）。</li></ul>
-<h2 id="9-修改用户名-密码怎么做-面板操作">9. 修改用户名 / 密码怎么做（面板操作）</h2>
+<h2 id="9-修改用户名-密码怎么做面板操作">9. 修改用户名 / 密码怎么做（面板操作）<a class="h-anchor" href="#9-修改用户名-密码怎么做面板操作" aria-label="本节永久链接">#</a></h2>
 <div class="table-wrap"><table><thead><tr><th>想做什么</th><th>面板路径</th><th>说明</th></tr></thead><tbody><tr><td>改用户名</td><td>设置 → 账号安全 → 「修改用户名 / 显示名」</td><td>填新用户名 + 当前密码 → 保存；<strong>所有设备立即登出</strong>，需用新用户名重新登录</td></tr><tr><td>改显示名</td><td>同上</td><td>只影响面板展示，可随时改，不需密码</td></tr><tr><td>改密码</td><td>设置 → 账号安全 → 「修改密码」</td><td>需当前密码 + 新密码（≥10 位、两类字符）；其它设备会话立即失效</td></tr><tr><td>开启两步验证</td><td>设置 → 账号安全 → 「两步验证」→ 开始绑定</td><td>复制密钥或 <code>otpauth://</code> 链接到验证器 App → 输入 6 位码 → 保存恢复码</td></tr><tr><td>忘了两步验证码</td><td>恢复码登录；或管理员在 设置 → 用户管理 → 重置2FA</td><td>管理员重置后该用户需重新绑定</td></tr><tr><td>忘了密码（仍已登录）</td><td>设置 → 账号安全 → 修改密码</td><td>—</td></tr><tr><td>忘了密码（已登出）</td><td>管理员重置；或用容器命令重置（见 §9）</td><td>局域网部署无公网找回通道</td></tr></tbody></table></div>
 <p>API 对照：</p>
 <div class="table-wrap"><table><thead><tr><th>需求</th><th>方法</th><th>路径</th><th>请求体</th></tr></thead><tbody><tr><td>改用户名/显示名</td><td>PUT</td><td><code>/api/system/account</code></td><td><code>{ username?, displayName?, currentPassword? }</code></td></tr><tr><td>改密码</td><td>POST</td><td><code>/api/system/password</code></td><td><code>{ oldPassword, newPassword }</code></td></tr><tr><td>当前身份</td><td>GET</td><td><code>/api/me</code></td><td>—</td></tr><tr><td>开启 2FA</td><td>POST</td><td><code>/api/system/2fa/enroll</code> → <code>/api/system/2fa/confirm</code></td><td><code>{ password }</code> → <code>{ code }</code></td></tr><tr><td>关闭 2FA</td><td>POST</td><td><code>/api/system/2fa/disable</code></td><td><code>{ password, code }</code></td></tr></tbody></table></div>
-<h2 id="10-仍存在的风险与建议-需要你决策-外部动作">10. 仍存在的风险与建议（需要你决策/外部动作）</h2>
+<h2 id="10-仍存在的风险与建议需要你决策外部动作">10. 仍存在的风险与建议（需要你决策/外部动作）<a class="h-anchor" href="#10-仍存在的风险与建议需要你决策外部动作" aria-label="本节永久链接">#</a></h2>
 <div class="table-wrap"><table><thead><tr><th>风险</th><th>说明</th><th>建议</th></tr></thead><tbody><tr><td>明文 HTTP 传输</td><td>若直接以明文 HTTP 部署，Cookie 与密码在链路上未加密</td><td>前置 HTTPS 反代（自签或内网证书）并加 HSTS</td></tr><tr><td>单机 JSON 存储</td><td><code>meta.json</code> 的密码只存 scrypt 哈希，AI Key / 旧 API Key 已加密；但<strong>拥有该文件 = 可离线爆破密码哈希</strong></td><td>限制文件权限（600）、对 <code>meta.json</code> 加密或用系统 keyring；同时 <code>data/</code> 目录不进版本库</td></tr><tr><td>无 Passkey / WebAuthn</td><td>目前是密码 + TOTP</td><td>后续版本可加 WebAuthn 免密登录</td></tr><tr><td>无异地备份</td><td><code>data/</code> 目录是唯一数据源</td><td>用「设置 → 备份」定期导出并加密保存到别处</td></tr><tr><td>审计日志只在本机</td><td>可被有 root 的人改</td><td>严重场景可外送到日志系统</td></tr><tr><td>会话存内存</td><td>重启容器后所有会话失效（需重新登录）</td><td>这是刻意的取舍（无会话落盘）；如需常驻可改为持久化会话表</td></tr></tbody></table></div>
-<h2 id="11-运维手册">11. 运维手册</h2>
-<pre class="code"><code># 忘记密码 / 忘记 2FA（容器内直接重置管理员密码）
-ssh root@checkq.local 'docker exec checkq node -e "
-  const fs=require(\"fs\"); const p=\"/data/meta.json\";
-  const m=JSON.parse(fs.readFileSync(p,\"utf8\"));
-  const {hashPwd}=require(\"/app/src/auth.js\");
-  const u=m.users.find(x=&gt;x.username===\"admin\");
-  u.passwordHash=hashPwd(\"NewStrongPassword#2026\");
+<h2 id="11-运维手册">11. 运维手册<a class="h-anchor" href="#11-运维手册" aria-label="本节永久链接">#</a></h2>
+<div class="code-block"><div class="code-head"><span class="code-lang">powershell</span><button class="copy-btn" type="button" data-copy hidden>复制</button></div><pre class="code" tabindex="0"><code class="language-powershell"># 忘记密码 / 忘记 2FA（容器内直接重置管理员密码）
+ssh root@checkq.local &#39;docker exec checkq node -e &quot;
+  const fs=require(\&quot;fs\&quot;); const p=\&quot;/data/meta.json\&quot;;
+  const m=JSON.parse(fs.readFileSync(p,\&quot;utf8\&quot;));
+  const {hashPwd}=require(\&quot;/app/src/auth.js\&quot;);
+  const u=m.users.find(x=&gt;x.username===\&quot;admin\&quot;);
+  u.passwordHash=hashPwd(\&quot;NewStrongPassword#2026\&quot;);
   u.totp=null; u.recoveryCodes=[]; u.failedLogins=0; u.lockedUntil=null;
   fs.writeFileSync(p, JSON.stringify(m));
-  console.log(\"admin password reset; 2fa cleared\");
-" &amp;&amp; docker restart checkq'</code></pre>
+  console.log(\&quot;admin password reset; 2fa cleared\&quot;);
+&quot; &amp;&amp; docker restart checkq&#39;</code></pre></div>
 <p>其它常见操作：</p>
 <ul><li><strong>改自己的密码</strong>：设置 → 账号安全 → 修改密码（需旧密码，改后其它设备失效）；</li><li><strong>给同事建号</strong>：设置 → 用户管理 → 新建账号（选角色 operator/viewer）；</li><li><strong>同事离职</strong>：用户管理 → 停用（会话立即失效）；</li><li><strong>绑定 2FA</strong>：设置 → 账号安全 → 两步验证 → 开始绑定（保存密钥与恢复码）；</li><li><strong>加 API Key 给外部脚本</strong>：设置 → API Key → 生成（明文只显示一次）。</li></ul>
-<h2 id="12-签到凭据-cookie-token-脚本-怎么存-怎么保安全">12. 签到凭据（cookie / token / 脚本）怎么存、怎么保安全</h2>
-<blockquote>调研对象：<code>binux/qiandao</code>（<code>db/user.py</code>、<code>db/task.py</code>、<code>web/handlers/task.py</code>、<code>libs/mcrypto.py</code>）、<code>whyour/qinglong</code>（<code>back/services/env.ts</code>、<code>back/config/index.ts</code>）。</blockquote>
-<h3 id="13-1-三个产品怎么存-签到资源">13.1 三个产品怎么存「签到资源」</h3>
-<div class="table-wrap"><table><thead><tr><th>维度</th><th>qiandao（签到）</th><th>qinglong（青龙）</th><th>CheckQ（本项目）</th></tr></thead><tbody><tr><td>凭据载体</td><td>每个任务的 <code>init_env</code>（cookie/变量）</td><td>「环境变量」表（JD_COOKIE 等）+ 导出 <code>.env</code></td><td>流程变量 <code>flow.vars</code> + 通知渠道 <code>flow.notify.channels</code></td></tr><tr><td><strong>静态加密</strong></td><td>✅ <strong>AES-CBC 加密入库</strong>；密钥 = 用户 <code>userkey</code>（由密码 PBKDF2 派生，再用全局 <code>aes_key</code> 加密保存）</td><td>❌ <strong>明文入库</strong>，并额外导出明文 <code>shell/preload/env.sh</code> / <code>env.js</code> / <code>env.py</code> 给脚本 <code>source</code></td><td>✅ <strong>AES-256-GCM 加密落盘</strong>（<code>enc:v1:</code>），密钥在 <code>data/.secret</code>（600）或环境变量 <code>CHECKQ_SECRET</code></td></tr><tr><td>密钥与密码绑定</td><td>✅ 绑定（改密码 ⇒ 旧 cookie 密文解不开，需重填）</td><td>❌ 无（明文）</td><td>❌ 不绑定（改密码不影响凭据），但<strong>改密码会吊销全部会话</strong></td></tr><tr><td>脚本/代码</td><td>模板 <code>tpl['tpl']</code> 也加密存储</td><td>脚本是<strong>文件</strong>（<code>data/scripts/</code>），非秘密</td><td>脚本节点代码在 <code>flows.json</code>（明文，代码不是秘密）</td></tr><tr><td>共享模板</td><td>公共模板用<strong>全局同一把</strong>密钥（弱一点）</td><td>公共 env 明文</td><td>模板默认变量导出时<strong>脱敏</strong></td></tr><tr><td>日志脱敏</td><td>失败信息入库（<code>tasklog.msg</code>）</td><td>有日志系统</td><td>✅ 运行日志/变量快照自动脱敏（cookie/authorization 保留前 12 字符）</td></tr><tr><td>备份</td><td>DB 备份</td><td><code>data.tgz</code>（含明文 env）</td><td>✅ <strong>备份默认脱敏</strong>；完整备份需再输一次当前密码</td></tr><tr><td>密钥文件保护</td><td><code>userkey</code> 用全局 <code>aes_key</code> 加密</td><td><code>auth.json</code>/<code>env.sh</code> 在 <code>blackFileList</code>（脚本不可读写）</td><td><code>data/.secret</code> 600 权限，不在任何 API 返回里</td></tr></tbody></table></div>
-<h3 id="13-2-我们的做法-已实现">13.2 我们的做法（已实现）</h3>
+<h2 id="12-签到凭据cookie-token-脚本怎么存怎么保安全">12. 签到凭据（cookie / token / 脚本）怎么存、怎么保安全<a class="h-anchor" href="#12-签到凭据cookie-token-脚本怎么存怎么保安全" aria-label="本节永久链接">#</a></h2>
+<blockquote><p>调研对象：<code>binux/qiandao</code>（<code>db/user.py</code>、<code>db/task.py</code>、<code>web/handlers/task.py</code>、<code>libs/mcrypto.py</code>）、<code>whyour/qinglong</code>（<code>back/services/env.ts</code>、<code>back/config/index.ts</code>）。</p></blockquote>
+<h3 id="121-三个产品怎么存签到资源">12.1 三个产品怎么存「签到资源」<a class="h-anchor" href="#121-三个产品怎么存签到资源" aria-label="本节永久链接">#</a></h3>
+<div class="table-wrap"><table><thead><tr><th>维度</th><th>qiandao（签到）</th><th>qinglong（青龙）</th><th>CheckQ（本项目）</th></tr></thead><tbody><tr><td>凭据载体</td><td>每个任务的 <code>init_env</code>（cookie/变量）</td><td>「环境变量」表（JD_COOKIE 等）+ 导出 <code>.env</code></td><td>流程变量 <code>flow.vars</code> + 通知渠道 <code>flow.notify.channels</code></td></tr><tr><td><strong>静态加密</strong></td><td>✅ <strong>AES-CBC 加密入库</strong>；密钥 = 用户 <code>userkey</code>（由密码 PBKDF2 派生，再用全局 <code>aes_key</code> 加密保存）</td><td>❌ <strong>明文入库</strong>，并额外导出明文 <code>shell/preload/env.sh</code> / <code>env.js</code> / <code>env.py</code> 给脚本 <code>source</code></td><td>✅ <strong>AES-256-GCM 加密落盘</strong>（<code>enc:v1:</code>），密钥在 <code>data/.secret</code>（600）或环境变量 <code>CHECKQ_SECRET</code></td></tr><tr><td>密钥与密码绑定</td><td>✅ 绑定（改密码 ⇒ 旧 cookie 密文解不开，需重填）</td><td>❌ 无（明文）</td><td>❌ 不绑定（改密码不影响凭据），但<strong>改密码会吊销全部会话</strong></td></tr><tr><td>脚本/代码</td><td>模板 <code>tpl[&#39;tpl&#39;]</code> 也加密存储</td><td>脚本是<strong>文件</strong>（<code>data/scripts/</code>），非秘密</td><td>脚本节点代码在 <code>flows.json</code>（明文，代码不是秘密）</td></tr><tr><td>共享模板</td><td>公共模板用<strong>全局同一把</strong>密钥（弱一点）</td><td>公共 env 明文</td><td>模板默认变量导出时<strong>脱敏</strong></td></tr><tr><td>日志脱敏</td><td>失败信息入库（<code>tasklog.msg</code>）</td><td>有日志系统</td><td>✅ 写盘/SSE 前统一脱敏 URL、请求/响应头、Cookie、body、提取值；变量快照敏感名整体 <code>***</code></td></tr><tr><td>备份</td><td>DB 备份</td><td><code>data.tgz</code>（含明文 env）</td><td>✅ <strong>备份默认脱敏</strong>；完整备份需再输一次当前密码</td></tr><tr><td>密钥文件保护</td><td><code>userkey</code> 用全局 <code>aes_key</code> 加密</td><td><code>auth.json</code>/<code>env.sh</code> 在 <code>blackFileList</code>（脚本不可读写）</td><td><code>data/.secret</code> 600 权限，不在任何 API 返回里</td></tr></tbody></table></div>
+<h3 id="122-我们的做法已实现">12.2 我们的做法（已实现）<a class="h-anchor" href="#122-我们的做法已实现" aria-label="本节永久链接">#</a></h3>
 <p><strong>加密范围</strong>（<code>server/src/secret.js</code>）：</p>
 <ul><li><strong>变量</strong>：名字命中 <code>cookie|token|sess|auth|password|passwd|secret|api_key|credential|jwt|bearer|refresh</code>，或值形态像凭据（长 base64/hex、JWT <code>eyJ…</code>、含 <code>sess=</code>/<code>token=</code> 的 cookie 串）→ 加密；</li><li><strong>通知渠道</strong>：<code>token / key / pass / password / secret / url / user</code> 等字段 → 加密（Telegram bot token、SMTP 密码、webhook URL 里的签名都在内）；</li><li><strong>meta</strong>：<code>meta.ai.apiKey</code>（AI 助手模型密钥）与旧版 <code>meta.apiKey</code> → 加密；密码仍只存 scrypt 哈希；</li><li><strong>不加密</strong>：普通变量（如 <code>ua</code>、<code>site</code>）、流程图、脚本代码、日志记录 —— 保持可读、可 diff、可 grep。</li></ul>
 <p><strong>工作方式</strong>：</p>
@@ -96,46 +183,81 @@ ssh root@checkq.local 'docker exec checkq node -e "
 <ul><li><code>GET /api/system/backup</code> → <strong>脱敏</strong>（敏感变量清空、渠道密钥 <code>***</code>），可安全分享/存档；</li><li><code>POST /api/system/backup { password }</code> → <strong>含明文凭据</strong>的完整包，用于自己迁移（需再次输密码，防误下载/误分享）；</li><li><code>GET /api/templates/:id/export</code> → 模板变量里的敏感项清空；</li><li>面板「备份 / 完整备份」两个按钮对应上面两档。</li></ul>
 <p><strong>运行时保护</strong>：</p>
 <ul><li>运行日志与变量快照对 <code>cookie</code>/<code>authorization</code> 等头自动脱敏；</li><li>登录日志不记录凭据；审计日志只记动作与账号，不记值；</li><li>数据目录文件权限已收紧为 <code>600</code>（<code>meta.json / flows.json / runs.json / templates.json / notifications.json</code>）。</li></ul>
-<h3 id="13-3-与两者相比-我们更强-更弱的地方">13.3 与两者相比，我们更强 / 更弱的地方</h3>
+<h3 id="123-与两者相比我们更强-更弱的地方">12.3 与两者相比，我们更强 / 更弱的地方<a class="h-anchor" href="#123-与两者相比我们更强-更弱的地方" aria-label="本节永久链接">#</a></h3>
 <p><strong>更强</strong>：</p>
 <ol><li>凭据静态加密（AES-256-GCM）+ 认证标签 —— qiandao 用的是 AES-CBC（无认证标签），qinglong 干脆明文；</li><li>备份默认脱敏，完整备份需二次密码 —— 两者的备份都含明文凭据；</li><li>密钥独立于用户密码（改密码不会作废 cookie），并可从环境注入（便于集中管理）；</li><li>密钥文件 600 且不暴露在任何接口。</li></ol>
 <p><strong>更弱 / 取舍</strong>：</p>
 <ol><li>不做邮箱验证与邮件找回（没有邮件服务）；</li><li>不显示 2FA 二维码（避免把 TOTP 密钥交给第三方二维码服务）；</li><li>加密只覆盖「流程变量 + 通知渠道」，<strong>运行历史里的响应体仍可能有站点返回的凭据</strong>（如某些站点在响应里回显 token）—— 已做日志级脱敏，但不是全量加密；</li><li>加密发生在应用层，<strong>磁盘备份/快照工具（如 NAS 快照）仍能看到密文</strong>，只有拿到 <code>.secret</code> 才能解 —— 这一点与 qiandao 相同（密钥与密文同机）。</li></ol>
-<h3 id="13-4-建议的后续动作-可选">13.4 建议的后续动作（可选）</h3>
-<div class="table-wrap"><table><thead><tr><th>建议</th><th>价值</th><th>成本</th></tr></thead><tbody><tr><td>独立「凭据中心」：把 cookie/token 抽成全局凭据库，流程只引用凭据名</td><td>多任务共用一份 cookie、轮换一处生效</td><td>中（需改引擎变量解析 + 面板）</td></tr><tr><td>凭据轮换提醒（按创建时间提示"该换 cookie 了"）</td><td>减少签到突然失败</td><td>小</td></tr><tr><td>登录成功/失败也走通知渠道（qinglong 的做法）</td><td>安全可观测</td><td>小</td></tr><tr><td>加密范围扩到 <code>runs.json</code> 里的响应体</td><td>全链路静态加密</td><td>中（大文件加密开销 + 检索变难）</td></tr><tr><td>密钥托管到系统 keyring / KMS</td><td>密钥与数据分离</td><td>高（部署形态相关）</td></tr></tbody></table></div>
-<h2 id="13-自测">13. 自测</h2>
-<pre class="code"><code>cd server &amp;&amp; node test/auth.test.js     # 39 项：登录/2FA/会话/用户管理/安全头/CSRF/审计
-cd server &amp;&amp; for f in test/*.test.js; do node $f; done   # 全量 272 项</code></pre>
-    <div class="foot">CheckQ 文档 · 由 <code>tools/build-wiki.cjs</code> 生成 · <a href="https://github.com/zqs1qiwan/checkq/issues">反馈问题</a></div>
+<h3 id="124-建议的后续动作可选">12.4 建议的后续动作（可选）<a class="h-anchor" href="#124-建议的后续动作可选" aria-label="本节永久链接">#</a></h3>
+<div class="table-wrap"><table><thead><tr><th>建议</th><th>价值</th><th>成本</th></tr></thead><tbody><tr><td>独立「凭据中心」：把 cookie/token 抽成全局凭据库，流程只引用凭据名</td><td>多任务共用一份 cookie、轮换一处生效</td><td>中（需改引擎变量解析 + 面板）</td></tr><tr><td>凭据轮换提醒（按创建时间提示&quot;该换 cookie 了&quot;）</td><td>减少签到突然失败</td><td>小</td></tr><tr><td>登录成功/失败也走通知渠道（qinglong 的做法）</td><td>安全可观测</td><td>小</td></tr><tr><td>加密范围扩到 <code>runs.json</code> 里的响应体</td><td>全链路静态加密</td><td>中（大文件加密开销 + 检索变难）</td></tr><tr><td>密钥托管到系统 keyring / KMS</td><td>密钥与数据分离</td><td>高（部署形态相关）</td></tr></tbody></table></div>
+<h2 id="13-自测">13. 自测<a class="h-anchor" href="#13-自测" aria-label="本节永久链接">#</a></h2>
+<div class="code-block"><div class="code-head"><span class="code-lang">bash</span><button class="copy-btn" type="button" data-copy hidden>复制</button></div><pre class="code" tabindex="0"><code class="language-bash">cd server &amp;&amp; node test/auth.test.js     # 39 项：登录/2FA/会话/用户管理/安全头/CSRF/审计
+cd server &amp;&amp; for f in test/*.test.js; do node $f; done   # 全量 272 项</code></pre></div>
+    </article>
+<nav class="pager" aria-label="页面翻页">
+<a class="pager-link prev" href="./reference-agent.html" rel="prev"><span class="dir">← 上一页</span><span class="ttl">Agent 接入指南</span></a><a class="pager-link next" href="./faq.html" rel="next"><span class="dir">下一页 →</span><span class="ttl">常见问题</span></a>
+</nav>
+    <footer class="site-foot" role="contentinfo">
+      <div class="foot-grid">
+        <div class="foot-about">
+          <a class="foot-logo" href="./index.html"><img src="./assets/brand/checkq-mark.svg" width="22" height="22" alt="" /><span>Check<em>Q</em></span></a>
+          <p>开源的可视化 HTTP 自动化流程引擎。本站只讲框架能力，不含具体签到脚本、站点规则或账号信息。</p>
+        </div>
+        <div class="foot-links">
+          <p class="foot-title">项目</p>
+          <ul>
+            <li><a href="https://github.com/zqs1qiwan/checkq" target="_blank" rel="noopener noreferrer">GitHub 仓库</a></li>
+            <li><a href="https://github.com/zqs1qiwan/checkq/issues" target="_blank" rel="noopener noreferrer">Issues</a></li>
+            <li><a href="https://github.com/zqs1qiwan/checkq/releases" target="_blank" rel="noopener noreferrer">版本发布</a></li>
+            <li><a href="https://github.com/zqs1qiwan/checkq/blob/main/docs/SECURITY.md" target="_blank" rel="noopener noreferrer">安全说明</a></li>
+            <li><a href="https://github.com/zqs1qiwan/checkq/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">MIT 许可证</a></li>
+          </ul>
+        </div>
+        <div class="foot-links">
+          <p class="foot-title">文档</p>
+          <ul>
+            <li><a href="./quickstart.html">快速开始</a></li>
+            <li><a href="./reference-api.html">API 参考</a></li>
+            <li><a href="./reference-mcp.html">MCP 工具</a></li>
+            <li><a href="./faq.html">常见问题</a></li>
+            <li><a href="./changelog.html">更新日志</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="foot-meta">
+        <p>v0.6.5 · 生成于 2026-11-20 05:01 UTC · 由 <code>tools/build-wiki.cjs</code> 从 <code>docs/</code> 与内置页面生成</p>
+        <p><a class="to-top" href="#top">↑ 返回顶部</a></p>
+      </div>
+    </footer>
   </main>
+  <aside class="toc-col" aria-label="本页目录">
+<nav class="toc-nav" aria-label="本页目录"><p class="toc-title">本页目录</p>
+<a class="toc-l2" href="#0-报告安全问题">0. 报告安全问题</a>
+<a class="toc-l2" href="#1-账号体系">1. 账号体系</a>
+<a class="toc-l2" href="#2-密码存储">2. 密码存储</a>
+<a class="toc-l2" href="#3-两步验证totprfc-6238">3. 两步验证（TOTP，RFC 6238）</a>
+<a class="toc-l2" href="#4-会话与鉴权">4. 会话与鉴权</a>
+<a class="toc-l2" href="#5-权限矩阵">5. 权限矩阵</a>
+<a class="toc-l2" href="#6-web-安全加固">6. Web 安全加固</a>
+<a class="toc-l3" href="#61-执行隔离与资源上限064">6.1 执行隔离与资源上限（0.6.4）</a>
+<a class="toc-l3" href="#62-ip-访问控制v043">6.2 IP 访问控制（v0.4.3）</a>
+<a class="toc-l2" href="#7-自查已发现并修复的问题">7. 自查：已发现并修复的问题</a>
+<a class="toc-l2" href="#8-与-qinglong-qiandao-的做法对照2026-11-调研">8. 与 qinglong / qiandao 的做法对照（2026-11 调研）</a>
+<a class="toc-l3" href="#81-qinglong青龙">8.1 qinglong（青龙）</a>
+<a class="toc-l3" href="#82-qiandao签到">8.2 qiandao（签到）</a>
+<a class="toc-l3" href="#83-结论与取舍">8.3 结论与取舍</a>
+<a class="toc-l2" href="#9-修改用户名-密码怎么做面板操作">9. 修改用户名 / 密码怎么做（面板操作）</a>
+<a class="toc-l2" href="#10-仍存在的风险与建议需要你决策外部动作">10. 仍存在的风险与建议（需要你决策/外部动作）</a>
+<a class="toc-l2" href="#11-运维手册">11. 运维手册</a>
+<a class="toc-l2" href="#12-签到凭据cookie-token-脚本怎么存怎么保安全">12. 签到凭据（cookie / token / 脚本）怎么存、怎么保安全</a>
+<a class="toc-l3" href="#121-三个产品怎么存签到资源">12.1 三个产品怎么存「签到资源」</a>
+<a class="toc-l3" href="#122-我们的做法已实现">12.2 我们的做法（已实现）</a>
+<a class="toc-l3" href="#123-与两者相比我们更强-更弱的地方">12.3 与两者相比，我们更强 / 更弱的地方</a>
+<a class="toc-l3" href="#124-建议的后续动作可选">12.4 建议的后续动作（可选）</a>
+<a class="toc-l2" href="#13-自测">13. 自测</a>
+</nav>
+</aside>
 </div>
-<script>
-(function () {
-  var input = document.getElementById('search');
-  var box = document.getElementById('results');
-  var index = [];
-  fetch('./search-index.json').then(function (r) { return r.json(); }).then(function (d) { index = d; });
-  function esc(s) { return s.replace(/[&<>]/g, function (c) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]; }); }
-  function run() {
-    var q = input.value.trim().toLowerCase();
-    if (!q) { box.classList.remove('on'); box.innerHTML = ''; return; }
-    var hits = [];
-    for (var i = 0; i < index.length; i++) {
-      var it = index[i];
-      var pos = it.text.toLowerCase().indexOf(q);
-      if (pos < 0 && it.title.toLowerCase().indexOf(q) < 0) continue;
-      var start = Math.max(0, pos - 40);
-      var snippet = (pos >= 0 ? it.text.slice(start, start + 120) : it.text.slice(0, 120));
-      hits.push('<a href="' + it.file + '">' + esc(it.title) + '<em>' + esc(snippet) + '…</em></a>');
-      if (hits.length >= 8) break;
-    }
-    box.innerHTML = hits.join('') || '<a href="javascript:void(0)">没有匹配</a>';
-    box.classList.add('on');
-  }
-  input.addEventListener('input', run);
-  input.addEventListener('keydown', function (e) { if (e.key === 'Escape') { input.value = ''; run(); input.blur(); } });
-  document.addEventListener('click', function (e) { if (!box.contains(e.target) && e.target !== input) box.classList.remove('on'); });
-})();
-</script>
+<script src="./assets/site.js" defer></script>
 </body>
 </html>

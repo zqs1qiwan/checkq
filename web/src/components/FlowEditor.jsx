@@ -18,6 +18,9 @@ import { IconHelp, IconBug } from './Icons.jsx';
 import { toast as globalToast } from '../toast.js';
 import { recordEvent, EVENTS } from '../events.js';
 import { autoLayout } from '../layout.js';
+import { confirmDialog } from '../confirm.jsx';
+import { CHANNEL_FIELDS } from '../channel-fields.js';
+import { CHANNEL_TYPE_OPTIONS } from '../util.js';
 import StepNode from './editor/StepNode.jsx';
 import LoopFrame from './editor/LoopFrame.jsx';
 import OutlinePanel from './editor/OutlinePanel.jsx';
@@ -31,15 +34,25 @@ const COLOR = Object.fromEntries(Object.entries(STEP_TYPES).map(([k, v]) => [k, 
 const nodeTypes = { step: StepNode };
 const AUTO_FOLD_AT = 60;   // 节点数到 60 起，循环体默认折叠，只显示遍历节点本身
 
-export default function FlowEditor({ flowId, onBack }) {
+/**
+ * 流程图编辑器。
+ * target = { kind: 'flow' | 'template', id }：
+ *   - flow：编辑任务（运行/调度/存为模板等全部控件）
+ *   - template：编辑模板图谱（只保留画布、节点配置、变量、日志、通知；保存走 updateTemplate）
+ * 兼容旧的 flowId 传法（等同 target={kind:'flow', id:flowId}）。
+ */
+export default function FlowEditor({ target, flowId, onBack }) {
+  const kind = target?.kind === 'template' ? 'template' : 'flow';
+  const id = target?.id ?? flowId;
   return (
     <ReactFlowProvider>
-      <FlowEditorInner flowId={flowId} onBack={onBack} />
+      <FlowEditorInner flowId={id} kind={kind} onBack={onBack} />
     </ReactFlowProvider>
   );
 }
 
-function FlowEditorInner({ flowId, onBack }) {
+function FlowEditorInner({ flowId, kind = 'flow', onBack }) {
+  const isTemplate = kind === 'template';
   const [flow, setFlow] = useState(null);
   const [loadErr, setLoadErr] = useState('');
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
@@ -118,7 +131,8 @@ function FlowEditorInner({ flowId, onBack }) {
   }, [hiddenIds, selectedId]);
 
   useEffect(() => {
-    api.flow(flowId).then((f) => {
+    const load = isTemplate ? api.template(flowId) : api.flow(flowId);
+    load.then((f) => {
       setFlow(f);
       setNodes((f.nodes || []).map((n) => ({
         id: n.id, type: 'step', position: { x: n.x, y: n.y }, data: { ...n },
@@ -127,7 +141,9 @@ function FlowEditorInner({ flowId, onBack }) {
         id: e.id, source: e.source, target: e.target, sourceHandle: e.sourceHandle,
       })));
     }).catch((e) => setLoadErr(e.message));
-  }, [flowId]);
+    // decorateEdge 是稳定纯函数（每次渲染重建但语义不变），不需要进依赖
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flowId, isTemplate]);
 
   /**
    * 连线的样子就说明结构：失败出口用虚线 + 失败色，其余实线。
@@ -159,18 +175,29 @@ function FlowEditorInner({ flowId, onBack }) {
       setSaving(true);
       setSaveError('');
       try {
-        const updated = await api.updateFlow(f.id, {
-          baseRev,
-          nodes: ns.map((n) => ({
-            id: n.id, type: n.data.type, name: n.data.name,
-            x: Math.round(n.position.x), y: Math.round(n.position.y),
-            config: n.data.config,
-            genBy: n.data.genBy,
-          })),
-          edges: es.map((e) => ({
-            id: e.id, source: e.source, target: e.target, sourceHandle: e.sourceHandle,
-          })),
-        });
+        const payloadNodes = ns.map((n) => ({
+          id: n.id, type: n.data.type, name: n.data.name,
+          x: Math.round(n.position.x), y: Math.round(n.position.y),
+          config: n.data.config,
+          genBy: n.data.genBy,
+        }));
+        const payloadEdges = es.map((e) => ({
+          id: e.id, source: e.source, target: e.target, sourceHandle: e.sourceHandle,
+        }));
+        // 模板模式：整份图谱写回模板（PUT /api/templates/:id），派生任务由 store.refreshDerived 自动跟随；
+        // 不新建 flow。变量由 VarsEditor 单独保存，这里不再带 vars，避免两个请求互相覆盖。
+        const updated = isTemplate
+          ? await api.updateTemplate(f.id, {
+            nodes: payloadNodes,
+            edges: payloadEdges,
+            log: f.log ?? null,
+            notify: f.notify || {},
+          })
+          : await api.updateFlow(f.id, {
+            baseRev,
+            nodes: payloadNodes,
+            edges: payloadEdges,
+          });
         // 只更新版本/模板信息，不回滚保存期间用户继续输入的内容
         setFlow((cur) => (cur ? {
           ...cur,
@@ -188,10 +215,11 @@ function FlowEditorInner({ flowId, onBack }) {
           saveTimer.current = setTimeout(() => save(), 500);
         }
         // 保存后结构有问题 → 弹一次检查清单（只提示、可忽略，同一批不重复打扰）
+        // 模板不直接运行，保存时不打断编辑；需要时点顶栏「结构」查看
         const s = structureRef.current;
         const sig = structureSignature(s);
         const serious = (s?.issues || []).some((i) => i.level === 'error' || i.level === 'warn');
-        if (serious && sig && sig !== dismissedStructRef.current) {
+        if (!isTemplate && serious && sig && sig !== dismissedStructRef.current) {
           dismissedStructRef.current = sig;
           setStructOpen(true);
         }
@@ -209,7 +237,7 @@ function FlowEditorInner({ flowId, onBack }) {
       if (savePromiseRef.current === task) savePromiseRef.current = null;
     });
     return task;
-  }, [showToast]);
+  }, [showToast, isTemplate]);
 
   const markDirty = useCallback(() => {
     editSeqRef.current += 1;
@@ -217,6 +245,42 @@ function FlowEditorInner({ flowId, onBack }) {
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => save(), 1500);
   }, [save]);
+
+  /**
+   * 模板模式：离开前先等正在进行的保存落地；仍有未保存修改则二次确认。
+   * 任务模式保持原有行为（返回即返回）。
+   */
+  const handleBack = useCallback(async () => {
+    if (!isTemplate) { onBack(); return; }
+    if (savePromiseRef.current) {
+      const ok = await savePromiseRef.current;
+      if (ok === false) { showToast('保存失败，已留在模板编辑器；请处理后重试', 'fail'); return; }
+    }
+    if (stateRef.current.dirty) {
+      const leave = await confirmDialog({
+        title: '离开模板编辑器',
+        message: '还有未保存的修改，离开后这些修改会丢失。确定返回模板列表吗？',
+        confirmText: '放弃修改并返回',
+        cancelText: '继续编辑',
+        danger: true,
+      });
+      if (!leave) return;
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+    }
+    onBack();
+  }, [isTemplate, onBack, showToast]);
+
+  // 浏览器刷新/关闭页签也拦一下（只拦真正没保存的修改）
+  useEffect(() => {
+    if (!isTemplate) return undefined;
+    const onBeforeUnload = (e) => {
+      if (!stateRef.current.dirty) return;
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [isTemplate]);
 
   const selectedNode = useMemo(
     () => nodes.find((n) => n.id === selectedId),
@@ -507,20 +571,36 @@ function FlowEditorInner({ flowId, onBack }) {
     }
   }, [setNodes, setEdges, markDirty, updateConfig]);
 
-  if (loadErr) return <div className="boot">加载失败：{loadErr} <button className="small" onClick={onBack}>返回</button></div>;
-  if (!flow) return <div className="boot">加载流程…</div>;
+  if (loadErr) {
+    return (
+      <div className="boot">
+        加载{isTemplate ? '模板' : '流程'}失败：{loadErr}
+        <button className="small" onClick={isTemplate ? handleBack : onBack}>返回</button>
+      </div>
+    );
+  }
+  if (!flow) return <div className="boot">加载{isTemplate ? '模板' : '流程'}…</div>;
   const empty = nodes.length === 0;
 
   return (
     <>
       <div className="topbar editor-topbar">
-        <button className="small" onClick={onBack}>返回</button>
-        <input
-          className="flow-title"
-          value={flow.name}
-          onChange={(e) => { setFlow({ ...flow, name: e.target.value }); markDirty(); }}
-          onBlur={() => api.updateFlow(flow.id, { name: flow.name }).then((nf) => setFlow((cur) => ({ ...cur, rev: nf.rev }))).catch((e) => showToast(e.message))}
-        />
+        <button className="small" onClick={isTemplate ? handleBack : onBack}>返回</button>
+        {isTemplate ? (
+          <div
+            className="flow-title tpl-title"
+            title="当前编辑的是模板流程图。模板名称/描述/默认变量在「模板设置」里修改；保存后由模板创建的任务会自动跟随。"
+          >
+            模板 · {flow.name}
+          </div>
+        ) : (
+          <input
+            className="flow-title"
+            value={flow.name}
+            onChange={(e) => { setFlow({ ...flow, name: e.target.value }); markDirty(); }}
+            onBlur={() => api.updateFlow(flow.id, { name: flow.name }).then((nf) => setFlow((cur) => ({ ...cur, rev: nf.rev }))).catch((e) => showToast(e.message))}
+          />
+        )}
         {flow.template && (
           <span className="chip chip-mute tpl-chip" title={`流程始终跟随模板「${flow.template.name}」；改这里的流程会把这个任务转成独立任务`}>
             模板 {flow.template.name}
@@ -539,33 +619,49 @@ function FlowEditorInner({ flowId, onBack }) {
           结构{structure.issues?.length ? ` · ${structure.issues.length}` : ''}
         </button>
         <button className={`small${outlineOpen ? ' active' : ''}`} onClick={() => setOutlineOpen((v) => !v)} title="把流程图拍成能读的清单">大纲</button>
-        <button className="small" onClick={() => setScheduleOpen(true)} title="cron / 时区 / 抖动 / 启用调度">调度</button>
+        {!isTemplate && (
+          <button className="small" onClick={() => setScheduleOpen(true)} title="cron / 时区 / 抖动 / 启用调度">调度</button>
+        )}
         <button className={`small${showPalette ? ' active' : ''}`} onClick={() => setShowPalette((v) => !v)} title="显示/收起步骤积木">积木</button>
         <button className={`small${showConfig ? ' active' : ''}`} onClick={() => setShowConfig((v) => !v)} title="显示/收起参数面板">参数</button>
         <button className="small" onClick={layoutNow} title="按连线层级从左到右自动排列">整理</button>
         <span className="spacer" />
-        {saving ? <span style={{ color: 'var(--muted)', fontSize: 12 }}>保存中…</span>
-          : saveError ? <span style={{ color: 'var(--fail)', fontSize: 12 }} title={saveError}>保存失败</span>
-            : dirty ? <span style={{ color: 'var(--warn)', fontSize: 12 }}>未保存</span> : null}
-        <button className="small" disabled={!runResult} onClick={() => setDrawerOpen(true)} title={runResult ? '展开运行日志' : '先运行一次'}>日志</button>
-        <button className="small primary" onClick={runNow} title="从头执行整个流程">运行</button>
+        {saving ? <span className="save-state" title="正在写入服务器">保存中…</span>
+          : saveError ? <span className="save-state error" title={saveError}>保存失败</span>
+            : dirty ? <span className="save-state dirty" title="修改后约 1.5 秒自动保存">未保存</span>
+              : isTemplate ? <span className="save-state" title="修改自动保存；由该模板创建的任务会自动跟随">已保存</span> : null}
+        {!isTemplate && (
+          <>
+            <button className="small" disabled={!runResult} onClick={() => setDrawerOpen(true)} title={runResult ? '展开运行日志' : '先运行一次'}>日志</button>
+            <button className="small primary" onClick={runNow} title="从头执行整个流程">运行</button>
+          </>
+        )}
         <button className="iconbtn" onClick={() => setGuideOpen(true)} title="使用引导" aria-label="使用引导"><IconHelp size={16} /></button>
-        <Dropdown trigger="更多" caret triggerClass="dd-menu" align="right" width={170} ariaLabel="编辑器更多操作">
+        <Dropdown trigger="更多" caret triggerClass="dd-menu" align="right" width={190} ariaLabel="编辑器更多操作">
           <button disabled={!canUndo} onClick={undo}>撤销</button>
           <button disabled={!canRedo} onClick={redo}>重做</button>
           <button onClick={copySelected}>复制节点</button>
           <button disabled={!hasClipboard} onClick={pasteClipboard}>粘贴节点</button>
           <div className="menu-sep" />
           <button onClick={layoutNow}>整理布局</button>
-          <div className="menu-sep" />
-          <button onClick={runDebug} title="记录每一步的请求/响应并展开运行过程窗口"><IconBug size={14} /> 调试运行</button>
-          <div className="menu-sep" />
-          <button onClick={() => setDetailOpen(true)}>任务详情…</button>
+          {!isTemplate && (
+            <>
+              <div className="menu-sep" />
+              <button onClick={runDebug} title="记录每一步的请求/响应并展开运行过程窗口"><IconBug size={14} /> 调试运行</button>
+              <div className="menu-sep" />
+              <button onClick={() => setDetailOpen(true)}>任务详情…</button>
+            </>
+          )}
           <button onClick={() => setNotifyOpen(true)}>通知渠道</button>
-          <button onClick={testNotify}>测试通知</button>
-          <button onClick={() => setCookieOpen(true)}>填入 Cookie</button>
+          {!isTemplate && <button onClick={testNotify}>测试通知</button>}
+          {!isTemplate && <button onClick={() => setCookieOpen(true)}>填入 Cookie</button>}
           <button onClick={() => setLogOpen(true)}>日志配置</button>
-          <button onClick={saveAsTemplate}>存为模板</button>
+          {!isTemplate && (
+            <>
+              <div className="menu-sep" />
+              <button onClick={saveAsTemplate}>存为模板</button>
+            </>
+          )}
         </Dropdown>
         <ThemeToggle />
       </div>
@@ -597,7 +693,16 @@ function FlowEditorInner({ flowId, onBack }) {
             点节点配置，Delete 删除
           </div>
           <div className="section-title">流程变量</div>
-          <VarsEditor flow={flow} onVars={(vars) => api.updateFlow(flow.id, { vars }).then(setFlow)} />
+          <VarsEditor
+            flow={flow}
+            onVars={(vars) => {
+              if (!isTemplate) return api.updateFlow(flow.id, { vars }).then(setFlow);
+              // 模板模式的变量写回模板；变量名列表同步，派生任务读取时自动补默认值
+              return api.updateTemplate(flow.id, { vars, varNames: Object.keys(vars) }).then((t) => {
+                setFlow((cur) => ({ ...cur, vars: t.vars || vars, varNames: t.varNames || Object.keys(vars) }));
+              });
+            }}
+          />
         </div>
 
         {outlineOpen && (
@@ -647,9 +752,11 @@ function FlowEditorInner({ flowId, onBack }) {
           {empty && (
             <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', zIndex: 5 }}>
               <div style={{ background: 'var(--panel)', border: '1px dashed var(--border)', borderRadius: 14, padding: '26px 32px', textAlign: 'center', pointerEvents: 'auto', maxWidth: 420 }}>
-                <p style={{ margin: '0 0 6px', fontWeight: 600 }}>空白流程</p>
+                <p style={{ margin: '0 0 6px', fontWeight: 600 }}>{isTemplate ? '空白模板' : '空白流程'}</p>
                 <p style={{ margin: '0 0 12px', color: 'var(--muted)', fontSize: 12, lineHeight: 1.7 }}>
-                  从「积木」里点 HTTP 请求开始：填 URL（支持 <code>{'{{变量}}'}</code>）→ 再加一个日志节点 → 点「运行」验证。
+                  {isTemplate
+                    ? <>从「积木」里点 HTTP 请求开始：填 URL（支持 <code>{'{{变量}}'}</code>）→ 再加一个日志节点。保存后由这个模板创建的任务会自动跟随。</>
+                    : <>从「积木」里点 HTTP 请求开始：填 URL（支持 <code>{'{{变量}}'}</code>）→ 再加一个日志节点 → 点「运行」验证。</>}
                 </p>
                 <button className="small primary" onClick={() => addNodeAt('http', { x: 80, y: 60 })}>+ 加一个 HTTP 请求</button>
               </div>
@@ -662,8 +769,8 @@ function FlowEditorInner({ flowId, onBack }) {
           onUpdate={(patch) => updateNode(selectedId, patch)}
           onConfigUpdate={(p) => updateConfig(selectedId, p)}
           onDelete={() => deleteNode(selectedId)}
-          onDebugTo={debugTo}
-          flowId={flow?.id}
+          onDebugTo={isTemplate ? undefined : debugTo}
+          flowId={isTemplate ? undefined : flow?.id}
           flowVars={flow?.vars || {}}
           onCollapse={() => setShowConfig(false)}
         />
@@ -686,11 +793,15 @@ function FlowEditorInner({ flowId, onBack }) {
         )}
       </div>
 
-      {logOpen && <LogConfigModal flow={flow} onClose={() => setLogOpen(false)} onSaved={(f) => setFlow(f)} />}
-      {notifyOpen && <NotifyModal flow={flow} onClose={() => setNotifyOpen(false)} onSaved={(f) => setFlow(f)} onToast={showToast} />}
+      {logOpen && (isTemplate
+        ? <TemplateLogModal tpl={flow} onClose={() => setLogOpen(false)} onSaved={(t) => setFlow((cur) => ({ ...cur, log: t.log }))} />
+        : <LogConfigModal flow={flow} onClose={() => setLogOpen(false)} onSaved={(f) => setFlow(f)} />)}
+      {notifyOpen && (isTemplate
+        ? <TemplateNotifyModal tpl={flow} onClose={() => setNotifyOpen(false)} onSaved={(t) => setFlow((cur) => ({ ...cur, notify: t.notify }))} onToast={showToast} />
+        : <NotifyModal flow={flow} onClose={() => setNotifyOpen(false)} onSaved={(f) => setFlow(f)} onToast={showToast} />)}
       {guideOpen && <GuideModal onClose={() => setGuideOpen(false)} />}
 
-      {cookieOpen && (
+      {!isTemplate && cookieOpen && (
         <CookieHelpModal
           flow={flow}
           onClose={() => setCookieOpen(false)}
@@ -703,7 +814,7 @@ function FlowEditorInner({ flowId, onBack }) {
         />
       )}
 
-      {detailOpen && (
+      {!isTemplate && detailOpen && (
         <TaskDetailModal
           summary={{
             id: flow.id, name: flow.name, note: flow.note, enabled: flow.enabled,
@@ -715,7 +826,7 @@ function FlowEditorInner({ flowId, onBack }) {
         />
       )}
 
-      {scheduleOpen && (
+      {!isTemplate && scheduleOpen && (
         <ScheduleModal
           flow={flow}
           onClose={() => setScheduleOpen(false)}
@@ -727,7 +838,7 @@ function FlowEditorInner({ flowId, onBack }) {
         />
       )}
 
-      {tplOpen && (
+      {!isTemplate && tplOpen && (
         <Modal
           title="存为模板"
           onClose={() => setTplOpen(false)}
@@ -750,5 +861,200 @@ function FlowEditorInner({ flowId, onBack }) {
       )}
 
     </>
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * 模板模式的日志 / 通知配置
+ * 任务版 LogConfigModal / NotifyModal 内部固定调用 api.updateFlow，
+ * 模板没有 flow id，所以这里复用同样的字段与校验，保存改走 updateTemplate。
+ * ------------------------------------------------------------------ */
+
+function TemplateLogModal({ tpl, onClose, onSaved }) {
+  const cur = tpl.log && typeof tpl.log === 'object' ? tpl.log : {};
+  const [level, setLevel] = useState(cur.level || 'all');
+  const [record, setRecord] = useState(cur.record || 'log');
+  const [debug, setDebug] = useState(cur.debug === true);
+  const [include, setInclude] = useState({
+    reqHeaders: cur.include?.reqHeaders !== false,
+    reqBody: cur.include?.reqBody !== false,
+    resBody: cur.include?.resBody !== false,
+    varsSnapshot: cur.include?.varsSnapshot !== false,
+  });
+  const [resBodyLimit, setResBodyLimit] = useState(cur.resBodyLimit ?? 2000);
+  const [keywords, setKeywords] = useState(Array.isArray(cur.keywords) ? cur.keywords : []);
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const save = async () => {
+    setBusy(true);
+    setErr('');
+    try {
+      const t = await api.updateTemplate(tpl.id, {
+        log: { level, record, debug, include, resBodyLimit: Number(resBodyLimit) || 0, keywords },
+      });
+      onSaved(t);
+      onClose();
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const chk = (k, label) => (
+    <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, fontSize: 13 }}>
+      <input type="checkbox" style={{ width: 'auto' }} checked={include[k]} onChange={(e) => setInclude({ ...include, [k]: e.target.checked })} />
+      {label}
+    </label>
+  );
+
+  return (
+    <Modal
+      title={`日志配置：模板 · ${tpl.name}`}
+      onClose={onClose}
+      footer={
+        <>
+          <button onClick={onClose}>取消</button>
+          <button className="primary" disabled={busy} onClick={save}>{busy ? '保存中…' : '保存'}</button>
+        </>
+      }
+    >
+      <div className="field">
+        <label title="低档位会自动忽略下方的内容开关">记录档位</label>
+        <select value={level} onChange={(e) => setLevel(e.target.value)}>
+          <option value="all">all —— 全部步骤完整记录（调试期）</option>
+          <option value="failure">failure —— 仅失败步骤完整记录（稳定运行期）</option>
+          <option value="summary">summary —— 只记标题/关键字/耗时（长期免维护）</option>
+        </select>
+      </div>
+      <div className="field">
+        <label title="决定运行日志里出现哪些步骤">记录范围</label>
+        <select value={record} onChange={(e) => setRecord(e.target.value)}>
+          <option value="log">仅 log 节点（默认：日常干净日志，只有你写的 log 才出现）</option>
+          <option value="log-final">合并为一条（所有 log 合并成最终一条日志）</option>
+          <option value="all">全部步骤（每个节点一行）</option>
+        </select>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, fontSize: 13 }}>
+          <input type="checkbox" style={{ width: 'auto' }} checked={debug} onChange={(e) => setDebug(e.target.checked)} />
+          调试模式（保留每步请求/响应细节；日常请关闭）
+        </label>
+      </div>
+      <div className="field">
+        <label title="仅在「全部」档位生效">记录内容开关</label>
+        {chk('reqHeaders', '请求头')}
+        {chk('reqBody', '请求体')}
+        {chk('resBody', '响应体')}
+        {chk('varsSnapshot', '运行后变量快照')}
+      </div>
+      <div className="field">
+        <label title="单位为字符，填 0 表示不记录响应体">响应体截断长度</label>
+        <input className="mono" type="number" min={0} max={100000} value={resBodyLimit} onChange={(e) => setResBodyLimit(e.target.value)} />
+      </div>
+      <div className="field">
+        <label title="命中值进运行摘要；只影响日志与通知，不影响流程执行">关键字规则</label>
+        {keywords.map((k, i) => (
+          <div key={i} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 8, marginBottom: 8 }}>
+            <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
+              <input style={{ flex: 1 }} placeholder="规则名（如 积分）" value={k.name || ''} onChange={(e) => setKeywords(keywords.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} />
+              <button className="small danger" onClick={() => setKeywords(keywords.filter((_, j) => j !== i))}>删除</button>
+            </div>
+            <input className="mono" placeholder="正则（第 1 捕获组为值）" value={k.regex || ''} onChange={(e) => setKeywords(keywords.map((x, j) => (j === i ? { ...x, regex: e.target.value } : x)))} style={{ marginBottom: 6 }} />
+            <div style={{ display: 'flex', gap: 6 }}>
+              <select value={k.from || 'response'} onChange={(e) => setKeywords(keywords.map((x, j) => (j === i ? { ...x, from: e.target.value } : x)))}>
+                <option value="response">响应体</option>
+                <option value="headers">响应头</option>
+                <option value="status">状态码</option>
+              </select>
+              <select value={k.into || 'summary'} onChange={(e) => setKeywords(keywords.map((x, j) => (j === i ? { ...x, into: e.target.value } : x)))}>
+                <option value="summary">进摘要</option>
+                <option value="notify">进通知</option>
+                <option value="var">写变量(仅日志侧)</option>
+              </select>
+            </div>
+          </div>
+        ))}
+        <button className="small" onClick={() => setKeywords([...keywords, { name: '新规则', regex: '', from: 'response', into: 'summary' }])}>+ 添加规则</button>
+      </div>
+      {err && <p className="form-error">{err}</p>}
+    </Modal>
+  );
+}
+
+function TemplateNotifyModal({ tpl, onClose, onSaved, onToast }) {
+  const cur = tpl.notify && typeof tpl.notify === 'object' ? tpl.notify : {};
+  const [channels, setChannels] = useState(Array.isArray(cur.channels) ? cur.channels : []);
+  const [onSuccess, setOnSuccess] = useState(cur.onSuccess !== false);
+  const [onFailure, setOnFailure] = useState(cur.onFailure !== false);
+  const [template, setTemplate] = useState(cur.template || '[CheckQ] {{flow.name}} {{status}}\n{{message}}');
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const TYPES = CHANNEL_TYPE_OPTIONS.map(([k, , label]) => [k, label]);
+  const patch = (i, k, v) => setChannels(channels.map((c, j) => (j === i ? { ...c, [k]: v } : c)));
+
+  const save = async () => {
+    setBusy(true);
+    setErr('');
+    try {
+      const t = await api.updateTemplate(tpl.id, { notify: { onSuccess, onFailure, template, channels } });
+      onSaved(t);
+      onToast?.('通知渠道已保存', 'ok');
+      onClose();
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal
+      title={`通知渠道：模板 · ${tpl.name}`}
+      onClose={onClose}
+      className="notify-modal"
+      footer={
+        <>
+          <button onClick={onClose}>取消</button>
+          <button className="primary" disabled={busy} onClick={save} title="保存到模板；已创建任务的通知渠道保持不变">{busy ? '保存中…' : '保存'}</button>
+        </>
+      }
+    >
+      <label className="checkline">
+        <input type="checkbox" checked={onSuccess} onChange={(e) => setOnSuccess(e.target.checked)} />
+        成功时通知
+      </label>
+      <label className="checkline">
+        <input type="checkbox" checked={onFailure} onChange={(e) => setOnFailure(e.target.checked)} />
+        失败时通知
+      </label>
+      <div className="field">
+        <label title={'可用变量：{{flow.name}} / {{status}} / {{message}} / {{duration}} / {{time}}'}>通知模板</label>
+        <textarea rows={2} className="mono" value={template} onChange={(e) => setTemplate(e.target.value)} />
+      </div>
+      {channels.length === 0 && (
+        <div className="notify-empty">
+          还没有通知渠道。点下方「+ 添加渠道」选类型；站内通知不需要任何外部服务，消息会显示在首页铃铛里。
+        </div>
+      )}
+      {channels.map((c, i) => (
+        <div key={i} style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 10, marginBottom: 10 }}>
+          <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+            <select value={c.type || 'webhook'} onChange={(e) => patch(i, 'type', e.target.value)}>
+              {TYPES.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+            </select>
+            <button className="small danger" onClick={() => setChannels(channels.filter((_, j) => j !== i))}>删除</button>
+          </div>
+          {(CHANNEL_FIELDS[c.type || 'webhook'] || CHANNEL_FIELDS.webhook).map(([k, label]) => (
+            <div className="field" key={k} style={{ marginBottom: 8 }}>
+              <label>{label}</label>
+              <input className="mono" value={c[k] || ''} placeholder={label} onChange={(e) => patch(i, k, e.target.value)} />
+            </div>
+          ))}
+        </div>
+      ))}
+      <button className="small" onClick={() => setChannels([...channels, { type: 'webhook', url: '' }])}>+ 添加渠道</button>
+      {err && <p className="form-error">{err}</p>}
+    </Modal>
   );
 }

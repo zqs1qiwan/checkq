@@ -10,7 +10,14 @@ import { setToastLevel } from './toast.js';
 
 export default function App() {
   const [view, setView] = useState('loading');
-  const [flowId, setFlowId] = useState(null);
+  // 编辑器目标：任务流程图，或模板流程图（模板编辑不新建任务）
+  const [editor, setEditor] = useState(null); // { kind: 'flow' | 'template', id }
+
+  const openEditor = (kind, id) => {
+    if (!id) return;
+    setEditor({ kind, id });
+    setView('editor');
+  };
 
   useEffect(() => {
     set401Handler(() => setView('login'));
@@ -32,12 +39,17 @@ export default function App() {
       {view === 'login' && <Login onOk={() => { setView('list'); api.uiSettings().then((s) => setToastLevel(s.toastLevel)).catch(() => {}); }} />}
       {view === 'list' && (
         <FlowList
-          onOpen={(id) => { setFlowId(id); setView('editor'); }}
+          onOpen={(id) => openEditor('flow', id)}
+          onEditTemplate={(id) => openEditor('template', id)}
           onLogout={async () => { try { await api.logout(); } catch {} setView('login'); }}
         />
       )}
-      {view === 'editor' && (
-        <FlowEditor flowId={flowId} onBack={() => setView('list')} />
+      {view === 'editor' && editor && (
+        <FlowEditor
+          key={`${editor.kind}:${editor.id}`}
+          target={editor}
+          onBack={() => setView('list')}
+        />
       )}
       <GlobalToast />
       <ConfirmHost />

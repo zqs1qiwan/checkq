@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 使用与部署文档
+    url: https://zqs1qiwan.github.io/checkq/
+    about: 先在文档站查使用、部署、排障与安全说明，再决定是否开 Issue。
+  - name: 安全漏洞
+    url: https://github.com/zqs1qiwan/checkq/security/advisories/new
+    about: 不要用公开 Issue 报告漏洞；请通过 GitHub Security Advisories 私密提交。
