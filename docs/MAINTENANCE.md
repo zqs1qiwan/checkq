@@ -90,4 +90,5 @@ CI（`.github/workflows/ci.yml`）覆盖单测、前端构建、文案与项目�
 
 - `main` 尚未配置分支保护；可在仓库 Settings → Branches 要求 `静态验收` 通过。
 - 前端主包约 558 kB（gzip 182 kB），后续可按编辑器 / 设置页做动态拆包。
-- 仓库 Wiki 为空；若启用需先明确与 Pages 的分工，否则建议关闭。
+- 仓库 Wiki 已关闭（2026-11-20）；文档统一走 GitHub Pages。
+- Dockerfile 仍以 root 运行；切换到非 root 需要同时迁移 `/data` 属主，留待单独变更。
