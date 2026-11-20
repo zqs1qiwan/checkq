@@ -33,7 +33,7 @@ jobs:
         run: node tools/build-wiki.cjs
       - name: 校验产物
         run: test -f wiki/index.html && test -f wiki/assets/style.css
-      - uses: actions/configure-pages@v5
+      - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v3
         with:
           path: wiki
