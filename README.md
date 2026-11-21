@@ -14,9 +14,9 @@
   <img src="https://img.shields.io/badge/OpenAPI-3.1-85ea2d.svg" alt="OpenAPI 3.1" />
 </p>
 
-CheckQ 把签到、打卡、查询、监控、上报这类重复 HTTP 操作做成可视化流程：拖拽积木搭建，导入 HAR 自动生成，定时执行，失败能看到原因。Docker 单容器部署，数据落在本地 `/data`。不内置浏览器渲染、验证码识别、多语言运行时与集群能力；需要时请用外部服务。
+CheckQ 把签到、打卡、查询、监控、上报这类重复 HTTP 操作做成可视化流程：拖拽积木搭建，导入 HAR 自动生成，定时执行，失败能看到原因。Docker 单容器部署，数据落在本地 `/data`。不内置浏览器渲染、验证码识别、多语言运行时与集群能力；需要时请用外部服务（例如Scrapling等）。
 
-**它同时是一个给 AI 用的自动化平台**：MCP（20 个工具）+ REST（OpenAPI 3.1）+ 作用域 API Key。Claude / Cursor / 其他 Agent 可以直接建任务、改流程、运行、读日志、修断言；内置 AI 助手还能把一句描述变成可编辑草稿。人只负责确认结果和开启调度。
+**支持AI Agent托管**：MCP（20 个工具）+ REST（OpenAPI 3.1）+ 作用域 API Key。Claude / Cursor / Opencode / Deepseek Harness /等其他 Agent 可以直接建任务、改流程、运行、读日志、修断言；内置 AI 助手还能把一句描述变成可编辑草稿。人只负责确认结果和开启调度及错误时干预指挥。
 
 - 文档站：<https://zqs1qiwan.github.io/checkq/>
 - 当前版本：`0.6.5`，变更见 [docs/CHANGELOG.md](docs/CHANGELOG.md)
