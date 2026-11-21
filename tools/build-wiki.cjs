@@ -556,11 +556,17 @@ CSP / X-Frame-Options / nosniff / Referrer-Policy；写操作校验 Origin 同�
 
 单容器（Docker），数据落在 \`data/\`（flows / runs / templates / meta / notifications），JSON 存储 + 原子写 + 立即落盘。
 
+官方镜像来自 Docker Hub：
+
 \`\`\`bash
+docker pull zqs1qiwan/checkq:0.6.5
 docker run -d --name checkq --restart unless-stopped -p 8888:8888 \\
   -v /path/to/data:/data -e TZ=Asia/Shanghai \\
-  -e PORT=8888 -e DATA_DIR=/data checkq:latest
+  -e PORT=8888 -e DATA_DIR=/data \\
+  zqs1qiwan/checkq:0.6.5
 \`\`\`
+
+\`latest\` 跟随最新稳定版；升级前先备份 \`data/\`（含 \`.secret\`），再 \`docker pull\` 并重建容器。也可以从源码构建：\`docker compose up -d --build\`。
 
 端口可按需映射（例如 \`-p 18888:8888\`）；数据目录务必挂载到宿主机持久化。
 

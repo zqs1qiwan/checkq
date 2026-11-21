@@ -87,6 +87,7 @@ CheckQ 把签到、打卡、查询、监控、上报这类重复 HTTP 操作做�
 
 - Docker 单容器，零数据库依赖；数据落在 `/data`（`flows.json`、`runs.json`、`templates.json`、`meta.json`、`notifications.json`、`channels.json`，以及权限 600 的 `.secret` 密钥文件）
 - 多阶段构建：前端产物打进服务端镜像，一个容器同时提供 API 与面板
+- 官方镜像：`docker pull zqs1qiwan/checkq:0.6.5`（Docker Hub；`latest` 跟随最新稳定版）
 
 ## AI / Agent 接入
 
@@ -153,7 +154,24 @@ Agent 会调用 `flow_create` / `flow_update` / `flow_run` / `flow_logs` / `run_
 
 ## 快速开始
 
-### Docker Compose（推荐）
+### Docker Hub 镜像（推荐）
+
+不用克隆源码，直接拉官方镜像：
+
+```bash
+docker pull zqs1qiwan/checkq:0.6.5
+
+docker run -d --name checkq --restart unless-stopped \
+  -p 18888:8888 \
+  -v "$PWD/data:/data" \
+  -e TZ=Asia/Shanghai \
+  -e ADMIN_PASSWORD='换成你自己的强密码' \
+  zqs1qiwan/checkq:0.6.5
+```
+
+打开 `http://localhost:18888`。`latest` 跟随最新稳定版；升级时先备份 `data/`，再 `docker pull` 并重建容器。
+
+### Docker Compose（源码构建）
 
 ```bash
 git clone https://github.com/zqs1qiwan/checkq.git

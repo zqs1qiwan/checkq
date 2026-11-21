@@ -28,7 +28,7 @@
 <link rel="apple-touch-icon" href="./assets/brand/apple-touch-icon.png" />
 <link rel="stylesheet" href="./assets/style.css" />
 <link rel="sitemap" type="application/xml" href="https://zqs1qiwan.github.io/checkq/sitemap.xml" />
-<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebSite","@id":"https://zqs1qiwan.github.io/checkq/#website","url":"https://zqs1qiwan.github.io/checkq/","name":"CheckQ 文档","inLanguage":"zh-CN","description":"CheckQ 是开源的可视化 HTTP 自动化流程引擎：积木式流程、调度与失败重试、日志与通知、模板联动、REST API 与 MCP。","publisher":{"@type":"Organization","name":"CheckQ","url":"https://github.com/zqs1qiwan/checkq","logo":{"@type":"ImageObject","url":"https://zqs1qiwan.github.io/checkq/assets/brand/checkq-mark.svg","width":120,"height":120}}},{"@type":"TechArticle","@id":"https://zqs1qiwan.github.io/checkq/changelog.html#article","headline":"更新日志","name":"更新日志","description":"CheckQ 面向使用者的变更记录：新功能、改进与修复，按版本倒序。","url":"https://zqs1qiwan.github.io/checkq/changelog.html","mainEntityOfPage":"https://zqs1qiwan.github.io/checkq/changelog.html","inLanguage":"zh-CN","dateModified":"2026-11-20","isPartOf":{"@id":"https://zqs1qiwan.github.io/checkq/#website"},"image":"https://zqs1qiwan.github.io/checkq/assets/social-preview.png","publisher":{"@type":"Organization","name":"CheckQ","url":"https://github.com/zqs1qiwan/checkq"}}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebSite","@id":"https://zqs1qiwan.github.io/checkq/#website","url":"https://zqs1qiwan.github.io/checkq/","name":"CheckQ 文档","inLanguage":"zh-CN","description":"CheckQ 是开源的可视化 HTTP 自动化流程引擎：积木式流程、调度与失败重试、日志与通知、模板联动、REST API 与 MCP。","publisher":{"@type":"Organization","name":"CheckQ","url":"https://github.com/zqs1qiwan/checkq","logo":{"@type":"ImageObject","url":"https://zqs1qiwan.github.io/checkq/assets/brand/checkq-mark.svg","width":120,"height":120}}},{"@type":"TechArticle","@id":"https://zqs1qiwan.github.io/checkq/changelog.html#article","headline":"更新日志","name":"更新日志","description":"CheckQ 面向使用者的变更记录：新功能、改进与修复，按版本倒序。","url":"https://zqs1qiwan.github.io/checkq/changelog.html","mainEntityOfPage":"https://zqs1qiwan.github.io/checkq/changelog.html","inLanguage":"zh-CN","dateModified":"2026-11-21","isPartOf":{"@id":"https://zqs1qiwan.github.io/checkq/#website"},"image":"https://zqs1qiwan.github.io/checkq/assets/social-preview.png","publisher":{"@type":"Organization","name":"CheckQ","url":"https://github.com/zqs1qiwan/checkq"}}]}</script>
 <script>(function(){try{var k='checkq-wiki-theme';var s=window.localStorage.getItem(k);var m=(s==='light'||s==='dark')?s:((window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches)?'light':'dark');document.documentElement.setAttribute('data-mode',m);}catch(e){}document.documentElement.classList.add('js');})();</script>
 <noscript><style>.copy-btn,.search{display:none !important}</style></noscript>
 </head>
@@ -95,6 +95,7 @@
 <a class="toc-l3" href="#模板管理">模板管理</a>
 <a class="toc-l3" href="#ai-助手">AI 助手</a>
 <a class="toc-l3" href="#维护">维护</a>
+<a class="toc-l3" href="#发布">发布</a>
 <a class="toc-l2" href="#0642026-11-18">0.6.4（2026-11-18）</a>
 <a class="toc-l3" href="#可信底座补强">可信底座补强</a>
 <a class="toc-l2" href="#0632026-11-18">0.6.3（2026-11-18）</a>
@@ -128,7 +129,7 @@
 </details>
     <article class="doc">
 <h1 id="更新日志">更新日志<a class="h-anchor" href="#更新日志" aria-label="本节永久链接">#</a></h1>
-<p class="doc-meta"><span>v0.6.5</span><span>更新于 2026-11-20</span><a class="edit-link" href="https://github.com/zqs1qiwan/checkq/edit/main/docs/CHANGELOG.md" target="_blank" rel="noopener noreferrer">在 GitHub 编辑此页 ↗</a></p>
+<p class="doc-meta"><span>v0.6.5</span><span>更新于 2026-11-21</span><a class="edit-link" href="https://github.com/zqs1qiwan/checkq/edit/main/docs/CHANGELOG.md" target="_blank" rel="noopener noreferrer">在 GitHub 编辑此页 ↗</a></p>
 <p>面向使用者的变更记录（新功能、改进、修复）。部署版本号见「设置 → 关于」与 <code>/api/health</code>。</p>
 <h2 id="0652026-11-20">0.6.5（2026-11-20）<a class="h-anchor" href="#0652026-11-20" aria-label="本节永久链接">#</a></h2>
 <h3 id="展示与文档">展示与文档<a class="h-anchor" href="#展示与文档" aria-label="本节永久链接">#</a></h3>
@@ -139,6 +140,8 @@
 <ul><li><strong>权限修复</strong> — <code>PUT /api/system/ai</code> 与连接测试仅管理员可用，修复任意登录用户可改 LLM 端点/Key 的越权。</li><li><strong>连接测试与配置</strong> — 新增 <code>POST /api/ai/test</code>、超时（5–120 秒）与最大 tokens（1–4096）配置、DeepSeek / OpenAI / Ollama 预设、审计与 30 次/分钟限流。</li><li><strong>生成加固</strong> — edges 只保留存在节点并去重、cron 仅 5 段、过滤危险键、错误与审计脱敏、上游响应体读取上限。</li><li><strong>文档补齐</strong> — OpenAPI、<code>docs/API.md</code>、<code>docs/AI-ASSIST.md</code> 同步 AI 端点、权限与错误语义。</li></ul>
 <h3 id="维护">维护<a class="h-anchor" href="#维护" aria-label="本节永久链接">#</a></h3>
 <ul><li>版本号统一为 <code>0.6.5</code>；新增 <code>.gitattributes</code> 行尾策略；<code>.dockerignore</code> 排除运行数据与本地私有内容；补充安全报告渠道与安全策略。</li></ul>
+<h3 id="发布">发布<a class="h-anchor" href="#发布" aria-label="本节永久链接">#</a></h3>
+<ul><li><strong>Docker Hub 官方镜像</strong> — 新增 <code>zqs1qiwan/checkq:0.6.5</code>（<code>latest</code> 跟随最新稳定版）；README 与文档站部署教程改为镜像优先，源码构建保留。</li></ul>
 <h2 id="0642026-11-18">0.6.4（2026-11-18）<a class="h-anchor" href="#0642026-11-18" aria-label="本节永久链接">#</a></h2>
 <h3 id="可信底座补强">可信底座补强<a class="h-anchor" href="#可信底座补强" aria-label="本节永久链接">#</a></h3>
 <ul><li><strong>运行可以停下来</strong> — 排队中或运行中的任务都能取消：HTTP 请求、curl、等待/随机等待、节点重试与任务级退避会立即中断；运行抽屉显示“已取消”，首页历史不再把它算成失败。</li><li><strong>运行有上限</strong> — 单次运行默认 30 分钟超时（<code>CHECKQ_RUN_TIMEOUT_MS</code> 可调，60 秒–24 小时），超时按失败记录并保留诊断，避免卡死任务一直占着并发名额。</li><li><strong>在途可见</strong> — 排队和运行中的记录在开始时就落库，刷新页面或重启进程后仍能看到，不会出现“点了运行却什么都没有”。</li><li><strong>脚本不再跑在主进程</strong> — <code>script</code> 节点改为独立受限子进程：64MB 内存上限、1 秒执行上限、64KB 脚本与 256KB 结果上限，拿不到 <code>process</code> / <code>require</code>，也不会把服务器拖死。</li><li><strong>响应体有硬上限</strong> — HTTP 响应默认最多读取 2MB（可配 64KB–8MB），超限立即中断，不会把超大响应整个读进内存。</li><li><strong>API Key 可限定任务范围</strong> — Key 可以只允许指定任务或分组，新增“读凭据”作用域；没有该作用域的 Key 只能看到脱敏后的变量与请求头。旧 Key 默认仍可读写、可运行，但不再能读明文凭据。</li><li><strong>保存失败不再“带病运行”</strong> — 编辑器保存失败会明确提示并阻止运行；并发编辑用版本号保护，旧页面保存会收到冲突提示，不会悄悄覆盖别人的修改。</li></ul>
@@ -224,7 +227,7 @@
         </div>
       </div>
       <div class="foot-meta">
-        <p>v0.6.5 · 生成于 2026-11-20 05:01 UTC · 由 <code>tools/build-wiki.cjs</code> 从 <code>docs/</code> 与内置页面生成</p>
+        <p>v0.6.5 · 生成于 2026-11-21 09:44 UTC · 由 <code>tools/build-wiki.cjs</code> 从 <code>docs/</code> 与内置页面生成</p>
         <p><a class="to-top" href="#top">↑ 返回顶部</a></p>
       </div>
     </footer>
@@ -236,6 +239,7 @@
 <a class="toc-l3" href="#模板管理">模板管理</a>
 <a class="toc-l3" href="#ai-助手">AI 助手</a>
 <a class="toc-l3" href="#维护">维护</a>
+<a class="toc-l3" href="#发布">发布</a>
 <a class="toc-l2" href="#0642026-11-18">0.6.4（2026-11-18）</a>
 <a class="toc-l3" href="#可信底座补强">可信底座补强</a>
 <a class="toc-l2" href="#0632026-11-18">0.6.3（2026-11-18）</a>
