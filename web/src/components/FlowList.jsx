@@ -38,6 +38,7 @@ export default function FlowList({ me, onOpen, onEditTemplate, onLogout, onSetti
   const [, setThemeTick] = useState(0); // 移动端「切换主题」后强制重渲染菜单文案
   const [selected, setSelected] = useState(new Set());
   const [batchBusy, setBatchBusy] = useState(false);
+  const [batchMessage, setBatchMessage] = useState('');
   const [batchMode, setBatchMode] = useState(false); // 批量管理开关：勾选列默认隐藏，不干扰日常阅读
   const [collapsedGroups, setCollapsedGroups] = useState(() => {
     try { return new Set(JSON.parse(localStorage.getItem('checkq-group-collapsed') || '[]')); } catch { return new Set(); }
@@ -221,16 +222,15 @@ export default function FlowList({ me, onOpen, onEditTemplate, onLogout, onSetti
     if (!ids.length) return;
     if (action === 'delete' && !(await confirmDialog({ title: '删除任务', message: `删除选中的 ${ids.length} 个任务？不可恢复`, confirmText: '删除', danger: true }))) return;
     setBatchBusy(true);
+    setBatchMessage('');
     try {
-      const r = await api.batch(ids, action);
-      const label = { run: '运行', enable: '启用', disable: '停用', delete: '删除' }[action] || action;
-      setToast({ kind: r.failed ? 'fail' : 'ok', text: `批量${label}：成功 ${r.ok} / 失败 ${r.failed}` });
       if (action === 'run') {
-        const first = r.results.find((x) => x.runId);
-        if (first) {
-          const target = flows.find((f) => f.id === first.id);
-          setModal({ type: 'logstream', flowId: first.id, flowName: target?.name || '', refresh: Date.now() });
-        }
+        const { ok, failed } = await api.batch(ids, action, { wait: false });
+        setBatchMessage(failed ? `已提交 ${ok} 个，${failed} 个提交失败` : `已提交 ${ok} 个任务`);
+      } else {
+        const r = await api.batch(ids, action);
+        const label = { enable: '启用', disable: '停用', delete: '删除' }[action] || action;
+        setToast({ kind: r.failed ? 'fail' : 'ok', text: `批量${label}：成功 ${r.ok} / 失败 ${r.failed}` });
       }
       load();
     } catch (e) {
@@ -520,9 +520,10 @@ export default function FlowList({ me, onOpen, onEditTemplate, onLogout, onSetti
               <button className="small" onClick={() => setSelected(new Set())}>取消</button>
             </span>
           )}
-          <button className={`small ${batchMode ? 'primary' : ''}`} hidden={readOnly} title={batchMode ? '退出批量模式' : '进入批量模式：可勾选多个任务一起操作'} onClick={() => { setBatchMode((v) => !v); setSelected(new Set()); }}>
+          <button className={`small ${batchMode ? 'primary' : ''}`} hidden={readOnly} title={batchMode ? '退出批量模式' : '进入批量模式：可勾选多个任务一起操作'} onClick={() => { setBatchMode((v) => !v); setSelected(new Set()); setBatchMessage(''); }}>
             {batchMode ? '退出批量' : '批量管理'}
           </button>
+          {batchMode && batchMessage && <span className="badge muted" role="status">{batchMessage}</span>}
           <input
             className="toolbar-search"
             placeholder="搜索名称、备注或分组"

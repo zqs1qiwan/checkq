@@ -20,7 +20,32 @@ const a = await mk('a'), b = await mk('b'), c = await mk('c');
 r = await app.inject({ method: 'POST', url: '/api/flows/batch', cookies: ck, payload: { ids: [a.id, b.id], action: 'enable' } });
 check('批量 enable', r.json().ok === 2);
 r = await app.inject({ method: 'POST', url: '/api/flows/batch', cookies: ck, payload: { ids: [a.id, b.id], action: 'run' } });
-check('批量 run 全部成功', r.json().ok === 2 && r.json().failed === 0);
+check('批量 run 全部成功', r.statusCode === 200 && r.json().ok === 2 && r.json().results.every((item) => item.status === 'success'));
+const slow = (await app.inject({ method: 'POST', url: '/api/flows', cookies: ck, payload: {
+  name: '慢任务', nodes: [{ id: 'delay', type: 'delay', config: { seconds: 2 } }], edges: [],
+} })).json();
+try {
+  const accepted = await app.inject({ method: 'POST', url: '/api/flows/batch', cookies: ck, payload: {
+    ids: [slow.id, 'missing', a.id], action: 'run', wait: false,
+  } });
+  check('后台批量接收有效任务，并报告缺失任务', accepted.statusCode === 202 && accepted.json().ok === 2 && accepted.json().failed === 1);
+  const [slowRun, missing, fastRun] = accepted.json().results;
+  check('后台批量返回有序的提交回执', slowRun.status === 'queued' && missing.ok === false && fastRun.status === 'queued');
+  const loadRun = async (id) => (await app.inject({ url: `/api/runs/${id}`, cookies: ck })).json();
+  const inFlight = await loadRun(slowRun.runId);
+  check('后台回执在慢任务完成前返回', ['queued', 'running'].includes(inFlight.status));
+  const cancelled = await app.inject({ method: 'POST', url: `/api/runs/${slowRun.runId}/cancel`, cookies: ck, payload: {} });
+  check('已提交的慢任务可通过运行 ID 取消', cancelled.statusCode === 200);
+  let finished;
+  for (let i = 0; i < 50; i++) {
+    finished = await loadRun(fastRun.runId);
+    if (finished.status === 'success' && (await loadRun(slowRun.runId)).status === 'cancelled') break;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  check('有效任务在后台继续执行并保存结果', finished?.status === 'success' && (await loadRun(slowRun.runId)).status === 'cancelled');
+} finally {
+  await app.inject({ method: 'DELETE', url: `/api/flows/${slow.id}`, cookies: ck });
+}
 r = await app.inject({ method: 'POST', url: '/api/flows/batch', cookies: ck, payload: { ids: [a.id], action: 'disable' } });
 check('批量 disable', r.json().ok === 1);
 r = await app.inject({ method: 'POST', url: '/api/flows/batch', cookies: ck, payload: { ids: [c.id], action: 'delete' } });

@@ -121,7 +121,7 @@ X-API-Key: <key>
 | POST | /api/flows/:id/run | `{ stream?: bool, debugStopId?, debug?, dedupe?, timeoutMs? }` 运行；stream=true → SSE（start/log/done，`start` 带 `runId`）。`dedupe:true` 时若该任务已有一次运行在跑，直接返回 `{ ok:true, deduped:true, queued:true, message:"已在运行，本次未重复提交" }`（HTTP 200，不走 SSE）。运行一开始就写入 `queued` 记录，排队与执行中都能在运行历史里看到。失败按 `flow.retry` 自动退避重试，跑满次数才最终失败；调度触发时若上一次运行/重试尚未结束则跳过这一拍。调度触发（`cron`/`schedule`）跑满仍失败 → 自动停用该任务调度（`enabled:false` + `pausedAt/pausedReason`），该次 `run.paused=true` 且结论带「（已自动停用调度）」。整体超时默认 30 分钟，可用 `timeoutMs` 或 `CHECKQ_RUN_TIMEOUT_MS` 调整。 |
 | POST | /api/flows/:id/clone | 克隆为「·副本 N」，enabled:false |
 | POST | /api/flows/:id/curl | 生成等价 curl 命令（变量代入） |
-| POST | /api/flows/batch | `{ action: run\|enable\|disable\|delete\|set-group, ids: [], group? }`（set-group 需带 group，空串=移出分组） |
+| POST | /api/flows/batch | `{ action: run\|enable\|disable\|delete\|set-group, ids: [], group?, wait? }`。`set-group` 的空分组表示移出分组。`run` 默认等待最终结果。传 `wait: false` 时按提交结果返回，至少一项提交成功则为 HTTP 202。`ok` 和 `failed` 统计提交成功和失败的项数，接收项附 `runId` 和提交时的 `status: 'queued'`，可用 `GET /api/runs/:id` 查询当前状态与结果。 |
 | POST | /api/flows/:id/notify-test | 测试通知渠道 |
 
 ### 运行记录

@@ -169,7 +169,7 @@ export function buildServer({ dataDir, port }) {
   };
   const runLimiter = createLimiter(process.env.CHECKQ_MAX_CONCURRENCY || 4);
   const runner = {
-    async runFlow(flow, trigger, { debugStopId, onLog, debug, notify = true, onStart, timeoutMs } = {}) {
+    async runFlow(flow, trigger, { debugStopId, onLog, debug, notify = true, onQueued, onStart, timeoutMs } = {}) {
       const runId = crypto.randomUUID();
       const limitMs = Math.min(24 * 3600e3, Math.max(60e3, Number(timeoutMs) || RUN_TIMEOUT_MS));
       const run = {
@@ -186,6 +186,7 @@ export function buildServer({ dataDir, port }) {
       if (!queueByFlow.has(flow.id)) queueByFlow.set(flow.id, new Set());
       queueByFlow.get(flow.id).add(runId);
       try {
+        onQueued?.(run);
         const result = await enqueueRun(flow.id, controller.signal, async () => {
           if (!(await runLimiter.acquire(controller.signal))) return run;
           try {
@@ -2215,7 +2216,8 @@ export function buildServer({ dataDir, port }) {
 
   // 批量操作（青龙/千岛对标：多选批量运行/启停/删除）
   app.post('/api/flows/batch', async (req, reply) => {
-    const { ids, action } = req.body || {};
+    const { ids, action, wait } = req.body || {};
+    const background = action === 'run' && wait === false;
     if (!Array.isArray(ids) || !ids.length) return reply.code(400).send({ error: '缺少 ids' });
     if (!['run', 'enable', 'disable', 'delete', 'set-group'].includes(action)) return reply.code(400).send({ error: '不支持的 action' });
     const group = String((req.body || {}).group || '').trim().replace(/\s+/g, ' ').slice(0, 40);
@@ -2238,8 +2240,18 @@ export function buildServer({ dataDir, port }) {
         else if (action === 'delete') { store.deleteFlow(id); changed = true; results.push({ id, ok: true }); }
         else if (action === 'set-group') { store.updateFlow(id, { group }); changed = true; results.push({ id, ok: true }); }
         else if (action === 'run') {
-          const run = await runner.runFlow(f, 'manual');
-          results.push({ id, ok: run.status === 'success', runId: run.id, status: run.status });
+          if (background) {
+            let queued;
+            const execution = runner.runFlow(f, 'manual', { onQueued: (run) => { queued = run; } });
+            if (!queued) await execution;
+            else {
+              execution.catch((error) => app.log.error({ err: error, runId: queued.id }, 'Background batch run failed'));
+              results.push({ id, ok: true, runId: queued.id, status: 'queued' });
+            }
+          } else {
+            const run = await runner.runFlow(f, 'manual');
+            results.push({ id, ok: run.status === 'success', runId: run.id, status: run.status });
+          }
         }
       } catch (e) {
         results.push({ id, ok: false, error: e.message });
@@ -2247,6 +2259,7 @@ export function buildServer({ dataDir, port }) {
     }
     if (changed) scheduler.rebuild();
     const okCount = results.filter((r) => r.ok).length;
+    if (background && okCount) reply.code(202);
     return { action, total: ids.length, ok: okCount, failed: ids.length - okCount, results };
   });
 
