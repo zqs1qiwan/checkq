@@ -162,6 +162,45 @@ test('log pagination advances by last included run, not a fixed offset', async (
   assert.equal(page2.entries.some((e) => page1.entries.some((x) => x.runId === e.runId)), false, '翻页不重复上一页运行');
 });
 
+test('log pagination returns every line of a long run within the row limit', async (t) => {
+  const dir = directory(t);
+  const { app, store, scheduler } = buildServer({ dataDir: dir, port: 0 });
+  t.after(async () => { scheduler.stop(); await app.close(); });
+  const login = await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'test1234' } });
+  const headers = { cookie: login.headers['set-cookie'].split(';')[0] };
+  const flow = store.createFlow({ name: 'long pagination', nodes: [], edges: [] });
+  const logs = Array.from({ length: 2220 }, (_, i) => ({
+    index: i % 500 + 1, name: '步骤', type: 'log', message: `line-${i}`,
+  }));
+  store.addRun({ id: 'old-run', flowId: flow.id, status: 'success', logs: logs.slice(0, 1) });
+  store.addRun({ id: 'long-run', flowId: flow.id, status: 'failed', logs });
+  store.addRun({ id: 'new-run', flowId: flow.id, status: 'success', logs: logs.slice(0, 1) });
+  const fetchPage = async (before = null) => {
+    const suffix = before ? `&before=${encodeURIComponent(before)}` : '';
+    const response = await app.inject({ url: `/api/flows/${flow.id}/logs?limit=9999${suffix}`, headers });
+    assert.equal(response.statusCode, 200, response.body);
+    const page = response.json();
+    assert.ok(page.entries.length <= 2000);
+    return page;
+  };
+  const first = await fetchPage();
+  assert.deepEqual(first.entries.map((entry) => entry.runId), ['new-run']);
+  const latest = await fetchPage(first.nextBefore);
+  assert.equal(latest.entries.length, 2000);
+  assert.equal(latest.entries[0].message, 'line-220');
+  assert.equal(latest.entries.at(-1).message, 'line-2219');
+  assert.equal(latest.hasMore, true);
+  assert.equal(latest.runs[0].count, 2220);
+  const earliest = await fetchPage(latest.nextBefore);
+  assert.equal(earliest.entries.at(-1).runId, 'old-run');
+  assert.equal(earliest.hasMore, false);
+  const wholeRun = [...earliest.entries.filter((entry) => entry.runId === 'long-run'), ...latest.entries];
+  assert.deepEqual(wholeRun.map((entry) => entry.message), logs.map((line) => line.message));
+  assert.deepEqual(wholeRun.map((entry) => entry.position), logs.map((_, i) => i));
+  const expired = await fetchPage('expired-run');
+  assert.deepEqual(expired, { entries: [], runs: [], hasMore: false, nextBefore: null });
+});
+
 test('API scopes, legacy key revocation, debug retries and restore fields', async (t) => {
   const dir = directory(t);
   const { app, store, scheduler } = buildServer({ dataDir: dir, port: 0 });

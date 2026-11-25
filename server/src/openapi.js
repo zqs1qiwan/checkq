@@ -99,6 +99,7 @@ export function buildOpenApi() {
           type: 'object',
           properties: {
             runId: { type: 'string' }, startedAt: { type: 'integer' }, status: { type: 'string' },
+            position: { type: 'integer', minimum: 0, description: '跨页运行的日志位置，从 0 开始' },
             interrupted: { type: 'boolean' }, timedOut: { type: 'boolean' },
             index: { type: 'integer' }, name: { type: 'string' }, message: { type: 'string' },
             type: { type: 'string' }, ok: { type: 'boolean' }, ms: { type: 'integer' },
@@ -162,9 +163,18 @@ export function buildOpenApi() {
         }),
       },
       '/api/flows/{id}/logs': {
-        get: op('连续日志流（多次运行的人话日志，最像 qinglong 面板）', {
-          tags: ['flows'], parameters: [idParam(), { name: 'limit', in: 'query', schema: { type: 'integer', default: 200 } }],
-          schema: { type: 'object', properties: { entries: { type: 'array', items: { $ref: '#/components/schemas/LogEntry' } }, hasMore: { type: 'boolean' } } },
+        get: op('连续日志流（普通运行整组返回，超长运行由后向前分段）', {
+          tags: ['flows'],
+          parameters: [
+            idParam(),
+            { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 20, maximum: 2000, default: 200 } },
+            { name: 'before', in: 'query', description: '上一页返回的 nextBefore', schema: { type: 'string' } },
+          ],
+          schema: { type: 'object', properties: {
+            entries: { type: 'array', items: { $ref: '#/components/schemas/LogEntry' } },
+            runs: { type: 'array', items: { $ref: '#/components/schemas/Run' } },
+            hasMore: { type: 'boolean' }, nextBefore: { type: ['string', 'null'] },
+          } },
         }),
       },
       '/api/flows/{id}/notify-test': {

@@ -75,8 +75,8 @@ export default function LogStream({ flowId, flowName, onClose, onToast, onFix })
       if (olderRequest.current !== request) return;
       const box = boxRef.current;
       const edge = box.getBoundingClientRect().top;
-      const element = Array.from(box.querySelectorAll('.logstream-group'))
-        .find((group) => group.getBoundingClientRect().bottom > edge);
+      const element = Array.from(box.querySelectorAll('.logstream-run, .logstream-line'))
+        .find((line) => line.getBoundingClientRect().bottom > edge);
       if (element) scrollAfterLoad.current = { element, top: element.getBoundingClientRect().top };
       setEntries((prev) => [...prev, ...(r.entries || [])]);
       setNextBefore(r.hasMore ? r.nextBefore : null);
@@ -135,7 +135,10 @@ export default function LogStream({ flowId, flowName, onClose, onToast, onFix })
     });
   }
   const visibleGroups = groups.reverse()
-    .map((g) => ({ ...g, items: filter === 'error' ? g.items.filter((i) => !i.ok) : g.items }))
+    .map((g) => {
+      if (g.items[0].position !== undefined) g.items.sort((a, b) => a.position - b.position);
+      return { ...g, items: filter === 'error' ? g.items.filter((i) => !i.ok) : g.items };
+    })
     .filter((g) => g.items.length > 0);
 
   return (
@@ -190,7 +193,7 @@ export default function LogStream({ flowId, flowName, onClose, onToast, onFix })
                 </div>
               )}
               {g.items.map((e, i) => (
-                <div key={i} className={`logstream-line${e.ok ? '' : ' bad'}`}>
+                <div key={e.position ?? i} className={`logstream-line${e.ok ? '' : ' bad'}`}>
                   <span className="logstream-ts">{fmtClock(e.startedAt).slice(6)}</span>
                   <span className="logstream-node">{e.name}</span>
                   <span className="logstream-msg">{e.message}</span>

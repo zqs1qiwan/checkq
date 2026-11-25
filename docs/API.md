@@ -108,7 +108,7 @@ X-API-Key: <key>
 | GET/PUT | /api/system/ui | 界面偏好（提示级别 toastLevel） |
 | GET/POST | /api/system/bootstrap | 首次启动初始化：查询是否需要建管理员 / 创建首个管理员账号 |
 | GET | /api/system/push-targets | 兼容一版：系统渠道摘要 `[{ id, type, title, enabled }]`（不再返回任务） |
-| GET | /api/flows/:id/logs | 连续日志流（多次运行的人话日志，支持 limit/before 翻页）；entries 与 runs 摘要带 `diagnosis`；按整次运行分页 |
+| GET | /api/flows/:id/logs | 连续日志流。使用 `limit`（20–2000）和 `before` 翻页。`entries` 与 `runs` 摘要含 `diagnosis`。普通运行整组返回，超长运行分段返回。 |
 
 ### 任务 (Flows)
 | 方法 | 路径 | 说明 |
@@ -235,9 +235,11 @@ data: { "id":"run-xxx", "status":"success", "durationMs":..., "summary":"...", "
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | /api/system/push-targets | 兼容一版：系统渠道摘要 `[{ id, type, title, enabled }]` |
-| GET | /api/flows/:id/logs | 连续日志流（多次运行的人话日志；`before` 游标按整次运行推进） |
+| GET | /api/flows/:id/logs | 连续日志流。若 `hasMore` 为真，请原样传回 `nextBefore` 作为 `before`。旧版运行 ID 游标仍可使用。 |
 | GET | /api/system/backup | 脱敏备份（凭据已清空） |
 | POST | /api/system/backup | 完整备份（需当前密码，含明文凭据） |
+
+超长运行从末段开始返回，每段内的日志仍按执行顺序排列。客户端跨页合并时，可按 `runId` 分组，并用 `position` 排序。若游标指向已清理的运行，接口返回空页，`hasMore` 为假。
 
 ## 6. 节点类型 (10 种)
 

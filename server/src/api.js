@@ -2361,23 +2361,45 @@ export function buildServer({ dataDir, port }) {
 
   /**
    * 连续日志流（qinglong 面板风格）：把该任务多次运行的日志拍平成一条可滚动的时间线。
-   * query: limit=总行数（默认 200，最大 2000）, before=runId（取更早的历史）
-   * 返回 { entries: [{runId, startedAt, status, index, name, message, type, ok, ms, summary, finalMessage}], runs, hasMore }
+   * query: limit=总行数（默认 200，最大 2000），before=上一页的 nextBefore（兼容 runId）。
+   * 普通运行整组返回，超长运行由后向前分段，同一段内保持步骤顺序。
    */
   app.get('/api/flows/:id/logs', async (req, reply) => {
     const f = store.getFlow(req.params.id);
     if (!f) return reply.code(404).send({ error: 'not found' });
     const q = req.query || {};
-    const limit = Math.min(Math.max(Number(q.limit) || 200, 20), 2000);
+    const limit = Math.floor(Math.min(Math.max(Number(q.limit) || 200, 20), 2000));
     const before = q.before ? String(q.before) : null;
-    const all = store.listRuns(f.id, 500);
-    const runs = before ? all.slice(all.findIndex((r) => r.id === before) + 1) : all;
+    const runs = store.listRuns(f.id, 500);
+    let runIndex = 0;
+    let resumeEnd = null;
+    if (before) {
+      const exact = runs.findIndex((run) => run.id === before);
+      if (exact >= 0) {
+        runIndex = exact + 1;
+      } else {
+        const cursor = /^(.+):(\d+)$/.exec(before);
+        runIndex = cursor ? runs.findIndex((run) => run.id === cursor[1]) : -1;
+        resumeEnd = cursor ? Number(cursor[2]) : null;
+        if (runIndex < 0 || !Number.isSafeInteger(resumeEnd) || resumeEnd < 1) {
+          return { entries: [], runs: [], hasMore: false, nextBefore: null };
+        }
+      }
+    }
+
     const entries = [];
-    let lastRunId = null;
-    let consumed = 0;
-    for (const r of runs) {
-      const lines = (r.logs || []).map((l) => ({
+    const summaries = [];
+    let nextBefore = null;
+    for (; runIndex < runs.length; runIndex++, resumeEnd = null) {
+      const r = runs[runIndex];
+      const logs = r.logs || [];
+      const end = Math.min(resumeEnd ?? logs.length, logs.length);
+      if (entries.length && entries.length + end > limit) break;
+      const start = Math.max(0, end - limit);
+      const split = start > 0 || resumeEnd !== null;
+      entries.push(...logs.slice(start, end).map((l, i) => ({
         runId: r.id,
+        ...(split ? { position: start + i } : {}),
         startedAt: r.startedAt,
         status: r.status,
         interrupted: r.interrupted,
@@ -2391,27 +2413,22 @@ export function buildServer({ dataDir, port }) {
         summary: r.summary || '',
         finalMessage: r.finalMessage || '',
         diagnosis: r.diagnosis || null,
-      }));
-      // 按「整次运行」分页：宁可少装一次，也不把一次运行的日志切到两页（避免翻页丢行/重行）
-      if (entries.length && entries.length + lines.length > limit) break;
-      entries.push(...lines);
-      lastRunId = r.id;
-      consumed++;
-      if (entries.length >= limit) break;
+      })));
+      if (summaries.length < 60) {
+        summaries.push({
+          id: r.id, startedAt: r.startedAt, status: r.status, count: logs.length,
+          interrupted: r.interrupted, timedOut: r.timedOut,
+          summary: r.summary || '', finalMessage: r.finalMessage || '', diagnosis: r.diagnosis || null,
+        });
+      }
+      nextBefore = start > 0 ? `${r.id}:${start}` : r.id;
+      if (start > 0) break;
+      if (entries.length >= limit) {
+        runIndex++;
+        break;
+      }
     }
-    const truncated = entries.slice(0, limit);
-    const hasMore = runs.length > consumed;
-    return {
-      entries: truncated,
-      runs: runs.slice(0, Math.min(60, consumed)).map((r) => ({
-        id: r.id, startedAt: r.startedAt, status: r.status, count: (r.logs || []).length,
-        interrupted: r.interrupted, timedOut: r.timedOut,
-        summary: r.summary || '', finalMessage: r.finalMessage || '', diagnosis: r.diagnosis || null,
-      })),
-      hasMore,
-      // 下一页从「本页最后一次完整运行」之后继续
-      nextBefore: lastRunId,
-    };
+    return { entries, runs: summaries, hasMore: runIndex < runs.length, nextBefore };
   });
 
   // 界面偏好（提示级别等）：全局设置
