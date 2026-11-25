@@ -16,12 +16,57 @@ function fmtClock(ts) {
   return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
+function RunDebug({ runId }) {
+  const [result, setResult] = useState(null);
+  const [attempt, setAttempt] = useState(0);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const { signal } = controller;
+    api.run(runId, { signal }).then(
+      (run) => { if (!signal.aborted) setResult({ logs: run.logs || [] }); },
+      () => { if (!signal.aborted) setResult({ error: true }); },
+    );
+    return () => controller.abort();
+  }, [runId, attempt]);
+
+  return (
+    <div className="logstream-debug">
+      {!result && <div className="empty" role="status">加载调试信息…</div>}
+      {result?.error && (
+        <div className="empty">
+          <p role="alert">调试信息加载失败。</p>
+          <button className="small" onClick={() => { setResult(null); setAttempt((n) => n + 1); }}>重试</button>
+        </div>
+      )}
+      {result?.logs?.length === 0 && <div className="empty">这次运行没有调试信息。</div>}
+      {result?.logs?.map((line, i) => (
+        <div key={i} className={`logstream-line${line.ok ? '' : ' bad'}`}>
+          <span className="logstream-ts">#{line.index}</span>
+          <span className="logstream-node">{line.name}</span>
+          <span className="logstream-msg">
+            {line.message}
+            {line.detail?.response && (
+              <span className="meta" style={{ marginLeft: 8 }}>
+                <span className="mono">HTTP {line.detail.response.status}</span>
+                <span className="mono">{line.detail.response.ms}ms</span>
+              </span>
+            )}
+          </span>
+          {line.detail?.response?.body && (
+            <pre className="logstream-body-pre">{String(line.detail.response.body).slice(0, 4000)}</pre>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function LogStream({ flowId, flowName, onClose, onToast, onFix }) {
   const [entries, setEntries] = useState([]);
   const [nextBefore, setNextBefore] = useState(null);
   const [filter, setFilter] = useState('all'); // all | error
   const [debugRun, setDebugRun] = useState(null); // 展开调试的 runId
-  const [debugData, setDebugData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [error, setError] = useState('');
@@ -112,14 +157,6 @@ export default function LogStream({ flowId, flowName, onClose, onToast, onFix })
     URL.revokeObjectURL(a.href);
   };
 
-  const toggleDebug = async (runId) => {
-    if (debugRun === runId) { setDebugRun(null); setDebugData(null); return; }
-    setDebugRun(runId);
-    setDebugData(null);
-    const full = await api.run(runId).catch(() => null);
-    if (full) setDebugData(full);
-  };
-
   // API 由新到旧返回运行，同次运行内的步骤已经按执行顺序排列。
   const groups = [];
   for (const e of entries) {
@@ -174,7 +211,7 @@ export default function LogStream({ flowId, flowName, onClose, onToast, onFix })
                 <span className="logstream-count">{g.items.length} 条</span>
                 {g.summary && <span className="logstream-summary">摘要：{g.summary}</span>}
                 <span className="spacer" />
-                <button className="small icon-text" onClick={() => toggleDebug(g.runId)} title="展开这次运行的每步细节">
+                <button className="small icon-text" aria-expanded={debugRun === g.runId} onClick={() => setDebugRun((id) => id === g.runId ? null : g.runId)} title="查看这次运行的每步细节">
                   <IconBug size={13} /> {debugRun === g.runId ? '收起调试' : '调试'}
                 </button>
                 <button className="small icon-text" onClick={() => exportRun(g)} title="导出这次运行日志为 .log 文件">
@@ -185,7 +222,7 @@ export default function LogStream({ flowId, flowName, onClose, onToast, onFix })
                 <div className="logstream-diag">
                   <DiagnosisCard
                     diagnosis={g.diagnosis}
-                    onShowResponse={() => toggleDebug(g.runId)}
+                    onShowResponse={() => setDebugRun(g.runId)}
                     onEditVars={(vars) => onFix?.({ type: 'edit-vars', vars })}
                     onEditAssert={(stepId) => onFix?.({ type: 'edit-assert', stepId })}
                     onToast={onToast}
@@ -199,28 +236,7 @@ export default function LogStream({ flowId, flowName, onClose, onToast, onFix })
                   <span className="logstream-msg">{e.message}</span>
                 </div>
               ))}
-              {debugRun === g.runId && (
-                <div className="logstream-debug">
-                  {debugData ? (debugData.logs || []).map((l, i) => (
-                    <div key={i} className={`logstream-line${l.ok ? '' : ' bad'}`}>
-                      <span className="logstream-ts">#{l.index}</span>
-                      <span className="logstream-node">{l.name}</span>
-                      <span className="logstream-msg">
-                        {l.message}
-                        {l.detail?.response && (
-                          <span className="meta" style={{ marginLeft: 8 }}>
-                            <span className="mono">HTTP {l.detail.response.status}</span>
-                            <span className="mono">{l.detail.response.ms}ms</span>
-                          </span>
-                        )}
-                      </span>
-                      {l.detail?.response?.body && (
-                        <pre className="logstream-body-pre">{String(l.detail.response.body).slice(0, 4000)}</pre>
-                      )}
-                    </div>
-                  )) : <div className="empty">加载调试信息…</div>}
-                </div>
-              )}
+              {debugRun === g.runId && <RunDebug runId={g.runId} />}
             </div>
           ))}
       </div>

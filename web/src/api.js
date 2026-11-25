@@ -5,8 +5,8 @@ export function set401Handler(fn) {
   on401 = fn;
 }
 
-async function req(method, url, body, isForm = false) {
-  const opts = { method, credentials: 'include' };
+async function req(method, url, body, isForm = false, signal) {
+  const opts = { method, credentials: 'include', signal };
   if (body !== undefined) {
     if (isForm) {
       opts.body = body;
@@ -124,7 +124,7 @@ export const api = {
   cloneFlow: (id) => req('POST', `/api/flows/${id}/clone`, {}),
   curlFor: (id, nodeId, vars) => req('POST', `/api/flows/${id}/curl`, { nodeId, vars }),
   runs: (flowId, limit = 30) => req('GET', `/api/runs?flowId=${flowId || ''}&limit=${limit}`),
-  run: (id) => req('GET', `/api/runs/${id}`),
+  run: (id, { signal } = {}) => req('GET', `/api/runs/${id}`, undefined, false, signal),
   cancelRun: (id) => req('POST', `/api/runs/${id}/cancel`, {}),
   // templates
   templates: () => req('GET', '/api/templates'),
