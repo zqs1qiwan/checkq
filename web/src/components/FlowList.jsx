@@ -758,7 +758,7 @@ export default function FlowList({ onOpen, onEditTemplate, onLogout }) {
       )}
 
       {notifOpen && (
-        <NotificationsModal onClose={() => { setNotifOpen(false); api.notifications(1).then((r) => setUnread(r.unread || 0)).catch(() => {}); }} />
+        <NotificationsModal onClose={() => setNotifOpen(false)} onUnreadChange={setUnread} />
       )}
 
     </>

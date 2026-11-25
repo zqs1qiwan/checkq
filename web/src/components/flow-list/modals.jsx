@@ -202,16 +202,32 @@ function CsvImportModal({ tpl, onClose, onDone }) {
 }
 
 /** 站内通知中心：列表 / 已读 / 清空 */
-function NotificationsModal({ onClose }) {
+function NotificationsModal({ onClose, onUnreadChange }) {
   const [data, setData] = useState(null);
   const [busy, setBusy] = useState(false);
-  const load = () => api.notifications(100).then(setData).catch(() => setData({ items: [], unread: 0, total: 0 }));
-  useEffect(() => { load(); }, []);
-  const markAll = async () => { setBusy(true); try { await api.markNotificationsRead(); await load(); } finally { setBusy(false); } };
-  const clearAll = async () => {
-    if (!(await confirmDialog({ title: '清空站内通知', message: '清空全部站内通知？此操作不可恢复。', confirmText: '清空', danger: true }))) return;
+  const [error, setError] = useState('');
+  const load = async () => {
+    const result = await api.notifications(100);
+    setData(result);
+    onUnreadChange(result.unread);
+  };
+  useEffect(() => { load().catch((err) => setError(err.message)); }, []);
+  const update = async (action) => {
     setBusy(true);
-    try { await api.clearNotifications(); await load(); } finally { setBusy(false); }
+    setError('');
+    try {
+      await action();
+      await load();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const clearAll = async () => {
+    if (await confirmDialog({ title: '清空站内通知', message: '清空全部站内通知？此操作不可恢复。', confirmText: '清空', danger: true })) {
+      await update(() => api.clearNotifications());
+    }
   };
   const fmt = (ts) => new Date(ts).toLocaleString('zh-CN');
   return (
@@ -223,24 +239,34 @@ function NotificationsModal({ onClose }) {
         <>
           <button className="danger" onClick={clearAll} disabled={busy || !data?.total}>清空</button>
           <span className="spacer" />
-          <button className="primary" onClick={markAll} disabled={busy || !data?.unread}>全部已读</button>
+          <button className="primary" onClick={() => update(() => api.markNotificationsRead())} disabled={busy || !data?.unread}>全部已读</button>
         </>
       }
     >
-        <div className="notif-list">
-          {data && data.items.length === 0 && <div className="notif-empty">还没有通知。到任务的「通知渠道」里添加「站内通知」，运行后即可在这里看到结果。</div>}
-          {data && data.items.map((n) => (
-            <div key={n.id} className={`notif-item${n.read ? '' : ' unread'}`}>
-              <div className="notif-item-head">
-                <span className={`dot ${n.level}`} />
-                <strong>{n.title}</strong>
-                <span className="notif-time">{fmt(n.createdAt)}</span>
-              </div>
-              <div className="notif-content">{n.content}</div>
-              {n.flowName && <div className="notif-flow">来自任务：{n.flowName}</div>}
-            </div>
-          ))}
-        </div>
+      {error && <div className="notif-error" role="alert">{error}</div>}
+      <div className="notif-list">
+        {!data && !error && <div className="notif-empty" role="status">正在加载…</div>}
+        {data && data.items.length === 0 && <div className="notif-empty">还没有通知。</div>}
+        {data?.items.map((n) => (
+          <button
+            key={n.id}
+            type="button"
+            className={`notif-item${n.read ? '' : ' unread'}`}
+            aria-disabled={n.read || busy}
+            tabIndex={n.read ? -1 : 0}
+            onClick={() => { if (!n.read && !busy) update(() => api.markNotificationsRead([n.id])); }}
+          >
+            <span className="notif-item-head">
+              <span className={`dot ${n.level}`} aria-hidden="true" />
+              <strong>{n.title}</strong>
+              <span className="notif-time">{fmt(n.createdAt)}</span>
+            </span>
+            <span className="notif-content">{n.content}</span>
+            {n.flowName && <span className="notif-flow">来自任务：{n.flowName}</span>}
+            {!n.read && <span className="notif-read-action">标为已读</span>}
+          </button>
+        ))}
+      </div>
     </Modal>
   );
 }

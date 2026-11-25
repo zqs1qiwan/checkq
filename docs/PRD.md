@@ -169,7 +169,7 @@
 | 失败处理 | 节点级 `config.retry` + 任务级退避重试（默认开、最多 3 次、指数退避 5 秒起、单次上限 5 分钟、跑满才判失败）；调度运行跑满仍失败 → 自动停用调度并记录原因（0.5.1） | 偶发失败自动重试；日志里逐次尝试与等待时长可见；持续错误不再每拍重复刷 | `server/src/retry.js`、`auto-pause.js`、`api.js` |
 | 调度 | 每任务独立 cron + 时区 + 抖动（0–30 分钟）；每 60s 对账；上次未结束则跳过这一拍；手动运行 / 调试运行 / 单步 | 列表显示下次运行时间；调试不重试 | `server/src/scheduler.js` |
 | 日志 | `record` 三档（all / log / log-final）+ `level` + 关键字提取 + 连续日志流 + SSE；单次运行可导出脱敏 HAR | 默认只看人话日志；需要时逐步骤展开；可复现 | `engine.js`、`components/LogStream.jsx`、`har-export.js` |
-| 通知 | 12 种渠道（站内 / Webhook / Bark / Telegram / Server酱 / PushPlus / 钉钉 / 企业微信 / 飞书 / Gotify / ntfy / 邮件 SMTP）+ 站内通知中心 + 每日汇总 | 成功/失败按配置推送；钉钉/飞书支持加签；统一 15s 超时、并行发送 | `server/src/notify.js`、`components/editor/modals.jsx` |
+| 通知 | 12 种渠道（站内 / Webhook / Bark / Telegram / Server酱 / PushPlus / 钉钉 / 企业微信 / 飞书 / Gotify / ntfy / 邮件 SMTP）+ 站内通知中心 + 每日汇总 | 成功/失败按配置推送，钉钉与飞书支持加签，统一 15s 超时并行发送。点击单条未读通知仅标记该条，未读数随即更新，也可全部已读。 | `server/src/notify.js`、`components/editor/modals.jsx` |
 | 模板 | 模板 = 流程图 + 默认变量；派生任务读取时取模板当前图（实时跟随）；改脚本内容自动脱钩；CSV 批量创建；模板导出（脱敏） | 模板一改，所有派生任务立刻变，零操作 | `store.resolveFlow` / `sameLogic` |
 | 导入导出 | HAR / cURL / QD 模板 / JSON 导入；模板从 URL 拉取；单次运行 HAR 导出；备份与恢复（默认脱敏） | 浏览器里跑一遍就能变成流程 | `har-import.js`、`curl-import.js`、`api.js` |
 | 账号与安全 | 多用户与角色（admin / operator / viewer）、TOTP + 恢复码、会话可吊销、登录限流、API Key 作用域与 IP 名单、审计日志、凭据 AES-256-GCM 加密、CSP 与同源校验 | 多人共用一套实例，权限可分 | `auth.js`、`totp.js`、`secret.js` |
