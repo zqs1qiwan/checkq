@@ -224,9 +224,9 @@ export default function LogStream({ flowId, flowName, onClose, onToast, onFix })
   const visibleGroups = groups.reverse()
     .map((g) => {
       if (g.items[0]?.position !== undefined) g.items.sort((a, b) => a.position - b.position);
-      return { ...g, items: filter === 'error' ? g.items.filter((i) => !i.ok) : g.items };
+      return { ...g, visibleItems: filter === 'error' ? g.items.filter((i) => !i.ok) : g.items };
     })
-    .filter((g) => filter === 'all' || g.items.length > 0);
+    .filter((g) => filter === 'all' || g.status === 'failed' || g.visibleItems.length > 0);
 
   return (
     <Modal
@@ -250,7 +250,7 @@ export default function LogStream({ flowId, flowName, onClose, onToast, onFix })
       {error && <div className="logstream-error" role="alert">{error}</div>}
       <div className="logstream-body" ref={boxRef}>
           {loading && <div className="empty">加载中…</div>}
-          {!loading && !error && visibleGroups.length === 0 && <div className="empty">暂无日志</div>}
+          {!loading && !error && visibleGroups.length === 0 && <div className="empty">{filter === 'error' ? '当前记录中没有错误' : '暂无日志'}</div>}
           {visibleGroups.map((g) => (
             <div key={g.runId} className="logstream-group">
               <div className="logstream-run">
@@ -260,7 +260,7 @@ export default function LogStream({ flowId, flowName, onClose, onToast, onFix })
                     : g.status === 'cancelled' ? '已取消' : g.status === 'queued' ? '排队中' : '运行中'}
                 </span>
                 <span className="logstream-time">{fmtClock(g.startedAt)}</span>
-                <span className="logstream-count">{g.items.length} 条</span>
+                <span className="logstream-count">{g.visibleItems.length} 条</span>
                 {g.summary && <span className="logstream-summary">摘要：{g.summary}</span>}
                 <span className="spacer" />
                 <button className="small icon-text" aria-expanded={debugRun === g.runId} onClick={() => setDebugRun((id) => id === g.runId ? null : g.runId)} title="查看这次运行的每步细节">
@@ -281,7 +281,10 @@ export default function LogStream({ flowId, flowName, onClose, onToast, onFix })
                   />
                 </div>
               )}
-              {g.items.map((e, i) => (
+              {g.status === 'failed' && !g.diagnosis?.cause && !g.visibleItems.some((item) => !item.ok) && g.finalMessage && (
+                <div className="logstream-diag">{g.finalMessage}</div>
+              )}
+              {g.visibleItems.map((e, i) => (
                 <div key={e.position ?? i} className={`logstream-line${e.ok ? '' : ' bad'}`}>
                   <span className="logstream-ts">{fmtClock(e.startedAt).slice(6)}</span>
                   <span className="logstream-node">{e.name}</span>
