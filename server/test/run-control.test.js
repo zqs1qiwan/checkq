@@ -96,6 +96,38 @@ test('API exposes queued run and cancels a running flow', async (t) => {
   assert.equal(again.statusCode, 409, '已结束的运行不能再取消');
 });
 
+test('run and inbox updates persist immediately without rewriting unrelated files', async (t) => {
+  const dir = directory(t);
+  const { app, store, scheduler, runner } = buildServer({ dataDir: dir, port: 0 });
+  t.after(async () => { scheduler.stop(); await app.close(); });
+  const flow = store.createFlow({
+    name: 'local-notify', enabled: false,
+    nodes: [{ id: 'n1', type: 'log', config: { message: 'done' } }], edges: [],
+    notify: { onSuccess: true, channels: [{ type: 'inbox' }] },
+  });
+  const untouched = [store.flowsFile, store.templatesFile, store.channelsFile, store.metaFile];
+  const oldTime = 946684800;
+  for (const file of untouched) fs.utimesSync(file, oldTime, oldTime);
+  const disk = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
+
+  const run = await runner.runFlow(flow, 'manual', {
+    onStart: (started) => assert.equal(disk(store.runsFile).find((item) => item.id === started.id)?.status, 'running'),
+  });
+  assert.equal(run.status, 'success');
+  assert.equal(run.notify?.ok, 1);
+  assert.deepEqual(disk(store.runsFile)[0].notify, run.notify);
+  assert.equal(disk(store.notificationsFile).length, 1);
+  for (const file of untouched) assert.equal(fs.statSync(file).mtimeMs, oldTime * 1000, path.basename(file));
+
+  fs.utimesSync(store.runsFile, oldTime, oldTime);
+  assert.equal(store.markNotificationsRead([disk(store.notificationsFile)[0].id]), 1);
+  assert.equal(disk(store.notificationsFile)[0].read, true);
+  assert.equal(fs.statSync(store.runsFile).mtimeMs, oldTime * 1000);
+  assert.equal(store.clearNotifications(), 1);
+  assert.deepEqual(disk(store.notificationsFile), []);
+  assert.equal(fs.statSync(store.runsFile).mtimeMs, oldTime * 1000);
+});
+
 test('startup closes interrupted runs without executing or changing their tasks', async (t) => {
   const dir = directory(t);
   const before = new Store(dir);

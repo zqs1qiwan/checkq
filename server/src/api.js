@@ -347,7 +347,7 @@ export function buildServer({ dataDir, port }) {
             if (Array.isArray(notifyResults) && notifyResults.length) {
               const failed = notifyResults.filter((r) => !r.ok).map((r) => ({ type: r.type, error: String(r.error || '').slice(0, 80) }));
               run.notify = { total: notifyResults.length, ok: notifyResults.length - failed.length, failed };
-              store.flush();
+              store.flushRuns();
               // 外部渠道全部失败时补一条站内告警：通知本身也不能静默失败
               const external = notifyResults.filter((r) => r.type !== 'inbox');
               if (external.length && external.every((r) => !r.ok)) {

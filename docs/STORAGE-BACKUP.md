@@ -15,7 +15,7 @@
 └── .secret         凭据加密密钥（600；**必须与上面的 JSON 一起备份**）
 ```
 
-- 写入：`#persist` 400ms 节流 → 原子写（tmp + rename）；
+- 写入：同步原子替换（临时文件 + rename）。运行状态和通知结果只写 `runs.json`，站内通知的新增、已读和清空只写 `notifications.json`。配置更新与正常退出仍可执行全量 `flush()`。
 - 读取：启动时全量载入内存，运行期内存操作；
 - 备份：`GET /api/system/backup` 导出全部 JSON；`POST /api/system/restore` 以新 ID 导入（停用）；
 - ⚠️ 直接复制 `/data` 目录做冷备份时，必须同时复制 `.secret`（或用同一个 `CHECKQ_SECRET`），否则密文无法解密；网页备份是脱敏导出，不含 `.secret`，恢复后需要重新填敏感值。
@@ -27,7 +27,7 @@
 |---|---|---|
 | 原子性 | ✅ 良 | tmp+rename，不会写半截文件 |
 | 一致性 | ✅ 良 | 单进程内存 + 文件，无并发写 |
-| 持久性 | ⚠️ 中 | 400ms 节流窗口内被 SIGKILL 会丢最近变更；已加 SIGTERM/SIGINT flush |
+| 持久性 | ⚠️ 中 | 关键更新立即写盘，SIGTERM/SIGINT 会再执行 flush。原子替换以单个文件为单位。 |
 | 容量 | ⚠️ 中 | runs.json 每 flow 500 条上限，长期仍会增长；flows/templates 无上限 |
 | 备份 | ⚠️ 中 | 手动导出，无自动定时备份 |
 | 加密 | ✅ 良 | 密码 scrypt；API Key 只存 sha256 摘要；旧 `meta.apiKey` 与 `meta.ai.apiKey` 密文落盘；敏感凭据（cookie/token）用 AES-256-GCM 静态加密 |
@@ -43,7 +43,6 @@
 | 优先级 | 改进 | 说明 |
 |---|---|---|
 | P0 | 自动每日备份 | 新增 `GET /api/system/backup?download=1` 定时任务，或复制 `data/` 快照到备份目录 |
-| P0 | 写入关键操作后立即 flush | 创建/更新/删除任务、改密、改 API Key 后立即落盘（跳过节流） |
 | P1 | runs 轮转 | 按天/按大小归档旧运行（如保留 30 天） |
 | P1 | meta 版本号 | `meta.version` + 启动迁移脚本，结构变更可平滑升级 |
 | P2 | SQLite 可选 | 若任务/运行规模增长，可切换 better-sqlite3（单文件、事务、查询快） |

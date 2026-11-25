@@ -1,6 +1,6 @@
 /**
  * JSON 文件存储: flows / runs / meta(密码 hash)
- * 写入节流 + 原子写（tmp+rename），runs 保留最近 500 条/flow
+ * 立即原子写（tmp+rename），runs 保留最近 500 条/flow
  */
 
 import fs from 'node:fs';
@@ -55,8 +55,6 @@ function sameLogic(nodesA, edgesA, nodesB, edgesB) {
 }
 
 export class Store {
-  #persistTimer = null;
-
   constructor(dataDir) {
     this.dir = dataDir;
     fs.mkdirSync(dataDir, { recursive: true });
@@ -183,14 +181,12 @@ export class Store {
     fs.renameSync(tmp, file);
   }
 
-  #flushNow() {
-    // 写盘前加密敏感凭据（内存里保持明文，API 返回给前端时才解密）
-    this.#save(this.flowsFile, this.flows.map((f) => encryptSecrets(this.secretKey, f)));
-    this.#save(this.runsFile, this.runs);
-    this.#save(this.templatesFile, this.templates.map((x) => encryptSecrets(this.secretKey, x)));
-    this.#save(this.notificationsFile, this.notifications);
-    this.#save(this.channelsFile, { version: 1, system: encryptChannels(this.secretKey, this.channels.system) });
-    this.#save(this.metaFile, encryptMeta(this.secretKey, this.meta));
+  #flushFile(file, data) {
+    try {
+      this.#save(file, data);
+    } catch (err) {
+      console.error(`[CheckQ] flush ${path.basename(file)} failed:`, err.message);
+    }
   }
 
   /** 导出/备份用：脱敏后的 flow（敏感值替换为 *** / 空） */
@@ -256,29 +252,18 @@ export class Store {
     return maskChannels(this.channels.system);
   }
 
-  /** 立即落盘（跳过 400ms 节流窗口）；进程退出前调用，避免重启丢配置 */
+  /** 配置更新与进程退出时持久化完整存储。 */
   flush() {
-    if (this.#persistTimer) {
-      clearTimeout(this.#persistTimer);
-      this.#persistTimer = null;
-    }
     try {
-      this.#flushNow();
+      this.#save(this.flowsFile, this.flows.map((flow) => encryptSecrets(this.secretKey, flow)));
+      this.#save(this.runsFile, this.runs);
+      this.#save(this.templatesFile, this.templates.map((template) => encryptSecrets(this.secretKey, template)));
+      this.#save(this.notificationsFile, this.notifications);
+      this.#save(this.channelsFile, { version: 1, system: encryptChannels(this.secretKey, this.channels.system) });
+      this.#save(this.metaFile, encryptMeta(this.secretKey, this.meta));
     } catch (err) {
       console.error('[CheckQ] flush failed:', err.message);
     }
-  }
-
-  #persist() {
-    if (this.#persistTimer) return;
-    this.#persistTimer = setTimeout(() => {
-      this.#persistTimer = null;
-      try {
-        this.#flushNow();
-      } catch (err) {
-        console.error('[CheckQ] persist failed:', err.message);
-      }
-    }, 400);
   }
 
   // ---- flows ----
@@ -608,7 +593,12 @@ export class Store {
       per.set(r.flowId, n);
       return n <= 500;
     });
-    this.flush();
+    this.flushRuns();
+  }
+
+  /** 持久化运行状态及已写入记录的通知结果。 */
+  flushRuns() {
+    this.#flushFile(this.runsFile, this.runs);
   }
 
   listRuns(flowId, limit = 30) {
@@ -641,7 +631,7 @@ export class Store {
     };
     this.notifications.unshift(n);
     if (this.notifications.length > 200) this.notifications = this.notifications.slice(0, 200);
-    this.flush();
+    this.#flushFile(this.notificationsFile, this.notifications);
     return n;
   }
 
@@ -659,14 +649,14 @@ export class Store {
     for (const item of this.notifications) {
       if (!item.read && (!set || set.has(item.id))) { item.read = true; n++; }
     }
-    this.flush();
+    this.#flushFile(this.notificationsFile, this.notifications);
     return n;
   }
 
   clearNotifications() {
     const n = this.notifications.length;
     this.notifications = [];
-    this.flush();
+    this.#flushFile(this.notificationsFile, this.notifications);
     return n;
   }
 
