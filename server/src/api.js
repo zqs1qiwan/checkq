@@ -147,23 +147,26 @@ export function buildServer({ dataDir, port }) {
   const activeRuns = new Map(); // runId -> { run, controller, flowId, reason }
   const RUN_TIMEOUT_MS = Math.min(24 * 3600e3, Math.max(60e3, Number(process.env.CHECKQ_RUN_TIMEOUT_MS) || 30 * 60e3));
   const manualInFlight = new Set(); // 手动触发的在途请求（同步占位，避免并发点击跑两遍）
-  const queueMap = new Map(); // flowId -> Promise 链（运行排队：同 flow 串行执行）
-  const enqueueRun = (flowId, fn) => {
-    const prev = queueMap.get(flowId) || Promise.resolve();
-    let release;
-    const cur = new Promise((res) => { release = res; });
-    // 上一轮即使异常结束，也不能毒化整条队列：吞掉旧错误后继续排队。
-    const tail = prev.catch(() => {});
-    const queued = tail.then(() => cur);
-    queueMap.set(flowId, queued);
-    return tail.then(async () => {
-      try { return await fn(); } finally {
-        release();
-        if (queueMap.get(flowId) === queued) queueMap.delete(flowId);
-      }
-    });
+  const flowLimiters = new Map();
+  const queueByFlow = new Map(); // flowId -> 等待中的 runId 集合
+  const leaveQueue = ({ id, flowId }) => {
+    const queued = queueByFlow.get(flowId);
+    if (queued?.delete(id) && queued.size === 0) queueByFlow.delete(flowId);
   };
-  const queuedSet = new Set(); // 等待中的 flowId（排队中徽章）
+  const enqueueRun = async (flowId, signal, fn) => {
+    let limiter = flowLimiters.get(flowId);
+    if (!limiter) {
+      limiter = createLimiter(1);
+      flowLimiters.set(flowId, limiter);
+    }
+    const acquired = await limiter.acquire(signal);
+    try {
+      if (acquired && !signal.aborted) return await fn();
+    } finally {
+      if (acquired) limiter.release();
+      if (limiter.active === 0 && flowLimiters.get(flowId) === limiter) flowLimiters.delete(flowId);
+    }
+  };
   const runLimiter = createLimiter(process.env.CHECKQ_MAX_CONCURRENCY || 4);
   const runner = {
     async runFlow(flow, trigger, { debugStopId, onLog, debug, notify = true, onStart, timeoutMs } = {}) {
@@ -180,33 +183,23 @@ export function buildServer({ dataDir, port }) {
       // 在途记录先落库：排队/运行中的任务在运行历史里可见，不会因为进程重启凭空消失
       store.addRun(run);
       let runTimer = null;
-      queuedSet.add(flow.id);
+      if (!queueByFlow.has(flow.id)) queueByFlow.set(flow.id, new Set());
+      queueByFlow.get(flow.id).add(runId);
       try {
-        return await enqueueRun(flow.id, async () => {
-          await runLimiter.acquire();
-          if (controller.signal.aborted) {
-            const timedOut = record.reason === 'timeout';
-            run.status = timedOut ? 'failed' : 'cancelled';
-            run.finalMessage = timedOut ? `运行超时（超过 ${Math.round(limitMs / 1000)} 秒）` : '运行已取消';
-            run.cancelled = !timedOut;
-            run.timedOut = timedOut;
-            run.durationMs = Date.now() - run.startedAt;
-            store.addRun(run);
-            runLimiter.release();
-            queuedSet.delete(flow.id);
-            return run;
-          }
-          runningFlows.add(flow.id);
-          queuedSet.delete(flow.id);
-          run.status = 'running';
-          run.startedAt = Date.now();
-          store.addRun(run);
-          onStart?.(run);
-          runTimer = setTimeout(() => {
-            record.reason = 'timeout';
-            controller.abort();
-          }, limitMs);
+        const result = await enqueueRun(flow.id, controller.signal, async () => {
+          if (!(await runLimiter.acquire(controller.signal))) return run;
           try {
+            if (controller.signal.aborted) return run;
+            runningFlows.add(flow.id);
+            leaveQueue(run);
+            run.status = 'running';
+            run.startedAt = Date.now();
+            store.addRun(run);
+            onStart?.(run);
+            runTimer = setTimeout(() => {
+              record.reason = 'timeout';
+              controller.abort();
+            }, limitMs);
           // 任务级重试：调试运行不重试（要看到断点处的真实失败）；恢复探测也不重试，
           // 否则一次探测会连续打多次请求，绕过“最多探测 N 次”的风控上限。
           const cfg = normalizeRetry(flow.retry);
@@ -368,10 +361,10 @@ export function buildServer({ dataDir, port }) {
             runLimiter.release();
           }
         });
+        return result ?? run;
       } finally {
-        if (runTimer) clearTimeout(runTimer);
         activeRuns.delete(runId);
-        if (queuedSet.has(flow.id) && !runningFlows.has(flow.id)) queuedSet.delete(flow.id);
+        leaveQueue(run);
       }
     },
     /** 取消一次运行（排队中也能取消）；返回最新 run 记录 */
@@ -392,9 +385,12 @@ export function buildServer({ dataDir, port }) {
       rec.reason = reason;
       rec.controller.abort();
       if (rec.run.status === 'queued') {
-        rec.run.status = 'cancelled';
-        rec.run.cancelled = true;
-        rec.run.finalMessage = '运行已取消';
+        rec.run.status = reason === 'timeout' ? 'failed' : 'cancelled';
+        rec.run.cancelled = reason !== 'timeout';
+        rec.run.timedOut = reason === 'timeout';
+        rec.run.finalMessage = reason === 'timeout' ? '运行超时' : '运行已取消';
+        rec.run.durationMs = Date.now() - rec.run.startedAt;
+        leaveQueue(rec.run);
         store.addRun(rec.run);
       } else {
         rec.run.cancelling = true;
@@ -406,7 +402,7 @@ export function buildServer({ dataDir, port }) {
     },
     /** 调度器用：上一次运行（含重试等待）还没结束就跳过这一拍，避免堆积 */
     isBusy(flowId) {
-      return runningFlows.has(flowId) || queuedSet.has(flowId) || manualInFlight.has(flowId);
+      return runningFlows.has(flowId) || queueByFlow.has(flowId) || manualInFlight.has(flowId);
     },
     /**
      * 手动运行的同步占位（P0-4）：同一任务并发点击只产生一次运行。
@@ -419,7 +415,6 @@ export function buildServer({ dataDir, port }) {
     },
     releaseManual(flowId) {
       manualInFlight.delete(flowId);
-      if (queuedSet.has(flowId) && !runningFlows.has(flowId)) queuedSet.delete(flowId);
     },
   };
 
@@ -2135,10 +2130,10 @@ export function buildServer({ dataDir, port }) {
     const s = store.stats();
     return {
       ...s,
-      queuedFlows: [...runningFlows, ...queuedSet],
-      queuedFlowIds: [...queuedSet],
+      queuedFlows: [...new Set([...runningFlows, ...queueByFlow.keys()])],
+      queuedFlowIds: [...queueByFlow.keys()],
       runningFlowIds: [...runningFlows],
-      queueCount: queuedSet.size,
+      queueCount: queueByFlow.size,
       runningCount: runningFlows.size,
       maxConcurrency: runLimiter.limit,
       globalWaiting: runLimiter.waiting,

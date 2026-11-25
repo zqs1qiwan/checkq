@@ -29,4 +29,24 @@ for (const [input, want] of [[0, 1], [-5, 1], [99, 16], ['4', 4], ['abc', 4]]) {
   assert.strictEqual(createLimiter(input).limit, want, `${input} -> ${want}`);
 }
 
-console.log('concurrency: 8 checks passed');
+const single = createLimiter(1);
+assert.strictEqual(await single.acquire(), true);
+const controller = new AbortController();
+const cancelled = single.acquire(controller.signal);
+const next = single.acquire();
+assert.strictEqual(single.waiting, 2);
+controller.abort();
+assert.strictEqual(await cancelled, false);
+assert.strictEqual(single.waiting, 1);
+assert.strictEqual(single.active, 1);
+assert.strictEqual(await single.acquire(controller.signal), false);
+assert.strictEqual(single.waiting, 1);
+assert.strictEqual(single.active, 1);
+single.release();
+assert.strictEqual(await next, true);
+assert.strictEqual(single.waiting, 0);
+assert.strictEqual(single.active, 1);
+single.release();
+assert.strictEqual(single.active, 0);
+
+console.log('concurrency: FIFO and cancellation checks passed');

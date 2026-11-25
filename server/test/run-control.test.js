@@ -96,6 +96,43 @@ test('API exposes queued run and cancels a running flow', async (t) => {
   assert.equal(again.statusCode, 409, '已结束的运行不能再取消');
 });
 
+test('cancelling queued runs removes their own queue entries without waiting for a slot', async (t) => {
+  const dir = directory(t);
+  const { app, store, scheduler, runner } = buildServer({ dataDir: dir, port: 0 });
+  t.after(async () => { scheduler.stop(); await app.close(); });
+  const login = await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'test1234' } });
+  const headers = { cookie: login.headers['set-cookie'].split(';')[0] };
+  const flow = store.createFlow({ ...delayFlow(30), enabled: false });
+  const pending = [];
+  const overview = async () => (await app.inject({ url: '/api/system/stats', headers })).json();
+  try {
+    const started = Promise.withResolvers();
+    pending.push(runner.runFlow(flow, 'manual', { onStart: started.resolve }));
+    const first = await started.promise;
+    const callbacks = [];
+    const nextStarted = Promise.withResolvers();
+    pending.push(runner.runFlow(flow, 'manual', { onStart: () => callbacks.push(0) }));
+    pending.push(runner.runFlow(flow, 'manual', { onStart: () => { callbacks.push(1); nextStarted.resolve(); } }));
+    const [third, second] = store.listRuns(flow.id);
+    assert.equal((await overview()).queueCount, 1, 'queueCount counts distinct tasks');
+    const cancel = await app.inject({ method: 'POST', url: `/api/runs/${second.id}/cancel`, headers, payload: {} });
+    assert.equal(cancel.statusCode, 200);
+    assert.equal(cancel.json().run.status, 'cancelled');
+    const cancelled = await Promise.race([pending[1], new Promise((resolve) => setTimeout(resolve, 500))]);
+    assert.equal(cancelled?.status, 'cancelled', 'waiter must settle while the first run still holds the slot');
+    assert.equal((await overview()).queueCount, 1, 'the remaining queued run is still visible');
+    assert.equal(store.getRun(first.id).status, 'running');
+    assert.equal(store.getRun(third.id).status, 'queued');
+    assert.deepEqual(callbacks, []);
+    runner.cancel(first.id);
+    await Promise.all([pending[0], nextStarted.promise]);
+    assert.deepEqual(callbacks, [1], 'the next live waiter starts and the cancelled run never starts');
+  } finally {
+    for (const run of store.listRuns(flow.id)) if (['queued', 'running'].includes(run.status)) runner.cancel(run.id);
+    await Promise.allSettled(pending);
+  }
+});
+
 test('run and inbox updates persist immediately without rewriting unrelated files', async (t) => {
   const dir = directory(t);
   const { app, store, scheduler, runner } = buildServer({ dataDir: dir, port: 0 });

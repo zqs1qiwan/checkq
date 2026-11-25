@@ -87,7 +87,7 @@ flowchart TB
 
 **一次运行**：
 
-1. `POST /api/flows/:id/run`（或 cron 触发）→ `api.js` 先创建 `runId` 与 `queued` 记录并落库（在途可见），再把任务放进**同任务串行队列**（`queueMap`，`flowId → Promise 链`），由全局 `createLimiter`（`CHECKQ_MAX_CONCURRENCY`，默认 4）限制同时执行数；拿不到并发名额时状态保持 `queued`，`activeRuns` 记录 `AbortController`。
+1. `POST /api/flows/:id/run`（或 cron 触发）→ `api.js` 先创建 `runId` 与 `queued` 记录并落库（在途可见），再把任务放进**同任务串行队列**，再由全局并发限制器（`CHECKQ_MAX_CONCURRENCY`，默认 4）分配执行名额。两级队列按到达顺序分配，均响应 `activeRuns` 持有的 `AbortController`。取消排队时立即移除该运行并返回取消结果，同一任务的其他排队记录继续等待。
 2. `retry.js` 按任务级策略执行整条流程：每次尝试跑一个完整的 `Engine.run()`，失败则退避后再来，跑满 `maxAttempts` 才判最终失败；每次尝试都带同一个 `signal`，取消时不进入下一次退避。
 3. `engine.js` 从无入边的起点沿边单链执行，`MAX_STEPS = 500`；每步产出 `stepLog`（请求/响应/断言/耗时/变量快照）。HTTP fetch/curl、delay、random-delay、script 子进程和 foreach 都检查 `signal`，取消时尽快退出。
 4. `store.js` 即时原子写入变更。运行状态和通知结果只更新 `runs.json`，站内通知只更新 `notifications.json`。`run.notify` 记录每个渠道的发送结果，外部渠道全失败时另写一条站内告警。整体超时默认 30 分钟（`CHECKQ_RUN_TIMEOUT_MS` 或 `timeoutMs`），超时按 `failed + timedOut`，人工取消按 `cancelled`（不触发自动停用与任务通知）。
