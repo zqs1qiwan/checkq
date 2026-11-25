@@ -36,6 +36,8 @@ const tpl = store.createTemplate({
   nodes: nodes('https://example.com/v1'), edges, log: { level: 'log' },
 });
 const flow = store.instantiateTemplate(tpl.id, { name: '任务A' });
+const taskCount = (id) => store.listTemplates().find((t) => t.id === id)?.taskCount;
+ok(taskCount(tpl.id) === 1, '新派生任务计入模板');
 ok(flow.tplId === tpl.id, '派生任务记录了 tplId');
 ok(store.getFlow(flow.id).nodes[0].config.url === 'https://example.com/v1', '派生任务读到的就是模板的流程');
 
@@ -78,6 +80,11 @@ ok(store.templateInfo(store.getFlow(f2.id)).missing === true, '模板删除后�
 const plain = store.createFlow({ name: '独立任务', nodes: nodes('https://example.com/p'), edges });
 store.updateTemplate(tpl.id, { nodes: nodes('https://example.com/v4'), edges });
 ok(store.getFlow(plain.id).nodes[0].config.url === 'https://example.com/p', '非模板任务不受模板更新影响');
+ok(taskCount(tpl.id) === 0 && taskCount(tpl2.id) === undefined, '脱离模板的任务不计入，已删模板不返回');
+const linked = store.instantiateTemplate(tpl.id, { name: '待删除派生任务' });
+ok(taskCount(tpl.id) === 1, '新派生任务更新计数');
+store.deleteFlow(linked.id);
+ok(taskCount(tpl.id) === 0, '删除派生任务更新计数');
 
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(`\n${pass}/${pass + fail} passed`);

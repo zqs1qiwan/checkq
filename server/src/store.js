@@ -487,11 +487,16 @@ export class Store {
 
   // ---- templates ----
   listTemplates() {
+    if (!this.templates.length) return [];
+    const taskCounts = new Map();
+    for (const { tplId } of this.flows) {
+      if (tplId) taskCounts.set(tplId, (taskCounts.get(tplId) || 0) + 1);
+    }
     return this.templates.map((t) => ({
       id: t.id, name: t.name, desc: t.desc, source: t.source,
       varNames: t.varNames || [],
       nodesCount: (t.nodes || []).length,
-      taskCount: this.flows.filter((f) => f.tplId === t.id).length,
+      taskCount: taskCounts.get(t.id) || 0,
       updatedAt: t.updatedAt || t.createdAt || 0,
       market: t.market || null,   // 市场来源 { sourceId, sourceUrl, sha256, importedAt }
     }));
