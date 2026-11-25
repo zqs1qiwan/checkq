@@ -99,7 +99,7 @@ X-API-Key: <key>
 | POST | /api/system/notify/test | `{ channelId? }` 测试发送（admin，正文前缀「（测试）」） |
 | POST | /api/system/notify/send | `{ date?, dryRun? }` 立即发送（admin；跳过空日与幂等，不写 `lastSentDate`） |
 | GET | /api/notifications?limit= | 站内通知列表 `{ items, unread, total }` |
-| POST | /api/notifications/read | 标记已读（body `{ ids? }`，省略=全部） |
+| POST | /api/notifications/read | 标记已读，返回 `{ ok, updated }`。省略 `ids` 或传 `{}` 标记全部，`ids: []` 不修改。`ids` 必须为非空字符串组成的数组。重复或不存在的 ID 不计入 `updated`。参数无效返回 400，保存失败返回 500 并保留原状态。 |
 | DELETE | /api/notifications | 清空站内通知 |
 | POST | /api/system/daily-summary | 兼容一版：带 `{ flowId }`/`{ flowIds }` 时按任务渠道发送；无 body 走系统通知立即发送 |
 | GET | /api/system/backup | 导出脱敏备份（flows/runs/templates/channels，敏感凭据置 `***`） |

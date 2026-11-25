@@ -2144,9 +2144,21 @@ export function buildServer({ dataDir, port }) {
 
   // 站内通知（inbox 渠道）：列表 / 已读 / 清空
   app.get('/api/notifications', async (req) => store.listNotifications((req.query || {}).limit));
-  app.post('/api/notifications/read', async (req) => {
-    const { ids } = req.body || {};
-    return { ok: true, updated: store.markNotificationsRead(ids) };
+  app.post('/api/notifications/read', async (req, reply) => {
+    const body = req.body === undefined ? {} : req.body;
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return reply.code(400).send({ error: '请求体必须是 JSON 对象' });
+    }
+    const { ids } = body;
+    if (ids !== undefined && (!Array.isArray(ids) || ids.some((id) => typeof id !== 'string' || !id.trim()))) {
+      return reply.code(400).send({ error: '通知 ID 必须是非空字符串数组' });
+    }
+    try {
+      return { ok: true, updated: store.markNotificationsRead(ids) };
+    } catch (error) {
+      console.error('[CheckQ] failed to mark notifications as read:', error.message);
+      return reply.code(500).send({ error: '无法保存通知状态，请重试' });
+    }
   });
   app.delete('/api/notifications', async () => ({ ok: true, cleared: store.clearNotifications() }));
 

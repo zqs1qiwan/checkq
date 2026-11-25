@@ -161,7 +161,7 @@ export const api = {
   backupFull: (password) => req('POST', '/api/system/backup', { password }),
   restore: (body) => req('POST', '/api/system/restore', body),
   notifications: (limit = 50) => req('GET', `/api/notifications?limit=${limit}`),
-  markNotificationsRead: (ids) => req('POST', '/api/notifications/read', ids ? { ids } : {}),
+  markNotificationsRead: (ids) => req('POST', '/api/notifications/read', { ids }),
   clearNotifications: () => req('DELETE', '/api/notifications'),
   flowLogs: (id, { limit = 200, before = null } = {}) => req('GET', `/api/flows/${id}/logs?limit=${limit}${before ? `&before=${encodeURIComponent(before)}` : ''}`),
   uiSettings: () => req('GET', '/api/system/ui'),

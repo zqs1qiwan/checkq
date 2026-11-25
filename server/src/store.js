@@ -660,13 +660,19 @@ export class Store {
   }
 
   markNotificationsRead(ids) {
-    const set = Array.isArray(ids) && ids.length ? new Set(ids) : null;
-    let n = 0;
-    for (const item of this.notifications) {
-      if (!item.read && (!set || set.has(item.id))) { item.read = true; n++; }
+    if (ids?.length === 0) return 0;
+    const selected = ids === undefined ? null : new Set(ids);
+    let updated = 0;
+    const notifications = this.notifications.map((item) => {
+      if (item.read || (selected && !selected.has(item.id))) return item;
+      updated++;
+      return { ...item, read: true };
+    });
+    if (updated) {
+      this.#save(this.notificationsFile, notifications);
+      this.notifications = notifications;
     }
-    this.#flushFile(this.notificationsFile, this.notifications);
-    return n;
+    return updated;
   }
 
   clearNotifications() {

@@ -11,7 +11,7 @@ const ok = (cond, msg) => { if (cond) { pass++; console.log('  PASS', msg); } el
 
 const dir = fs.mkdtempSync(os.tmpdir() + '/cq-surface-');
 const { buildServer } = await import('../src/api.js');
-const { app, scheduler } = buildServer({ dataDir: dir, port: 0 });
+const { app, scheduler, store } = buildServer({ dataDir: dir, port: 0 });
 await app.ready();
 
 let r = await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'test1234' } });
@@ -71,7 +71,32 @@ await post('/api/flows/batch', '批量设置分组', { ids: [fid], action: 'set-
 const grouped = await get(`/api/flows/${fid}`, '任务分组生效');
 ok(grouped.json().group === '测试组', '批量分组写入成功');
 await get('/api/notifications', '站内通知');
-await post('/api/notifications/read', '通知已读', {});
+const notice = store.addNotification({ title: '每日汇总' });
+store.addNotification({ title: '任务完成' });
+const inboxPath = store.notificationsFile;
+const readEndpoint = '/api/notifications/read';
+const emptyRead = await post(readEndpoint, '空列表已读请求', { ids: [] });
+ok(emptyRead.json().updated === 0 && store.listNotifications().unread === 2, '空列表不标记任何通知');
+await post(readEndpoint, '拒绝无效 ID 列表', { ids: notice.id }, 400);
+await post(readEndpoint, '拒绝混合类型 ID 列表', { ids: [notice.id, 1] }, 400);
+ok(store.listNotifications().unread === 2, '无效请求不改变未读数');
+const singleRead = await post(readEndpoint, '单条标为已读', { ids: [notice.id, notice.id, 'missing'] });
+ok(singleRead.json().updated === 1 && store.listNotifications().unread === 1, '重复及不存在的 ID 不影响其他通知');
+fs.utimesSync(inboxPath, new Date(0), new Date(0));
+const previousWrite = fs.statSync(inboxPath).mtimeMs;
+const repeatedRead = await post(readEndpoint, '重复标记已读', { ids: [notice.id] });
+ok(repeatedRead.json().updated === 0 && fs.statSync(inboxPath).mtimeMs === previousWrite, '无变化时不写盘');
+// 阻挡原子写入，验证界面可以在保存失败后重试。
+const stagingPath = inboxPath + '.tmp';
+fs.mkdirSync(stagingPath);
+try {
+  await post(readEndpoint, '通知保存失败返回错误', {}, 500);
+  ok(store.listNotifications().unread === 1, '保存失败后保持原未读状态');
+} finally {
+  fs.rmdirSync(stagingPath);
+}
+const allRead = await post(readEndpoint, '全部标为已读', {});
+ok(allRead.json().updated === 1 && store.listNotifications().unread === 0, '省略 ids 继续标记全部');
 await get('/api/system/stats', '运维统计');
 await get('/api/system/push-targets', '推送单位');
 await get('/api/system/daily-summary-config', '每日汇总配置');
