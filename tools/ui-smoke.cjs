@@ -318,13 +318,20 @@ async function checkModal(page, where, openExpr, opts = {}) {
       const rows=[...document.querySelectorAll('.group-row')];
       if (!rows.length) return JSON.stringify({groups:0});
       const stats=(rows[0].querySelector('.group-head')?.innerText||'').replace(/\\s+/g,' ').trim();
+      const columns=()=>[...document.querySelectorAll('.flow-table thead th')].map((th)=>{
+        const {left,width}=th.getBoundingClientRect();
+        return {left,width};
+      });
       const before=document.querySelectorAll('.flow-table tbody tr:not(.group-row)').length;
+      const beforeColumns=columns();
       rows[0].querySelector('.group-toggle')?.click();
       await new Promise(r=>setTimeout(r,300));
       const afterCollapse=document.querySelectorAll('.flow-table tbody tr:not(.group-row)').length;
+      const afterColumns=columns();
+      const columnsStable=beforeColumns.every((col,i)=>Math.abs(col.left-afterColumns[i].left)<1 && Math.abs(col.width-afterColumns[i].width)<1);
       const collapsed=rows[0].getAttribute('data-collapsed')==='1';
       if (afterCollapse < before) { rows[0].querySelector('.group-toggle')?.click(); await new Promise(r=>setTimeout(r,250)); }
-      return JSON.stringify({groups:rows.length,stats,before,afterCollapse,collapsed});
+      return JSON.stringify({groups:rows.length,stats,before,afterCollapse,collapsed,columnsStable});
     `);
     const g = JSON.parse(grp);
     if (!g.groups) fail('分组/1440', '任务列表没有分组头（分组系统未生效）');
@@ -335,6 +342,8 @@ async function checkModal(page, where, openExpr, opts = {}) {
     else if (g.stats) ok('分组/1440', '分组头显示今日成功/失败/成功率');
     if (g.before > 0 && g.afterCollapse >= g.before) fail('分组/1440', `收起分组后任务行没有减少（${g.before} → ${g.afterCollapse}）`);
     else if (g.before > 0) ok('分组/1440', `收起后任务行减少（${g.before} → ${g.afterCollapse}）`);
+    if (g.groups && !g.columnsStable) fail('分组/1440', '展开或收起时表头列位置或宽度发生变化');
+    else if (g.groups) ok('分组/1440', '展开或收起时表头列位置和宽度保持稳定');
     const pg = JSON.parse(preGroups || '{}');
     if (pg.groups) ok('分组/1440', `默认分组头 ${pg.groups} / 默认收起 ${pg.collapsed}（≥8 个任务的分组自动收起）`);
 

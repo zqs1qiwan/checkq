@@ -388,7 +388,7 @@ button.iconbtn:focus-visible, a.iconbtn:focus-visible {
 /* ---- 流程表：扁平、密度优先、表头吸顶 ---- */
 .table-scroll {
   overflow: auto; border: 1px solid var(--border); border-radius: var(--r-lg);
-  background: var(--panel); scrollbar-width: thin;
+  background: var(--panel); scrollbar-width: thin; scrollbar-gutter: stable;
   container-type: inline-size;
   max-height: calc(100vh - 258px);
 }
@@ -396,7 +396,14 @@ button.iconbtn:focus-visible, a.iconbtn:focus-visible {
 .table-scroll::-webkit-scrollbar { width: 9px; height: 9px; }
 .table-scroll::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 6px; }
 .table-scroll::-webkit-scrollbar-thumb:hover { background: var(--muted); }
-.flow-table { width: 100%; border-collapse: separate; border-spacing: 0; min-width: 760px; font-variant-numeric: tabular-nums; }
+.flow-table { width: 100%; min-width: 760px; table-layout: fixed; border-collapse: separate; border-spacing: 0; font-variant-numeric: tabular-nums; }
+/* 名称列使用剩余空间，其他列不受可见任务内容影响。 */
+.flow-table .col-select { width: 44px; }
+.flow-table .col-schedule { width: 140px; }
+.flow-table .col-next { width: 136px; }
+.flow-table .col-state { width: 90px; }
+.flow-table .col-last { width: 150px; }
+.flow-table .col-actions { width: 132px; }
 .flow-table th, .flow-table td { text-align: left; padding: 9px 14px; border-bottom: 1px solid var(--border); vertical-align: middle; }
 .flow-table thead { position: sticky; top: 0; z-index: 3; }
 .flow-table th {
@@ -427,8 +434,8 @@ button.flow-name {
 }
 button.flow-name:hover { color: var(--accent); background: transparent; border-color: transparent; text-decoration: underline; text-underline-offset: 3px; }
 button.flow-name:active { transform: none; }
-.flow-note { color: var(--muted); font-size: var(--fs-sm); margin-top: 1px; }
-.cron-code { font-family: var(--mono); font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+.flow-note { color: var(--muted); font-size: var(--fs-sm); margin-top: 1px; overflow-wrap: anywhere; }
+.cron-code { display: block; overflow: hidden; text-overflow: ellipsis; font-family: var(--mono); font-size: 11.5px; color: var(--muted); white-space: nowrap; }
 
 .cell-actions { display: flex; align-items: center; flex-wrap: nowrap; gap: 4px; }
 .cell-actions .row-run { color: var(--accent); border-color: transparent; background: transparent; font-weight: 600; }
@@ -823,8 +830,9 @@ dialog.modal:focus { outline: none; }
   button.iconbtn, a.iconbtn { width: var(--ctl-h-lg); height: var(--ctl-h-lg); min-width: var(--ctl-h-lg); min-height: var(--ctl-h-lg); }
   .theme-btn { font-size: 16px; }
   .flow-table { min-width: 540px; }
-  .flow-table th.col-next, .flow-table td.col-next,
-  .flow-table th.col-last, .flow-table td.col-last { display: none; }
+  .flow-table .col-schedule { width: 116px; }
+  .flow-table .col-state { width: 82px; }
+  .flow-table .col-actions { width: 116px; }
   /* 操作列固定在右侧：窄屏横滚时「运行/日志/···」始终可点 */
   .flow-table th:last-child, .flow-table td:last-child {
     position: sticky; right: 0; z-index: 2;

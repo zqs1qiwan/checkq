@@ -18,6 +18,9 @@ import VarsQuickModal from './flow-list/vars-quick.jsx';
 import MarketPanel from './flow-list/market.jsx';
 import { InstantiateModal, CurlImportModal, CsvImportModal, NotificationsModal, RestoreModal, TemplateEditorModal, BackupFullModal, GroupAssignModal } from './flow-list/modals.jsx';
 
+// 沿用任务列表的 640px 窄屏断点，让分组行只跨实际渲染的列。
+const COMPACT_TASK_COLUMNS = '(max-width: 640px)';
+
 export default function FlowList({ onOpen, onEditTemplate, onLogout }) {
   const [flows, setFlows] = useState(null);
   const [templates, setTemplates] = useState(null);
@@ -40,6 +43,16 @@ export default function FlowList({ onOpen, onEditTemplate, onLogout }) {
     try { return new Set(JSON.parse(localStorage.getItem('checkq-group-collapsed') || '[]')); } catch { return new Set(); }
   });
   const fileRef = useRef();
+  const [compactColumns, setCompactColumns] = useState(() => window.matchMedia(COMPACT_TASK_COLUMNS).matches);
+  const taskColumnCount = (compactColumns ? 4 : 6) + Number(batchMode);
+
+  useEffect(() => {
+    const media = window.matchMedia(COMPACT_TASK_COLUMNS);
+    const syncColumns = () => setCompactColumns(media.matches);
+    media.addEventListener('change', syncColumns);
+    syncColumns();
+    return () => media.removeEventListener('change', syncColumns);
+  }, []);
 
   // 首次按「大分组默认收起」初始化：≥8 个任务的分组（含未分组）先收起，用户操作后以 localStorage 为准
   useEffect(() => {
@@ -556,8 +569,13 @@ export default function FlowList({ onOpen, onEditTemplate, onLogout }) {
               <caption className="sr-only">任务列表：名称、调度、下次运行、状态、上次运行与操作</caption>
               <thead>
                 <tr>
-                  {batchMode && <th scope="col" style={{ width: 36 }}><input type="checkbox" checked={selectedAll} onChange={toggleSelectAll} title="全选" aria-label="全选任务" /></th>}
-                  <th scope="col">名称</th><th scope="col">调度</th><th scope="col" className="col-next">下次运行</th><th scope="col">状态</th><th scope="col" className="col-last">上次运行</th><th scope="col" style={{ minWidth: 150 }}>操作</th>
+                  {batchMode && <th scope="col" className="col-select"><input type="checkbox" checked={selectedAll} onChange={toggleSelectAll} title="全选" aria-label="全选任务" /></th>}
+                  <th scope="col">名称</th>
+                  <th scope="col" className="col-schedule">调度</th>
+                  {!compactColumns && <th scope="col" className="col-next">下次运行</th>}
+                  <th scope="col" className="col-state">状态</th>
+                  {!compactColumns && <th scope="col" className="col-last">上次运行</th>}
+                  <th scope="col" className="col-actions">操作</th>
                 </tr>
               </thead>
               <tbody>
@@ -567,7 +585,7 @@ export default function FlowList({ onOpen, onEditTemplate, onLogout }) {
                   return (
                     <React.Fragment key={gname}>
                       <tr className="group-row" data-group={gname} data-collapsed={isCollapsed ? '1' : '0'}>
-                        <td colSpan={batchMode ? 7 : 6}>
+                        <td colSpan={taskColumnCount}>
                           <div className="group-head">
                             <button className="group-toggle" onClick={() => toggleGroup(gname)} aria-expanded={!isCollapsed}>
                               <span className="group-chevron" aria-hidden="true">{isCollapsed ? '▸' : '▾'}</span>
@@ -599,11 +617,13 @@ export default function FlowList({ onOpen, onEditTemplate, onLogout }) {
                             )}
                           </td>
                           <td style={{ whiteSpace: 'nowrap' }}>
-                            {f.cron ? <span className="cron-code">{f.cron}</span> : <span style={{ color: 'var(--muted)' }}>手动</span>}
+                            {f.cron ? <span className="cron-code" title={f.cron}>{f.cron}</span> : <span style={{ color: 'var(--muted)' }}>手动</span>}
                           </td>
-                          <td className="col-next">
-                            {f.nextRunAt ? <span style={{ fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap' }}>{fmtTime(f.nextRunAt)}</span> : <span style={{ color: 'var(--muted)', fontSize: 12 }}>—</span>}
-                          </td>
+                          {!compactColumns && (
+                            <td className="col-next">
+                              {f.nextRunAt ? <span style={{ fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap' }}>{fmtTime(f.nextRunAt)}</span> : <span style={{ color: 'var(--muted)', fontSize: 12 }}>—</span>}
+                            </td>
+                          )}
                           <td style={{ whiteSpace: 'nowrap', fontSize: 12, color: f.enabled ? 'var(--ok)' : (f.pausedAt ? 'var(--warn)' : 'var(--muted)') }}>
                             {liveState(f.id) === 'running' ? (
                               <><span className="status-dot on" /><span className="live-tag">运行中</span></>
@@ -614,7 +634,7 @@ export default function FlowList({ onOpen, onEditTemplate, onLogout }) {
                                 {f.enabled ? '已启用' : (f.pausedAt ? <span title={pausedTitle(f)}>已暂停</span> : '已停用')}</>
                             )}
                           </td>
-                          <td className="col-last">{lastStatus(f)}</td>
+                          {!compactColumns && <td className="col-last">{lastStatus(f)}</td>}
                           <td>
                             <div className="cell-actions">
                               <Dropdown
