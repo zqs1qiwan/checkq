@@ -43,6 +43,8 @@ export default function FlowList({ onOpen, onEditTemplate, onLogout }) {
     try { return new Set(JSON.parse(localStorage.getItem('checkq-group-collapsed') || '[]')); } catch { return new Set(); }
   });
   const fileRef = useRef();
+  const refreshInFlight = useRef(null);
+  const unreadRevision = useRef(0);
   const [compactColumns, setCompactColumns] = useState(() => window.matchMedia(COMPACT_TASK_COLUMNS).matches);
   const taskColumnCount = (compactColumns ? 4 : 6) + Number(batchMode);
 
@@ -67,31 +69,39 @@ export default function FlowList({ onOpen, onEditTemplate, onLogout }) {
     } catch { /* 隐私模式忽略 */ }
   }, [flows]);
 
-  const load = (opts = {}) => {
-    api.flows().then(setFlows).catch((e) => {
-      if (!opts.silent) setToast({ kind: 'fail', text: e.message });
-    });
-    api.templates().then(setTemplates).catch(() => setTemplates([]));
-    api.stats().then(setStats).catch(() => setStats(null));
-    if (!opts.silent) setSelected(new Set());
+  const load = ({ silent = false } = {}) => {
+    if (silent && refreshInFlight.current) return;
+    const request = Symbol();
+    const unreadAtStart = unreadRevision.current;
+    refreshInFlight.current = request;
+    const isCurrent = () => refreshInFlight.current === request;
+    const requests = [
+      api.flows().then((result) => { if (isCurrent()) setFlows(result); }).catch((error) => {
+        if (isCurrent() && !silent) setToast({ kind: 'fail', text: error.message });
+      }),
+      api.templates().then((result) => { if (isCurrent()) setTemplates(result); }).catch(() => {}),
+      api.stats().then((result) => {
+        if (!isCurrent()) return;
+        setStats(result);
+        if (unreadRevision.current === unreadAtStart) setUnread(result.unreadNotifications || 0);
+      }).catch(() => {}),
+    ];
+    Promise.allSettled(requests).then(() => { if (isCurrent()) refreshInFlight.current = null; });
+    if (!silent) setSelected(new Set());
   };
 
-  useEffect(() => { load(); }, []);
-
-  // 定时任务在后台跑：可见时轻量刷新，避免首页状态一直停在旧快照
+  // 仅在首页可见时轮询，后台刷新保留上次成功的数据。
   useEffect(() => {
-    let alive = true;
+    load();
     const tick = () => {
-      if (!alive || document.visibilityState === 'hidden') return;
-      load({ silent: true });
+      if (document.visibilityState === 'visible') load({ silent: true });
     };
     const timer = setInterval(tick, 30000);
-    const onVisible = () => { if (document.visibilityState === 'visible') tick(); };
-    document.addEventListener('visibilitychange', onVisible);
+    document.addEventListener('visibilitychange', tick);
     return () => {
-      alive = false;
+      refreshInFlight.current = null;
       clearInterval(timer);
-      document.removeEventListener('visibilitychange', onVisible);
+      document.removeEventListener('visibilitychange', tick);
     };
   }, []);
 
@@ -103,14 +113,10 @@ export default function FlowList({ onOpen, onEditTemplate, onLogout }) {
     api.me().then((r) => setMe(r.authenticated ? r.user : null)).catch(() => {});
   }, []);
 
-  // 站内通知未读数（30s 轮询，失败静默）
-  useEffect(() => {
-    let alive = true;
-    const tick = () => api.notifications(1).then((r) => { if (alive) setUnread(r.unread || 0); }).catch(() => {});
-    tick();
-    const timer = setInterval(tick, 30000);
-    return () => { alive = false; clearInterval(timer); };
-  }, []);
+  const updateUnread = (count) => {
+    unreadRevision.current++;
+    setUnread(count);
+  };
 
   // 搜索 + 筛选（PRD 4.4）+ 分组名参与搜索
   const visibleFlows = (flows || []).filter((f) => {
@@ -400,7 +406,8 @@ export default function FlowList({ onOpen, onEditTemplate, onLogout }) {
               <span className={stats.todayFailed ? 'fail-n' : ''}>失败 <b className={stats.todayFailed ? 'fail-n' : ''}>{stats.todayFailed}</b></span>
               {stats.successRate !== null ? <span>成功率 <b>{stats.successRate}%</b></span> : null}
             </span>
-            {stats.queuedFlows?.length ? <span className="badge warn">排队中 {stats.queuedFlows.length}</span> : null}
+            {stats.runningCount > 0 && <span className="badge ok">运行中 {stats.runningCount}</span>}
+            {stats.queueCount > 0 && <span className="badge warn">排队中 {stats.queueCount}</span>}
             {stats.dailySummary?.enabled ? <span className="badge ok">每日汇总 {stats.dailySummary.time}</span> : null}
             {stats.nextRunAt ? (
               <span className="next-run" title={`下一次自动运行：${stats.nextFlowName || '未知任务'}（所有已启用任务中最近的一次）`}>
@@ -773,7 +780,7 @@ export default function FlowList({ onOpen, onEditTemplate, onLogout }) {
       )}
 
       {notifOpen && (
-        <NotificationsModal onClose={() => setNotifOpen(false)} onUnreadChange={setUnread} />
+        <NotificationsModal onClose={() => setNotifOpen(false)} onUnreadChange={updateUnread} />
       )}
 
     </>
