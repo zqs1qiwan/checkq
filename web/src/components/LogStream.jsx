@@ -10,6 +10,9 @@ import { IconDownload, IconBug } from './Icons.jsx';
  * - 工具栏可加载更早的记录，保留当前阅读位置
  * - 「调试」开关：展开某次运行的每步请求/响应细节（日常不需要）
  */
+const POLL_INTERVAL_MS = 3000;
+const MAX_RETRY_DELAY_MS = 30000;
+
 function fmtClock(ts) {
   const d = new Date(ts);
   const p = (n) => String(n).padStart(2, '0');
@@ -96,6 +99,7 @@ export default function LogStream({ flowId, flowName, onClose, onToast, onFix })
     readingHistory.current = false;
     const controller = new AbortController();
     let timer;
+    let retryDelay = POLL_INTERVAL_MS;
     const shouldPause = () => {
       const box = boxRef.current;
       return document.hidden || (box && box.scrollHeight - box.scrollTop - box.clientHeight > 24);
@@ -103,14 +107,14 @@ export default function LogStream({ flowId, flowName, onClose, onToast, onFix })
     const poll = async (initial = false) => {
       if (readingHistory.current) return;
       if (!initial && shouldPause()) {
-        timer = setTimeout(poll, 3000);
+        timer = setTimeout(poll, POLL_INTERVAL_MS);
         return;
       }
       try {
         const result = await api.flowLogs(flowId, { limit: 300, signal: controller.signal });
         if (!alive || readingHistory.current) return;
         if (!initial && shouldPause()) {
-          timer = setTimeout(poll, 3000);
+          timer = setTimeout(poll, POLL_INTERVAL_MS);
           return;
         }
         const active = (result.runs || []).some((run) => run.status === 'queued' || run.status === 'running');
@@ -118,9 +122,17 @@ export default function LogStream({ flowId, flowName, onClose, onToast, onFix })
         setEntries(pageEntries(result));
         setNextBefore(result.hasMore ? result.nextBefore : null);
         setError('');
-        if (active) timer = setTimeout(poll, 3000);
+        retryDelay = POLL_INTERVAL_MS;
+        if (active) timer = setTimeout(poll, POLL_INTERVAL_MS);
       } catch {
-        if (alive && !readingHistory.current) setError('日志加载失败，请重试。');
+        if (!alive || readingHistory.current) return;
+        if (initial) {
+          setError('日志加载失败，请重试。');
+        } else {
+          setError('日志自动刷新失败，稍后重试。');
+          retryDelay = Math.min(retryDelay * 2, MAX_RETRY_DELAY_MS);
+          timer = setTimeout(poll, retryDelay);
+        }
       } finally {
         if (alive) setLoading(false);
       }
