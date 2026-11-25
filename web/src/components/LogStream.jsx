@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import Modal from './Modal.jsx';
 import DiagnosisCard from './DiagnosisCard.jsx';
@@ -7,7 +7,7 @@ import { IconDownload, IconBug } from './Icons.jsx';
 /**
  * 连续日志流（qinglong 面板风格）
  * - 一个面板里连续滚动显示该任务多次运行的人话日志（默认只有 log 节点输出 + 失败行）
- * - 底部「加载更早的记录」可继续往上翻历史
+ * - 工具栏可加载更早的记录，保留当前阅读位置
  * - 「调试」开关：展开某次运行的每步请求/响应细节（日常不需要）
  */
 function fmtClock(ts) {
@@ -18,42 +18,76 @@ function fmtClock(ts) {
 
 export default function LogStream({ flowId, flowName, onClose, onToast, onFix }) {
   const [entries, setEntries] = useState([]);
-  const [hasMore, setHasMore] = useState(false);
   const [nextBefore, setNextBefore] = useState(null);
   const [filter, setFilter] = useState('all'); // all | error
   const [debugRun, setDebugRun] = useState(null); // 展开调试的 runId
   const [debugData, setDebugData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [error, setError] = useState('');
+  const [reload, setReload] = useState(0);
   const boxRef = useRef(null);
+  const olderRequest = useRef(null);
+  const scrollAfterLoad = useRef(null);
 
   useEffect(() => {
     let alive = true;
     setLoading(true);
+    setLoadingOlder(false);
+    setError('');
+    setEntries([]);
+    setNextBefore(null);
     api.flowLogs(flowId, { limit: 300 })
       .then((r) => {
         if (!alive) return;
-        setEntries([...(r.entries || [])].reverse());
-        setHasMore(!!r.hasMore);
-        setNextBefore(r.nextBefore || null);
+        scrollAfterLoad.current = { latest: true };
+        setEntries(r.entries || []);
+        setNextBefore(r.hasMore ? r.nextBefore : null);
       })
-      .catch(() => {})
+      .catch(() => { if (alive) setError('日志加载失败，请重试。'); })
       .finally(() => { if (alive) setLoading(false); });
-    return () => { alive = false; };
-  }, [flowId]);
+    return () => {
+      alive = false;
+      olderRequest.current = null;
+      scrollAfterLoad.current = null;
+    };
+  }, [flowId, reload]);
 
-  // 默认滚到底部（最新在最下面，像终端）
-  useEffect(() => {
-    if (boxRef.current) boxRef.current.scrollTop = boxRef.current.scrollHeight;
-  }, [entries.length]);
+  useLayoutEffect(() => {
+    const box = boxRef.current;
+    const target = scrollAfterLoad.current;
+    scrollAfterLoad.current = null;
+    if (!target || !box) return;
+    if (target.latest) box.scrollTop = box.scrollHeight;
+    else if (target.element.isConnected) {
+      box.scrollTop += target.element.getBoundingClientRect().top - target.top;
+    }
+  }, [entries]);
 
   const loadMore = async () => {
-    if (!nextBefore) return;
-    const r = await api.flowLogs(flowId, { limit: 300, before: nextBefore }).catch(() => null);
-    if (!r) return;
-    const older = [...(r.entries || [])].reverse();
-    setEntries((prev) => [...older, ...prev]);
-    setHasMore(!!r.hasMore);
-    setNextBefore(r.nextBefore || null);
+    if (!nextBefore || olderRequest.current) return;
+    const request = Symbol();
+    olderRequest.current = request;
+    setLoadingOlder(true);
+    setError('');
+    try {
+      const r = await api.flowLogs(flowId, { limit: 300, before: nextBefore });
+      if (olderRequest.current !== request) return;
+      const box = boxRef.current;
+      const edge = box.getBoundingClientRect().top;
+      const element = Array.from(box.querySelectorAll('.logstream-group'))
+        .find((group) => group.getBoundingClientRect().bottom > edge);
+      if (element) scrollAfterLoad.current = { element, top: element.getBoundingClientRect().top };
+      setEntries((prev) => [...prev, ...(r.entries || [])]);
+      setNextBefore(r.hasMore ? r.nextBefore : null);
+    } catch {
+      if (olderRequest.current === request) setError('更早的记录加载失败，请重试。');
+    } finally {
+      if (olderRequest.current === request) {
+        olderRequest.current = null;
+        setLoadingOlder(false);
+      }
+    }
   };
 
   // 导出某次运行的日志（人话日志 + 状态 + 摘要）
@@ -86,7 +120,7 @@ export default function LogStream({ flowId, flowName, onClose, onToast, onFix })
     if (full) setDebugData(full);
   };
 
-  // 按运行分组（保持时间正序：旧 → 新）
+  // API 由新到旧返回运行，同次运行内的步骤已经按执行顺序排列。
   const groups = [];
   for (const e of entries) {
     const last = groups[groups.length - 1];
@@ -100,7 +134,7 @@ export default function LogStream({ flowId, flowName, onClose, onToast, onFix })
       finalMessage: e.finalMessage, diagnosis: e.diagnosis, items: [e],
     });
   }
-  const visibleGroups = groups
+  const visibleGroups = groups.reverse()
     .map((g) => ({ ...g, items: filter === 'error' ? g.items.filter((i) => !i.ok) : g.items }))
     .filter((g) => g.items.length > 0);
 
@@ -114,10 +148,17 @@ export default function LogStream({ flowId, flowName, onClose, onToast, onFix })
       <div className="logstream-tools">
         <button className={`small${filter === 'all' ? ' primary' : ''}`} onClick={() => setFilter('all')}>全部</button>
         <button className={`small${filter === 'error' ? ' primary' : ''}`} onClick={() => setFilter('error')}>仅错误</button>
+        {nextBefore && (
+          <button className="small logstream-more" disabled={loadingOlder} onClick={loadMore}>
+            {loadingOlder ? '加载中…' : '加载更早的记录'}
+          </button>
+        )}
+        {error && !nextBefore && <button className="small logstream-more" onClick={() => setReload((n) => n + 1)}>重试</button>}
       </div>
+      {error && <div className="logstream-error" role="alert">{error}</div>}
       <div className="logstream-body" ref={boxRef}>
           {loading && <div className="empty">加载中…</div>}
-          {!loading && visibleGroups.length === 0 && <div className="empty">暂无日志</div>}
+          {!loading && !error && visibleGroups.length === 0 && <div className="empty">暂无日志</div>}
           {visibleGroups.map((g) => (
             <div key={g.runId + '@' + g.startedAt} className="logstream-group">
               <div className="logstream-run">
@@ -179,11 +220,6 @@ export default function LogStream({ flowId, flowName, onClose, onToast, onFix })
               )}
             </div>
           ))}
-          {hasMore && (
-            <div className="logstream-more">
-              <button className="small" onClick={loadMore}>加载更早的记录</button>
-            </div>
-          )}
       </div>
     </Modal>
   );
