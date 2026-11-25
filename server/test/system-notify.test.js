@@ -63,7 +63,7 @@ const mkFlow = async (name, enabled = false) => {
   return r.json();
 };
 const addRun = (flowId, status, startedAt, message) => store.addRun({
-  id: crypto.randomUUID(), flowId, status, startedAt, finishedAt: startedAt + 1000,
+  id: crypto.randomUUID(), flowId, status, startedAt, finishedAt: new Date(startedAt).getTime() + 1000,
   finalMessage: message, logs: [], durationMs: 1000,
 });
 
@@ -93,6 +93,25 @@ await check('AC-4 昨日 23:58 与今日 00:02 只统计昨日', async () => {
   const p = await app.inject({ method: 'POST', url: '/api/system/notify/preview', headers: H, payload: { date: yesterday } });
   const j = p.json();
   return j.counts.runs === 2 && j.counts.failed === 1 && j.counts.success === 1 && j.text.includes('夜间失败') && !j.text.includes('凌晨成功');
+});
+
+await check('汇总用时间顺序计算最后失败与连续失败，兼容 ISO 时间', async () => {
+  const flow = await mkFlow('失败时序');
+  const cutoff = new Date(2001, 0, 1, 23, 59, 59, 999).getTime();
+  const start = new Date(2001, 0, 1).getTime();
+  addRun(flow.id, 'failed', cutoff, '最后一次失败\n保留首行');
+  addRun(flow.id, 'success', start - 300, '上次成功');
+  addRun(flow.id, 'failed', start - 300, '同毫秒失败，历史中排在成功之后写入');
+  addRun(flow.id, 'failed', start - 301, '上次成功之前的失败');
+  addRun(flow.id, 'failed', start - 5, '前一日失败');
+  addRun(flow.id, 'failed', new Date(start + 5).toISOString(), '窗口内较早失败');
+  addRun(flow.id, 'cancelled', start + 15, '已取消');
+  addRun(flow.id, 'running', start + 20, '仍在运行');
+  addRun(flow.id, 'success', cutoff + 1, '次日成功');
+  const stats = store.statsForRange(start, cutoff);
+  assert.deepEqual([stats.runs, stats.success, stats.failed], [3, 0, 2]);
+  assert.deepEqual(stats.failures, [{ flowName: flow.name, at: cutoff, message: '最后一次失败', consecutive: 4 }]);
+  return true;
 });
 
 await check('AC-5 同一窗口重复触发返回 duplicate', async () => {

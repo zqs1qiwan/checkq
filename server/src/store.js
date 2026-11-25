@@ -34,10 +34,18 @@ function localDayBounds() {
   return { start, end };
 }
 
+function runStartTime(startedAt) {
+  if (typeof startedAt === 'number') return startedAt;
+  if (typeof startedAt === 'string' && startedAt.trim()) {
+    const numeric = Number(startedAt);
+    return Number.isFinite(numeric) ? numeric : Date.parse(startedAt);
+  }
+  return NaN;
+}
+
 function completedInRange(run, start, end) {
   if (run.status !== 'success' && run.status !== 'failed' && run.status !== 'cancelled') return false;
-  const { startedAt } = run;
-  const time = typeof startedAt === 'number' ? startedAt : new Date(startedAt).getTime();
+  const time = runStartTime(run.startedAt);
   return time >= start && time < end;
 }
 
@@ -860,34 +868,50 @@ export class Store {
 
   /** 指定时间窗内的运行统计（每日汇总用；窗口按服务器本地自然日） */
   statsForRange(startMs, endMs) {
-    const inWindow = this.runs.filter((r) => ['success', 'failed', 'cancelled'].includes(r.status)
-      && (r.startedAt || 0) >= startMs && (r.startedAt || 0) <= endMs);
-    const success = inWindow.filter((r) => r.status === 'success').length;
-    const failed = inWindow.filter((r) => r.status === 'failed').length;
-    const names = new Map(this.flows.map((f) => [f.id, f.name]));
-
-    // 每个任务取窗口内最后一条失败，作为“需要你看一眼”的条目
+    let runs = 0;
+    let success = 0;
+    let failed = 0;
+    const latestSuccess = new Map();
     const latestFailure = new Map();
-    for (const r of inWindow) {
-      if (r.status !== 'failed' || latestFailure.has(r.flowId)) continue;
-      latestFailure.set(r.flowId, r);
-    }
-    const consecutiveFailures = (flowId) => {
-      const list = this.runs
-        .filter((r) => r.flowId === flowId && (r.startedAt || 0) <= endMs)
-        .sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0));
-      let n = 0;
-      for (const r of list) {
-        if (r.status === 'failed') n += 1;
-        else if (r.status === 'success') break;
+    for (let i = 0; i < this.runs.length; i++) {
+      const run = this.runs[i];
+      const { status, flowId } = run;
+      if (status !== 'success' && status !== 'failed' && status !== 'cancelled') continue;
+      const at = runStartTime(run.startedAt);
+      if (!(at <= endMs)) continue;
+      if (status === 'success') {
+        const previous = latestSuccess.get(flowId);
+        if (!previous || at > previous.at) latestSuccess.set(flowId, { at, index: i });
       }
-      return n;
-    };
-    const failures = [...latestFailure.entries()].map(([flowId, r]) => ({
-      flowName: names.get(flowId) || r.flowName || '已删除任务',
-      at: r.startedAt || 0,
-      message: String(r.finalMessage || r.summary || '').split('\n')[0].slice(0, 160),
-      consecutive: consecutiveFailures(flowId),
+      if (at < startMs) continue;
+      runs++;
+      if (status === 'success') success++;
+      if (status === 'failed') {
+        failed++;
+        const previous = latestFailure.get(flowId);
+        if (!previous || at > previous.at) latestFailure.set(flowId, { run, at, consecutive: 0 });
+      }
+    }
+
+    // 成功中断连续失败。同一毫秒内沿用历史顺序，取消和在途记录不影响计数。
+    if (latestFailure.size) {
+      for (let i = 0; i < this.runs.length; i++) {
+        const run = this.runs[i];
+        if (run.status !== 'failed') continue;
+        const failure = latestFailure.get(run.flowId);
+        if (!failure) continue;
+        const at = runStartTime(run.startedAt);
+        if (!(at <= endMs)) continue;
+        const lastOk = latestSuccess.get(run.flowId);
+        if (!lastOk || at > lastOk.at || (at === lastOk.at && i < lastOk.index)) failure.consecutive++;
+      }
+    }
+    const names = new Map(this.flows.map((flow) => [flow.id, flow.name]));
+    const failures = [...latestFailure].map(([flowId, { run, at, consecutive }]) => ({
+      flowName: names.get(flowId) || run.flowName || '已删除任务',
+      at,
+      message: String(run.finalMessage || run.summary || '').split('\n')[0].slice(0, 160),
+      consecutive,
     }));
 
     const paused = this.flows
@@ -898,14 +922,14 @@ export class Store {
     return {
       window: { startMs, endMs },
       enabledFlows: this.flows.filter((f) => f.enabled).length,
-      runs: inWindow.length,
+      runs,
       success,
       failed,
-      rate: inWindow.length ? Math.round((success / inWindow.length) * 100) : null,
+      rate: runs ? Math.round((success / runs) * 100) : null,
       failures,
       paused,
       next: { flowName: nextFlowName || '', at: nextRunAt },
-      empty: inWindow.length === 0,
+      empty: runs === 0,
     };
   }
 

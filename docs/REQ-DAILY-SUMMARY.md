@@ -143,12 +143,12 @@
 |---|---|
 | `window` | `[昨日 00:00:00, 昨日 23:59:59.999]`，服务器本地时区 |
 | `enabledFlows` | 当前 `enabled===true` 的任务数（不要求有 cron） |
-| `runs` | `runs` 中 `startedAt` 落在窗口内的记录数 |
-| `success / failed` | 上述记录按 `status` 计数（`failed` 只计最终失败，重试中的尝试不算） |
-| `rate` | 成功率整数百分比；0 次时为 `null` |
-| `failures[]` | 按 `flowId` 聚合：`{ flowName, at, message, consecutive }`，`message` 取 `run.finalMessage` 首行，`consecutive` = 该任务截至窗口末的连续失败次数 |
-| `paused[]` | `pausedAt` 落在窗口内的任务：`{ flowName, at, reason }` |
-| `next` | 最早的下次调度：`{ flowName, at }`（`stats()` 已有 `nextRunAt/nextFlowName`，复用缓存） |
+| `runs` | 开始时间落在窗口内的已结束运行，包含已取消。兼容毫秒时间戳与 ISO 时间。 |
+| `success / failed` | 按最终状态统计成功和失败。 |
+| `rate` | 成功率取整，0 次时为 `null`。 |
+| `failures[]` | 每个失败任务取窗口内开始时间最晚的一条。`message` 取结论首行，`consecutive` 统计截至窗口末、最近一次成功之后的失败，或尚无成功时的全部保留失败。取消和在途记录不影响连续失败计数。 |
+| `paused[]` | `pausedAt` 落在窗口内的任务，返回 `{ flowName, at, reason }`。 |
+| `next` | 最早的下次调度，返回 `{ flowName, at }`，与首页共用调度缓存。 |
 
 **已知限制（写进文档，不要当成 bug 修）**：`runs` 每任务只保留最近 500 条（`store.js:481`），超高频率任务在窗口内的历史可能被裁剪，汇总数字是"基于本地保留记录的近似值"。UI 不因此加免责声明，但本文件与 `ARCHITECTURE.md` 的数据模型一节要保持一致。
 
