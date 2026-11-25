@@ -163,7 +163,7 @@ export const api = {
   notifications: (limit = 50) => req('GET', `/api/notifications?limit=${limit}`),
   markNotificationsRead: (ids) => req('POST', '/api/notifications/read', { ids }),
   clearNotifications: () => req('DELETE', '/api/notifications'),
-  flowLogs: (id, { limit = 200, before = null } = {}) => req('GET', `/api/flows/${id}/logs?limit=${limit}${before ? `&before=${encodeURIComponent(before)}` : ''}`),
+  flowLogs: (id, { limit = 200, before = null, signal } = {}) => req('GET', `/api/flows/${id}/logs?limit=${limit}${before ? `&before=${encodeURIComponent(before)}` : ''}`, undefined, false, signal),
   uiSettings: () => req('GET', '/api/system/ui'),
   pushTargets: () => req('GET', '/api/system/push-targets'),
   saveUiSettings: (patch) => req('PUT', '/api/system/ui', patch),

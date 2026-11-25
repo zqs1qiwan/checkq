@@ -16,6 +16,18 @@ function fmtClock(ts) {
   return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
+function pageEntries({ entries = [], runs = [] }) {
+  const rows = [];
+  let index = 0;
+  for (const { id, count, ...run } of runs) {
+    if (count === 0 && entries[index]?.runId !== id) {
+      rows.push({ ...run, runId: id, emptyRun: true });
+    }
+    while (entries[index]?.runId === id) rows.push(entries[index++]);
+  }
+  return rows.concat(entries.slice(index));
+}
+
 function RunDebug({ runId }) {
   const [result, setResult] = useState(null);
   const [attempt, setAttempt] = useState(0);
@@ -74,25 +86,50 @@ export default function LogStream({ flowId, flowName, onClose, onToast, onFix })
   const boxRef = useRef(null);
   const olderRequest = useRef(null);
   const scrollAfterLoad = useRef(null);
+  const readingHistory = useRef(false);
 
   useEffect(() => {
     let alive = true;
     setLoading(true);
     setLoadingOlder(false);
     setError('');
-    setEntries([]);
-    setNextBefore(null);
-    api.flowLogs(flowId, { limit: 300 })
-      .then((r) => {
-        if (!alive) return;
+    readingHistory.current = false;
+    const controller = new AbortController();
+    let timer;
+    const shouldPause = () => {
+      const box = boxRef.current;
+      return document.hidden || (box && box.scrollHeight - box.scrollTop - box.clientHeight > 24);
+    };
+    const poll = async (initial = false) => {
+      if (readingHistory.current) return;
+      if (!initial && shouldPause()) {
+        timer = setTimeout(poll, 3000);
+        return;
+      }
+      try {
+        const result = await api.flowLogs(flowId, { limit: 300, signal: controller.signal });
+        if (!alive || readingHistory.current) return;
+        if (!initial && shouldPause()) {
+          timer = setTimeout(poll, 3000);
+          return;
+        }
+        const active = (result.runs || []).some((run) => run.status === 'queued' || run.status === 'running');
         scrollAfterLoad.current = { latest: true };
-        setEntries(r.entries || []);
-        setNextBefore(r.hasMore ? r.nextBefore : null);
-      })
-      .catch(() => { if (alive) setError('日志加载失败，请重试。'); })
-      .finally(() => { if (alive) setLoading(false); });
+        setEntries(pageEntries(result));
+        setNextBefore(result.hasMore ? result.nextBefore : null);
+        setError('');
+        if (active) timer = setTimeout(poll, 3000);
+      } catch {
+        if (alive && !readingHistory.current) setError('日志加载失败，请重试。');
+      } finally {
+        if (alive) setLoading(false);
+      }
+    };
+    poll(true);
     return () => {
       alive = false;
+      clearTimeout(timer);
+      controller.abort();
       olderRequest.current = null;
       scrollAfterLoad.current = null;
     };
@@ -110,7 +147,8 @@ export default function LogStream({ flowId, flowName, onClose, onToast, onFix })
   }, [entries]);
 
   const loadMore = async () => {
-    if (!nextBefore || olderRequest.current) return;
+    if (loading || !nextBefore || olderRequest.current) return;
+    readingHistory.current = true;
     const request = Symbol();
     olderRequest.current = request;
     setLoadingOlder(true);
@@ -123,7 +161,7 @@ export default function LogStream({ flowId, flowName, onClose, onToast, onFix })
       const element = Array.from(box.querySelectorAll('.logstream-run, .logstream-line'))
         .find((line) => line.getBoundingClientRect().bottom > edge);
       if (element) scrollAfterLoad.current = { element, top: element.getBoundingClientRect().top };
-      setEntries((prev) => [...prev, ...(r.entries || [])]);
+      setEntries((prev) => [...prev, ...pageEntries(r)]);
       setNextBefore(r.hasMore ? r.nextBefore : null);
     } catch {
       if (olderRequest.current === request) setError('更早的记录加载失败，请重试。');
@@ -162,21 +200,21 @@ export default function LogStream({ flowId, flowName, onClose, onToast, onFix })
   for (const e of entries) {
     const last = groups[groups.length - 1];
     if (last && last.runId === e.runId) {
-      last.items.push(e);
+      if (!e.emptyRun) last.items.push(e);
       if (!last.diagnosis && e.diagnosis) last.diagnosis = e.diagnosis;
     }
     else groups.push({
       runId: e.runId, startedAt: e.startedAt, status: e.status, summary: e.summary,
       interrupted: e.interrupted, timedOut: e.timedOut,
-      finalMessage: e.finalMessage, diagnosis: e.diagnosis, items: [e],
+      finalMessage: e.finalMessage, diagnosis: e.diagnosis, items: e.emptyRun ? [] : [e],
     });
   }
   const visibleGroups = groups.reverse()
     .map((g) => {
-      if (g.items[0].position !== undefined) g.items.sort((a, b) => a.position - b.position);
+      if (g.items[0]?.position !== undefined) g.items.sort((a, b) => a.position - b.position);
       return { ...g, items: filter === 'error' ? g.items.filter((i) => !i.ok) : g.items };
     })
-    .filter((g) => g.items.length > 0);
+    .filter((g) => filter === 'all' || g.items.length > 0);
 
   return (
     <Modal
@@ -189,18 +227,20 @@ export default function LogStream({ flowId, flowName, onClose, onToast, onFix })
         <button className={`small${filter === 'all' ? ' primary' : ''}`} onClick={() => setFilter('all')}>全部</button>
         <button className={`small${filter === 'error' ? ' primary' : ''}`} onClick={() => setFilter('error')}>仅错误</button>
         {nextBefore && (
-          <button className="small logstream-more" disabled={loadingOlder} onClick={loadMore}>
+          <button className="small logstream-more" disabled={loading || loadingOlder} onClick={loadMore}>
             {loadingOlder ? '加载中…' : '加载更早的记录'}
           </button>
         )}
-        {error && !nextBefore && <button className="small logstream-more" onClick={() => setReload((n) => n + 1)}>重试</button>}
+        <button className="small" disabled={loading || loadingOlder} onClick={() => setReload((n) => n + 1)}>
+          {error && !nextBefore ? '重试' : '刷新最新日志'}
+        </button>
       </div>
       {error && <div className="logstream-error" role="alert">{error}</div>}
       <div className="logstream-body" ref={boxRef}>
           {loading && <div className="empty">加载中…</div>}
           {!loading && !error && visibleGroups.length === 0 && <div className="empty">暂无日志</div>}
           {visibleGroups.map((g) => (
-            <div key={g.runId + '@' + g.startedAt} className="logstream-group">
+            <div key={g.runId} className="logstream-group">
               <div className="logstream-run">
                 <span className={`badge ${g.status === 'success' ? 'ok' : g.status === 'failed' ? 'fail' : g.status === 'cancelled' ? 'warn' : ''}`}>
                   {g.status === 'success' ? '成功' : g.status === 'failed'
@@ -236,7 +276,7 @@ export default function LogStream({ flowId, flowName, onClose, onToast, onFix })
                   <span className="logstream-msg">{e.message}</span>
                 </div>
               ))}
-              {debugRun === g.runId && <RunDebug runId={g.runId} />}
+              {debugRun === g.runId && <RunDebug key={`${g.status}:${g.items.length}`} runId={g.runId} />}
             </div>
           ))}
       </div>
