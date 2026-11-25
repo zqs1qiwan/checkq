@@ -19,6 +19,13 @@ function fmtClock(ts) {
   return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
+const RUN_STATUS_LABELS = { success: '成功', cancelled: '已取消', queued: '排队中', running: '运行中' };
+
+function runStatus({ status, interrupted, timedOut }) {
+  if (status === 'failed') return interrupted ? '已中断' : timedOut ? '超时' : '失败';
+  return Object.hasOwn(RUN_STATUS_LABELS, status) ? RUN_STATUS_LABELS[status] : '未知';
+}
+
 function pageEntries({ entries = [], runs = [] }) {
   const rows = [];
   let index = 0;
@@ -86,6 +93,8 @@ export default function LogStream({ flowId, flowName, onClose, onToast, onFix })
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [error, setError] = useState('');
   const [reload, setReload] = useState(0);
+  const [exportingRun, setExportingRun] = useState(null);
+  const exportRequest = useRef(null);
   const boxRef = useRef(null);
   const olderRequest = useRef(null);
   const scrollAfterLoad = useRef(null);
@@ -185,26 +194,52 @@ export default function LogStream({ flowId, flowName, onClose, onToast, onFix })
     }
   };
 
-  // 导出某次运行的日志（人话日志 + 状态 + 摘要）
+  useEffect(() => () => exportRequest.current?.abort(), []);
+
   const exportRun = async (group) => {
-    let full = null;
-    try { full = await api.run(group.runId); } catch { full = null; }
-    const lines = [];
-    lines.push(`# ${group.runId}`);
-    lines.push(`任务：${flowName || ''}`);
-    lines.push(`时间：${fmtClock(group.startedAt)}`);
-    lines.push(`状态：${group.status}`);
-    if (group.summary) lines.push(`摘要：${group.summary}`);
-    lines.push('');
-    for (const l of (full?.logs || group.items)) {
-      lines.push(`[${l.ok === false ? 'ERROR' : 'OK'}] ${l.name}${l.message ? ' — ' + l.message : ''}`);
+    if (exportRequest.current) return;
+    const controller = new AbortController();
+    exportRequest.current = controller;
+    setExportingRun(group.runId);
+    try {
+      let full;
+      try {
+        const result = await api.run(group.runId, { signal: controller.signal });
+        if (result?.id !== group.runId) throw new Error('无效的运行详情');
+        full = result;
+      } catch (error) {
+        if (controller.signal.aborted || error.status === 401) return;
+        if (error.status === 403 || !group.items.length) throw error;
+      }
+      if (controller.signal.aborted) return;
+      const run = full ?? group;
+      const name = full?.flowName || flowName || '';
+      const time = fmtClock(run.startedAt ?? group.startedAt);
+      const lines = [
+        `# ${group.runId}`,
+        `任务：${name}`,
+        `时间：${time}`,
+        `状态：${runStatus(run)}`,
+      ];
+      if (!full) lines.push('范围：部分日志，仅包含导出时已加载的记录。');
+      if (run.summary) lines.push(`摘要：${run.summary}`);
+      if (run.finalMessage) lines.push(`结论：${run.finalMessage}`);
+      lines.push('');
+      for (const line of (full ? full.logs || [] : group.items)) {
+        lines.push(`[${line.ok === false ? 'ERROR' : 'OK'}] ${line.name}${line.message ? ' — ' + line.message : ''}`);
+      }
+      const url = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' }));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${(name || 'task').replace(/[\\/:*?"<>|]/g, '_')}-${time.replace(/[: ]/g, '')}${full ? '' : '-部分'}.log`;
+      try { link.click(); } finally { setTimeout(() => URL.revokeObjectURL(url), 1000); }
+      if (!full) onToast?.('完整日志获取失败，已下载部分日志。', 'fail');
+    } catch {
+      onToast?.('日志导出失败，请重试。', 'fail');
+    } finally {
+      exportRequest.current = null;
+      if (!controller.signal.aborted) setExportingRun(null);
     }
-    const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `${(flowName || 'task').replace(/[\\/:*?"<>|]/g, '_')}-${fmtClock(group.startedAt).replace(/[: ]/g, '')}.log`;
-    a.click();
-    URL.revokeObjectURL(a.href);
   };
 
   // API 由新到旧返回运行，同次运行内的步骤已经按执行顺序排列。
@@ -255,9 +290,7 @@ export default function LogStream({ flowId, flowName, onClose, onToast, onFix })
             <div key={g.runId} className="logstream-group">
               <div className="logstream-run">
                 <span className={`badge ${g.status === 'success' ? 'ok' : g.status === 'failed' ? 'fail' : g.status === 'cancelled' ? 'warn' : ''}`}>
-                  {g.status === 'success' ? '成功' : g.status === 'failed'
-                    ? (g.interrupted ? '已中断' : g.timedOut ? '超时' : '失败')
-                    : g.status === 'cancelled' ? '已取消' : g.status === 'queued' ? '排队中' : '运行中'}
+                  {runStatus(g)}
                 </span>
                 <span className="logstream-time">{fmtClock(g.startedAt)}</span>
                 <span className="logstream-count">{g.visibleItems.length} 条</span>
@@ -266,8 +299,8 @@ export default function LogStream({ flowId, flowName, onClose, onToast, onFix })
                 <button className="small icon-text" aria-expanded={debugRun === g.runId} onClick={() => setDebugRun((id) => id === g.runId ? null : g.runId)} title="查看这次运行的每步细节">
                   <IconBug size={13} /> {debugRun === g.runId ? '收起调试' : '调试'}
                 </button>
-                <button className="small icon-text" onClick={() => exportRun(g)} title="导出这次运行日志为 .log 文件">
-                  <IconDownload size={13} /> 导出
+                <button className="small icon-text" disabled={exportingRun !== null} onClick={() => exportRun(g)} title="导出这次运行日志为 .log 文件">
+                  <IconDownload size={13} /> {exportingRun === g.runId ? '导出中…' : '导出'}
                 </button>
               </div>
               {g.status === 'failed' && g.diagnosis?.cause && (
