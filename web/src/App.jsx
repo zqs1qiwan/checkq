@@ -9,6 +9,8 @@ import { setToastLevel } from './toast.js';
 
 export default function App() {
   const [view, setView] = useState('loading');
+  const [user, setUser] = useState(null);
+  const [sessionError, setSessionError] = useState(false);
   // 编辑器目标：任务流程图，或模板流程图（模板编辑不新建任务）
   const [editor, setEditor] = useState(null); // { kind: 'flow' | 'template', id }
   const [Editor, setEditorComponent] = useState(null);
@@ -27,29 +29,49 @@ export default function App() {
   };
   const backToList = () => setView('list');
 
+  const showLogin = () => {
+    setUser(null);
+    setView('login');
+  };
+  const enterList = (account) => {
+    setUser(account);
+    setView('list');
+    api.uiSettings().then((s) => setToastLevel(s.toastLevel)).catch(() => {});
+  };
+  const checkSession = () => {
+    setSessionError(false);
+    api.me().then((session) => {
+      if (session.authenticated) enterList(session.user);
+      else showLogin();
+    }).catch(() => setSessionError(true));
+  };
+
   useEffect(() => {
-    set401Handler(() => setView('login'));
-    // 先问「我是谁」：/api/me 是公开端点，未登录也返回 200，
-    // 直接拉 /api/flows 会在登录页产生一堆 401 报错（控制台噪音）。
-    api.me()
-      .then((r) => {
-        if (!r.authenticated) { setView('login'); return; }
-        api.flows().then(() => setView('list')).catch(() => setView('login'));
-        // 提示级别（服务端为准，失败则用本地缓存）
-        api.uiSettings().then((s) => setToastLevel(s.toastLevel)).catch(() => {});
-      })
-      .catch(() => setView('login'));
+    set401Handler(showLogin);
+    checkSession();
+    return () => set401Handler(null);
   }, []);
 
   return (
     <>
-      {view === 'loading' && <div className="boot"><Logo size={30} wordSize={17} /><span>正在加载…</span></div>}
-      {view === 'login' && <Login onOk={() => { setView('list'); api.uiSettings().then((s) => setToastLevel(s.toastLevel)).catch(() => {}); }} />}
+      {view === 'loading' && (
+        <div className="boot">
+          <Logo size={30} wordSize={17} />
+          {sessionError ? <span role="alert">无法检查登录状态。</span> : <span role="status">正在加载…</span>}
+          {sessionError && <button className="small" onClick={checkSession}>重试</button>}
+        </div>
+      )}
+      {view === 'login' && <Login onOk={enterList} />}
       {view === 'list' && (
         <FlowList
+          me={user}
           onOpen={(id) => openEditor('flow', id)}
           onEditTemplate={(id) => openEditor('template', id)}
-          onLogout={async () => { try { await api.logout(); } catch {} setView('login'); }}
+          onSettingsClose={() => api.me().then((session) => {
+            if (session.authenticated) setUser(session.user);
+            else showLogin();
+          }).catch(() => {})}
+          onLogout={async () => { try { await api.logout(); } catch {} showLogin(); }}
         />
       )}
       {view === 'editor' && editor && (

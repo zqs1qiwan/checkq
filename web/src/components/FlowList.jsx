@@ -21,7 +21,7 @@ import { InstantiateModal, CurlImportModal, CsvImportModal, NotificationsModal, 
 // 沿用任务列表的 640px 窄屏断点，让分组行只跨实际渲染的列。
 const COMPACT_TASK_COLUMNS = '(max-width: 640px)';
 
-export default function FlowList({ onOpen, onEditTemplate, onLogout }) {
+export default function FlowList({ me, onOpen, onEditTemplate, onLogout, onSettingsClose }) {
   const [flows, setFlows] = useState(null);
   const [templates, setTemplates] = useState(null);
   const [modal, setModal] = useState(null); // 'new' | 'import' | 'template-editor' | {type:'instantiate', tpl} | {type:'result', run}
@@ -34,7 +34,7 @@ export default function FlowList({ onOpen, onEditTemplate, onLogout }) {
   const [viewTab, setViewTab] = useState('flows'); // 首页大 tab：任务 / 模板 / 市场
   const [features, setFeatures] = useState(null); // { demo: true } 演练场是否可用
   const [unread, setUnread] = useState(0);
-  const [me, setMe] = useState(null);
+  const [flowsError, setFlowsError] = useState('');
   const [, setThemeTick] = useState(0); // 移动端「切换主题」后强制重渲染菜单文案
   const [selected, setSelected] = useState(new Set());
   const [batchBusy, setBatchBusy] = useState(false);
@@ -76,8 +76,14 @@ export default function FlowList({ onOpen, onEditTemplate, onLogout }) {
     refreshInFlight.current = request;
     const isCurrent = () => refreshInFlight.current === request;
     const requests = [
-      api.flows().then((result) => { if (isCurrent()) setFlows(result); }).catch((error) => {
-        if (isCurrent() && !silent) setToast({ kind: 'fail', text: error.message });
+      api.flows().then((result) => {
+        if (!isCurrent()) return;
+        setFlows(result);
+        setFlowsError('');
+      }).catch((error) => {
+        if (!isCurrent() || error.status === 401) return;
+        setFlowsError('任务列表加载失败。');
+        if (!silent && flows !== null) setToast({ kind: 'fail', text: error.message });
       }),
       api.templates().then((result) => { if (isCurrent()) setTemplates(result); }).catch(() => {}),
       api.stats().then((result) => {
@@ -107,11 +113,6 @@ export default function FlowList({ onOpen, onEditTemplate, onLogout }) {
 
   // 演练场是否可用（P0-1）：以服务端开关为准，不自己写死
   useEffect(() => { api.features().then(setFeatures).catch(() => setFeatures({ demo: false })); }, []);
-
-  // 当前登录身份（用户名 / 角色）
-  useEffect(() => {
-    api.me().then((r) => setMe(r.authenticated ? r.user : null)).catch(() => {});
-  }, []);
 
   const updateUnread = (count) => {
     unreadRevision.current++;
@@ -322,7 +323,14 @@ export default function FlowList({ onOpen, onEditTemplate, onLogout }) {
     return `${base}；自动恢复每 ${rec.intervalMinutes} 分钟探测一次`;
   };
 
-  if (flows === null) return <div className="boot">加载中…</div>;
+  if (flows === null) {
+    return (
+      <div className="boot">
+        {flowsError ? <span role="alert">{flowsError}</span> : <span role="status">加载中…</span>}
+        {flowsError && <button className="small" onClick={() => { setFlowsError(''); load(); }}>重试</button>}
+      </div>
+    );
+  }
   const readOnly = me?.role === 'viewer';
   const demoOn = features ? features.demo !== false : false;
 
@@ -776,7 +784,7 @@ export default function FlowList({ onOpen, onEditTemplate, onLogout }) {
       )}
 
       {modal === 'settings' && (
-        <SettingsModal onClose={() => setModal(null)} />
+        <SettingsModal onClose={() => { setModal(null); onSettingsClose(); }} />
       )}
 
       {notifOpen && (

@@ -45,8 +45,8 @@ export default function Login({ onOk }) {
     setBusy(true);
     setErr('');
     try {
-      await api.login(username.trim() || undefined, password, code.trim() || undefined);
-      onOk();
+      const { user } = await api.login(username.trim() || undefined, password, code.trim() || undefined);
+      onOk(user);
     } catch (e2) {
       const msg = e2.message || '登录失败';
       if (e2.data?.needTotp || e2.needTotp || msg.includes('两步')) {
@@ -71,8 +71,8 @@ export default function Login({ onOk }) {
     setBusy(true);
     try {
       await api.setupAccount(username.trim(), password);
-      await api.login(username.trim(), password);
-      onOk();
+      const { user } = await api.login(username.trim(), password);
+      onOk(user);
     } catch (e2) {
       setErr(e2.message);
     } finally {
