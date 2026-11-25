@@ -162,6 +162,29 @@ test('log pagination advances by last included run, not a fixed offset', async (
   assert.equal(page2.entries.some((e) => page1.entries.some((x) => x.runId === e.runId)), false, '翻页不重复上一页运行');
 });
 
+test('log pages expose every zero-step run and stop scanning after the page boundary', async (t) => {
+  const { app, store, scheduler } = buildServer({ dataDir: directory(t), port: 0 });
+  t.after(async () => { scheduler.stop(); await app.close(); });
+  const login = await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'test1234' } });
+  const headers = { cookie: login.headers['set-cookie'].split(';')[0] };
+  const flow = store.createFlow({ name: 'zero-step history' });
+  let visited = 0;
+  const records = Array.from({ length: 63 }, (_, i) => ({
+    id: `empty-${i}`, status: 'cancelled', logs: [],
+    get flowId() { visited++; return flow.id; },
+  }));
+  store.runs = records;
+  const url = `/api/flows/${flow.id}/logs`;
+  const first = (await app.inject({ url, headers })).json();
+  assert.equal(visited, 61, 'no need to collect the remainder of the history');
+  assert.equal(first.entries.length, 0);
+  assert.deepEqual(first.runs.map((run) => run.id), records.slice(0, 60).map((run) => run.id));
+  assert.equal(first.hasMore, true);
+  const older = (await app.inject({ url: `${url}?before=${first.nextBefore}`, headers })).json();
+  assert.deepEqual(older.runs.map((run) => run.id), ['empty-60', 'empty-61', 'empty-62']);
+  assert.equal(older.hasMore, false);
+});
+
 test('log pagination returns every line of a long run within the row limit', async (t) => {
   const dir = directory(t);
   const { app, store, scheduler } = buildServer({ dataDir: dir, port: 0 });

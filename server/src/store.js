@@ -641,17 +641,22 @@ export class Store {
     this.#flushFile(this.runsFile, this.runs);
   }
 
+  *iterateFlowRuns(flowId, limit) {
+    let count = 0;
+    for (const run of this.runs) {
+      if (count === limit) return;
+      if (run.flowId !== flowId) continue;
+      count++;
+      yield run;
+    }
+  }
+
   listRuns(flowId, limit = 30) {
     if (!flowId) return this.runs.slice(0, limit);
     if (!Number.isInteger(limit) || limit < 0) {
       return this.runs.filter((run) => run.flowId === flowId).slice(0, limit);
     }
-    const matches = [];
-    for (const run of this.runs) {
-      if (matches.length === limit) break;
-      if (run.flowId === flowId) matches.push(run);
-    }
-    return matches;
+    return [...this.iterateFlowRuns(flowId, limit)];
   }
 
   getRun(id) {

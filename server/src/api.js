@@ -2390,31 +2390,42 @@ export function buildServer({ dataDir, port }) {
     const q = req.query || {};
     const limit = Math.floor(Math.min(Math.max(Number(q.limit) || 200, 20), 2000));
     const before = q.before ? String(q.before) : null;
-    const runs = store.listRuns(f.id, 500);
-    let runIndex = 0;
+    let runs = store.iterateFlowRuns(f.id, 500);
+    let skipUntil = before;
     let resumeEnd = null;
-    if (before) {
-      const exact = runs.findIndex((run) => run.id === before);
-      if (exact >= 0) {
-        runIndex = exact + 1;
-      } else {
-        const cursor = /^(.+):(\d+)$/.exec(before);
-        runIndex = cursor ? runs.findIndex((run) => run.id === cursor[1]) : -1;
-        resumeEnd = cursor ? Number(cursor[2]) : null;
-        if (runIndex < 0 || !Number.isSafeInteger(resumeEnd) || resumeEnd < 1) {
-          return { entries: [], runs: [], hasMore: false, nextBefore: null };
-        }
+    const segment = before && /^(.+):(\d+)$/.exec(before);
+    if (segment) {
+      // 旧记录的完整 ID 可能形似分段游标，优先匹配完整 ID。
+      const history = [...runs];
+      const exact = history.findIndex((run) => run.id === before);
+      const index = exact >= 0 ? exact + 1 : history.findIndex((run) => run.id === segment[1]);
+      if (exact < 0) resumeEnd = Number(segment[2]);
+      if (index < 0 || (resumeEnd !== null && (!Number.isSafeInteger(resumeEnd) || resumeEnd < 1))) {
+        return { entries: [], runs: [], hasMore: false, nextBefore: null };
       }
+      runs = history.slice(index);
+      skipUntil = null;
     }
 
     const entries = [];
     const summaries = [];
     let nextBefore = null;
-    for (; runIndex < runs.length; runIndex++, resumeEnd = null) {
-      const r = runs[runIndex];
+    let hasMore = false;
+    for (const r of runs) {
+      if (skipUntil) {
+        if (r.id === skipUntil) skipUntil = null;
+        continue;
+      }
+      if (summaries.length >= 60 || entries.length >= limit) {
+        hasMore = true;
+        break;
+      }
       const logs = r.logs || [];
       const end = Math.min(resumeEnd ?? logs.length, logs.length);
-      if (entries.length && entries.length + end > limit) break;
+      if (entries.length && entries.length + end > limit) {
+        hasMore = true;
+        break;
+      }
       const start = Math.max(0, end - limit);
       const split = start > 0 || resumeEnd !== null;
       entries.push(...logs.slice(start, end).map((l, i) => ({
@@ -2434,21 +2445,19 @@ export function buildServer({ dataDir, port }) {
         finalMessage: r.finalMessage || '',
         diagnosis: r.diagnosis || null,
       })));
-      if (summaries.length < 60) {
-        summaries.push({
-          id: r.id, startedAt: r.startedAt, status: r.status, count: logs.length,
-          interrupted: r.interrupted, timedOut: r.timedOut,
-          summary: r.summary || '', finalMessage: r.finalMessage || '', diagnosis: r.diagnosis || null,
-        });
-      }
+      summaries.push({
+        id: r.id, startedAt: r.startedAt, status: r.status, count: logs.length,
+        interrupted: r.interrupted, timedOut: r.timedOut,
+        summary: r.summary || '', finalMessage: r.finalMessage || '', diagnosis: r.diagnosis || null,
+      });
       nextBefore = start > 0 ? `${r.id}:${start}` : r.id;
-      if (start > 0) break;
-      if (entries.length >= limit) {
-        runIndex++;
+      if (start > 0) {
+        hasMore = true;
         break;
       }
+      resumeEnd = null;
     }
-    return { entries, runs: summaries, hasMore: runIndex < runs.length, nextBefore };
+    return { entries, runs: summaries, hasMore, nextBefore };
   });
 
   // 界面偏好（提示级别等）：全局设置

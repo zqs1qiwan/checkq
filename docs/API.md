@@ -235,7 +235,7 @@ data: { "id":"run-xxx", "status":"success", "durationMs":..., "summary":"...", "
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | /api/system/push-targets | 兼容一版：系统渠道摘要 `[{ id, type, title, enabled }]` |
-| GET | /api/flows/:id/logs | 连续日志流。若 `hasMore` 为真，请原样传回 `nextBefore` 作为 `before`。旧版运行 ID 游标仍可使用。 |
+| GET | /api/flows/:id/logs | 连续日志流。每页最多返回 60 条运行摘要，零步骤运行也占一个摘要。若 `hasMore` 为真，请原样传回 `nextBefore` 作为 `before`。旧版运行 ID 游标仍可使用。 |
 | GET | /api/system/backup | 脱敏备份（凭据已清空） |
 | POST | /api/system/backup | 完整备份（需当前密码，含明文凭据） |
 
