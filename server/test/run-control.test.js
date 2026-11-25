@@ -165,6 +165,28 @@ test('run and inbox updates persist immediately without rewriting unrelated file
   assert.equal(fs.statSync(store.runsFile).mtimeMs, oldTime * 1000);
 });
 
+test('run retention keeps the first 500 records per task in history order', (t) => {
+  const dir = directory(t);
+  const before = new Store(dir);
+  const history = Array.from({ length: 502 }, (_, i) => ({ id: `a-${i}`, flowId: 'a', status: 'success' }));
+  history.splice(2, 0, { id: 'b-0', flowId: 'b', status: 'success' });
+  fs.writeFileSync(before.runsFile, JSON.stringify(history));
+  const store = new Store(dir);
+  assert.equal(store.runs.length, 503, 'legacy history is retained until the first run write');
+
+  store.addRun({ ...history[1], status: 'failed' });
+  assert.deepEqual(store.runs.map((run) => run.id), history.slice(0, 501).map((run) => run.id));
+  assert.equal(store.getRun('a-1').status, 'failed');
+
+  store.addRun({ id: 'a-new', flowId: 'a', status: 'success' });
+  assert.equal(store.getRun('a-499'), null);
+  store.addRun({ id: 'b-0', flowId: 'a', status: 'success' });
+  assert.equal(store.getRun('a-498'), null);
+  assert.equal(store.runs.length, 500);
+  assert.deepEqual(store.runs.slice(0, 4).map((run) => run.id), ['a-new', 'a-0', 'a-1', 'b-0']);
+  assert.deepEqual(JSON.parse(fs.readFileSync(store.runsFile, 'utf8')), store.runs);
+});
+
 test('startup closes interrupted runs without executing or changing their tasks', async (t) => {
   const dir = directory(t);
   const before = new Store(dir);

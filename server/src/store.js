@@ -70,7 +70,11 @@ function sameLogic(nodesA, edgesA, nodesB, edgesB) {
   return norm(nodesA, edgesA) === norm(nodesB, edgesB);
 }
 
+const RUNS_PER_FLOW = 500;
+
 export class Store {
+  #runRetentionChecked = false;
+
   constructor(dataDir) {
     this.dir = dataDir;
     fs.mkdirSync(dataDir, { recursive: true });
@@ -604,20 +608,31 @@ export class Store {
 
   // ---- runs ----
   addRun(run) {
-    // 幂等：同 id 覆盖（避免重复入列）
     const i = this.runs.findIndex((r) => r.id === run.id);
-    if (i >= 0) {
-      this.runs[i] = run;
-    } else {
-      this.runs.unshift(run);
+    const addsToFlow = i < 0 || this.runs[i].flowId !== run.flowId;
+    if (i < 0) this.runs.unshift(run);
+    else this.runs[i] = run;
+
+    if (!this.#runRetentionChecked) {
+      // 首次写入仍检查从磁盘读入的旧历史。
+      const counts = new Map();
+      this.runs = this.runs.filter((entry) => {
+        const count = (counts.get(entry.flowId) || 0) + 1;
+        counts.set(entry.flowId, count);
+        return count <= RUNS_PER_FLOW;
+      });
+      this.#runRetentionChecked = true;
+    } else if (addsToFlow) {
+      // 只有目标任务可能多出一条。直接移除第 501 条，保留其余记录的顺序。
+      let count = 0;
+      for (let index = 0; index < this.runs.length; index++) {
+        if (this.runs[index].flowId !== run.flowId) continue;
+        if (++count > RUNS_PER_FLOW) {
+          this.runs.splice(index, 1);
+          break;
+        }
+      }
     }
-    // 每 flow 保留最近 500
-    const per = new Map();
-    this.runs = this.runs.filter((r) => {
-      const n = (per.get(r.flowId) || 0) + 1;
-      per.set(r.flowId, n);
-      return n <= 500;
-    });
     this.flushRuns();
   }
 
