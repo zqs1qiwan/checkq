@@ -88,7 +88,7 @@ X-API-Key: <key>
 | GET | /api/system/settings | `{ hasApiKey, apiKey }` |
 | POST | /api/system/password | `{ oldPassword, newPassword }` |
 | POST | /api/system/apikey | 生成/重新生成 API Key，返回 `{ apiKey }` |
-| GET | /api/system/stats | `{ flows, enabledScheduled, templates, todayRuns, todaySuccess, todayFailed, successRate, nextRunAt, runningFlowIds, queuedFlowIds, queuedFlows, queueCount, runningCount, maxConcurrency, globalWaiting, dailySummary }` |
+| GET | /api/system/stats | `{ flows, enabledScheduled, templates, todayRuns, todaySuccess, todayFailed, successRate, nextRunAt, nextFlowName, runningFlowIds, queuedFlowIds, queuedFlows, queueCount, runningCount, maxConcurrency, globalWaiting, dailySummary, unreadNotifications }`。今日按服务器本地日期和运行开始时间统计，已取消计入总数，排队中与运行中单独统计。 |
 | GET | /api/system/ai | AI 助手配置（任意登录用户）：`{ configured, baseUrl, model, apiKey(打码前缀…), hasKey, timeoutSec, maxTokens }`；API Key 永不回显明文 |
 | PUT | /api/system/ai | 保存 AI 配置（**仅 admin**）：`{ baseUrl, apiKey, model, timeoutSec?, maxTokens? }`。`baseUrl` 仅 http(s)，自动去尾 `/` 并兼容 `.../v1` 与 `.../v1/chat/completions`；`timeoutSec` 5–120（默认 60）、`maxTokens` 1–4096（默认 1024）；`model` 必填；`apiKey` 传空或打码占位保留旧 Key，三个字段全空=清空配置；审计 `ai.config.save`（不记 Key） |
 | POST | /api/ai/test | 测试连接（**仅 admin**）：用已保存配置发一条最小请求，body 可带 `{ timeoutSec }`（1–120，仅本次覆盖）→ `{ ok, latencyMs, model, sample, usage }`。上游 401/404/超时/非 JSON 返回中文 `error`（已脱敏，不含 Key）；审计 `ai.test` |

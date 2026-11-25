@@ -36,6 +36,19 @@ ok(A.today.rate === 50, '今日成功率 50%');
 ok(B.today.runs === 1 && B.today.rate === 100, '另一个任务的今日统计独立');
 ok(C.today.runs === 0 && C.today.rate === null, '未运行任务 rate=null');
 
+const nextDay = new Date(today);
+nextDay.setHours(0, 0, 0, 0);
+nextDay.setDate(nextDay.getDate() + 1);
+store.addRun({ id: 'cancelled', flowId: a.id, status: 'cancelled', startedAt: new Date(today).toISOString(), logs: [] });
+store.addRun({ id: 'active', flowId: a.id, status: 'running', startedAt: today, logs: [] });
+store.addRun({ id: 'queued', flowId: b.id, status: 'queued', startedAt: today, logs: [] });
+store.addRun({ id: 'next-day', flowId: b.id, status: 'failed', startedAt: nextDay.getTime(), logs: [] });
+const stats = store.stats();
+const withCancellation = store.listFlows().find((f) => f.id === a.id);
+const statsMatch = stats.todayRuns === 4 && stats.todaySuccess === 2 && stats.todayFailed === 1 && stats.successRate === 50;
+ok(statsMatch, '首页概览只统计今天已结束的运行');
+ok(withCancellation.today.runs === 3 && withCancellation.today.rate === 33, '兼容 ISO 时间并保持已取消运行的统计口径');
+
 store.updateFlow(a.id, { group: '  新   组  ' });
 ok(store.getFlowRaw(a.id).group === '新 组', '更新分组名时压缩空白');
 store.updateFlow(a.id, { group: 'x'.repeat(100) });

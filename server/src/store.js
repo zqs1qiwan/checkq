@@ -27,10 +27,18 @@ function normalizeGroup(v) {
   return String(v ?? '').trim().replace(/\s+/g, ' ').slice(0, 40);
 }
 
-/** 是否同一天（服务器本地日期；用于「今日成功/失败」统计） */
-function sameDay(ts, ref = Date.now()) {
-  const a = new Date(ts), b = new Date(ref);
-  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+function localDayBounds() {
+  const day = new Date();
+  const start = day.setHours(0, 0, 0, 0);
+  const end = new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1).getTime();
+  return { start, end };
+}
+
+function completedInRange(run, start, end) {
+  if (run.status !== 'success' && run.status !== 'failed' && run.status !== 'cancelled') return false;
+  const { startedAt } = run;
+  const time = typeof startedAt === 'number' ? startedAt : new Date(startedAt).getTime();
+  return time >= start && time < end;
 }
 
 /**
@@ -294,12 +302,12 @@ export class Store {
 
   listFlows() {
     // 预聚合「今日」运行统计（按服务器本地日期），避免每个任务都扫一遍 runs
+    const { start, end } = localDayBounds();
     const todayByFlow = new Map();
     const lastByFlow = new Map();
     for (const r of this.runs) {
       if (!lastByFlow.has(r.flowId)) lastByFlow.set(r.flowId, r);
-      if (!['success', 'failed', 'cancelled'].includes(r.status)) continue; // 排队/运行中不进入今日统计
-      if (!sameDay(r.startedAt)) continue;
+      if (!completedInRange(r, start, end)) continue;
       const rec = todayByFlow.get(r.flowId) || { runs: 0, success: 0, failed: 0 };
       rec.runs++;
       if (r.status === 'success') rec.success++;
@@ -886,7 +894,7 @@ export class Store {
       .filter((f) => f.pausedAt && f.pausedAt >= startMs && f.pausedAt <= endMs)
       .map((f) => ({ flowName: f.name || '', at: f.pausedAt, reason: f.pausedReason || '' }));
 
-    const base = this.stats();
+    const { nextFlowName, nextRunAt } = this.#scheduleSummary();
     return {
       window: { startMs, endMs },
       enabledFlows: this.flows.filter((f) => f.enabled).length,
@@ -896,22 +904,18 @@ export class Store {
       rate: inWindow.length ? Math.round((success / inWindow.length) * 100) : null,
       failures,
       paused,
-      next: { flowName: base.nextFlowName || '', at: base.nextRunAt || null },
+      next: { flowName: nextFlowName || '', at: nextRunAt },
       empty: inWindow.length === 0,
     };
   }
 
-  stats() {
-    const start = new Date();
-    start.setHours(0, 0, 0, 0);
-    const todayStart = start.getTime();
-    const todayRuns = this.runs.filter((r) => (r.startedAt || 0) >= todayStart);
-    const success = todayRuns.filter((r) => r.status === 'success').length;
-    const failed = todayRuns.filter((r) => r.status === 'failed').length;
-    const enabled = this.flows.filter((f) => f.enabled && f.cron);
+  #scheduleSummary() {
+    let enabledScheduled = 0;
     let nextRunAt = null;
     let nextFlowName = null;
-    for (const f of enabled) {
+    for (const f of this.flows) {
+      if (!f.enabled || !f.cron) continue;
+      enabledScheduled++;
       // 复用 nextRunAt 的 cron|时区缓存，避免每次统计都为每个任务新建 Cron 对象
       const next = this.nextRunAt(f);
       if (next && (nextRunAt === null || next < nextRunAt)) {
@@ -919,16 +923,28 @@ export class Store {
         nextFlowName = f.name || '';
       }
     }
+    return { enabledScheduled, nextRunAt, nextFlowName };
+  }
+
+  stats() {
+    const { start, end } = localDayBounds();
+    let todayRuns = 0;
+    let todaySuccess = 0;
+    let todayFailed = 0;
+    for (const run of this.runs) {
+      if (!completedInRange(run, start, end)) continue;
+      todayRuns++;
+      if (run.status === 'success') todaySuccess++;
+      else if (run.status === 'failed') todayFailed++;
+    }
     return {
       flows: this.flows.length,
-      enabledScheduled: enabled.length,
       templates: this.templates.length,
-      todayRuns: todayRuns.length,
-      todaySuccess: success,
-      todayFailed: failed,
-      successRate: todayRuns.length ? Math.round((success / todayRuns.length) * 100) : null,
-      nextRunAt,
-      nextFlowName, // 下一次调度属于哪个任务（首页健康条提示用）
+      todayRuns,
+      todaySuccess,
+      todayFailed,
+      successRate: todayRuns ? Math.round((todaySuccess / todayRuns) * 100) : null,
+      ...this.#scheduleSummary(),
     };
   }
 }
