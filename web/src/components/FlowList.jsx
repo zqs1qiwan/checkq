@@ -395,11 +395,6 @@ export default function FlowList({ onOpen, onEditTemplate, onLogout }) {
         {stats && (
           <div className="status-rail">
             <span className="meta">
-              <span>任务 <b>{stats.flows}</b></span>
-              <span>调度中 <b>{stats.enabledScheduled}</b></span>
-              <span>模板 <b>{stats.templates}</b></span>
-            </span>
-            <span className="meta">
               <span>今日 <b>{stats.todayRuns}</b> 次</span>
               <span>成功 <b>{stats.todaySuccess}</b></span>
               <span className={stats.todayFailed ? 'fail-n' : ''}>失败 <b className={stats.todayFailed ? 'fail-n' : ''}>{stats.todayFailed}</b></span>
