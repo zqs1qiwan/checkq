@@ -95,6 +95,8 @@ flowchart TB
 6. 恢复探测：`scheduler.js` 每 60s 扫描「已暂停 + recovery.enabled」的任务，到点以 `trigger='probe'`、`{ notify:false }` 调用 `runFlow`；成功自动启用，失败累计次数，达到上限停止。探测关闭任务级重试，一次探测只跑一次。
 7. 若请求带 `stream: true`，同上过程通过 SSE 推 `start（含 runId） / log / done`；`POST /api/runs/:id/cancel` 可在另一条请求里中断这次运行。
 
+**重启对账**：`Store` 初始化时扫描已落盘的运行历史，将 `queued` / `running` 收束为 `failed` + `interrupted: true`，保留已有日志并追加一条原因说明。仅当有遗留记录时原子写回 `runs.json`。此路径不经过执行器、通知或自动停用逻辑。
+
 **存储**：六个 JSON 文件，全量读写；没有数据库、没有外部依赖。这就是"零依赖"的来源，也是容量上限的来源。`flows.json`、`templates.json`、`channels.json` 共用 AES-256-GCM 密钥；`meta.json` 的 AI Key 与旧 API Key 也走同一加密（内存明文、落盘密文）。
 
 **出口安全**：运行日志在写入 `runs.json` 和 SSE 推送前统一经过 `redact.js`；默认备份、任务/模板导出也走同一套脱敏。执行状态（`state.vars` / `last`）保留原值，脱敏只发生在对外出口。

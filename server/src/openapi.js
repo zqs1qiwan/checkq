@@ -86,7 +86,9 @@ export function buildOpenApi() {
           type: 'object',
           properties: {
             id: { type: 'string' }, flowId: { type: 'string' }, trigger: { type: 'string', enum: ['manual', 'cron', 'debug', 'probe'] },
-            status: { type: 'string', enum: ['success', 'failed', 'running'] },
+            status: { type: 'string', enum: ['queued', 'running', 'success', 'failed', 'cancelled'] },
+            interrupted: { type: 'boolean', description: '服务重启时尚未结束的运行' },
+            timedOut: { type: 'boolean' }, cancelled: { type: 'boolean' },
             startedAt: { type: 'integer' }, durationMs: { type: 'integer' },
             finalMessage: { type: 'string' }, summary: { type: 'string' },
             logs: { type: 'array', items: { type: 'object', description: '步骤日志（人话日志）' } },
@@ -97,6 +99,7 @@ export function buildOpenApi() {
           type: 'object',
           properties: {
             runId: { type: 'string' }, startedAt: { type: 'integer' }, status: { type: 'string' },
+            interrupted: { type: 'boolean' }, timedOut: { type: 'boolean' },
             index: { type: 'integer' }, name: { type: 'string' }, message: { type: 'string' },
             type: { type: 'string' }, ok: { type: 'boolean' }, ms: { type: 'integer' },
           },

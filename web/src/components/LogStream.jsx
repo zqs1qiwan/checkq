@@ -96,6 +96,7 @@ export default function LogStream({ flowId, flowName, onClose, onToast, onFix })
     }
     else groups.push({
       runId: e.runId, startedAt: e.startedAt, status: e.status, summary: e.summary,
+      interrupted: e.interrupted, timedOut: e.timedOut,
       finalMessage: e.finalMessage, diagnosis: e.diagnosis, items: [e],
     });
   }
@@ -121,7 +122,9 @@ export default function LogStream({ flowId, flowName, onClose, onToast, onFix })
             <div key={g.runId + '@' + g.startedAt} className="logstream-group">
               <div className="logstream-run">
                 <span className={`badge ${g.status === 'success' ? 'ok' : g.status === 'failed' ? 'fail' : g.status === 'cancelled' ? 'warn' : ''}`}>
-                  {g.status === 'success' ? '成功' : g.status === 'failed' ? (g.timedOut ? '超时' : '失败') : g.status === 'cancelled' ? '已取消' : '运行中'}
+                  {g.status === 'success' ? '成功' : g.status === 'failed'
+                    ? (g.interrupted ? '已中断' : g.timedOut ? '超时' : '失败')
+                    : g.status === 'cancelled' ? '已取消' : g.status === 'queued' ? '排队中' : '运行中'}
                 </span>
                 <span className="logstream-time">{fmtClock(g.startedAt)}</span>
                 <span className="logstream-count">{g.items.length} 条</span>

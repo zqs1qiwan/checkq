@@ -96,6 +96,58 @@ test('API exposes queued run and cancels a running flow', async (t) => {
   assert.equal(again.statusCode, 409, '已结束的运行不能再取消');
 });
 
+test('startup closes interrupted runs without executing or changing their tasks', async (t) => {
+  const dir = directory(t);
+  const before = new Store(dir);
+  const flow = before.createFlow({ ...delayFlow(), enabled: true, cron: '0 8 * * *' });
+  const startedAt = Date.now();
+  const savedLog = { index: 1, name: '等待', ok: true, message: '已开始' };
+  const savedRuns = [
+    { id: 'running', status: 'running', trigger: 'cron', logs: [savedLog] },
+    { id: 'queued', status: 'queued', trigger: 'manual', logs: [] },
+    { id: 'finished', status: 'success', trigger: 'manual', logs: [] },
+    { id: 'timeout', status: 'failed', timedOut: true, trigger: 'manual', logs: [] },
+  ].map((run) => ({ flowId: flow.id, startedAt, ...run }));
+  fs.writeFileSync(before.runsFile, JSON.stringify(savedRuns));
+
+  const { app, store, scheduler, runner } = buildServer({ dataDir: dir, port: 0 });
+  t.after(async () => { scheduler.stop(); await app.close(); });
+  const login = await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'test1234' } });
+  const headers = { cookie: login.headers['set-cookie'].split(';')[0] };
+  const history = await app.inject({ method: 'GET', url: `/api/runs?flowId=${flow.id}`, headers });
+  assert.equal(history.statusCode, 200, history.body);
+  const runs = history.json();
+  assert.deepEqual(runs.map((run) => run.id), ['running', 'queued', 'finished', 'timeout']);
+  for (const [index, run] of runs.slice(0, 2).entries()) {
+    assert.equal(run.status, 'failed');
+    assert.equal(run.interrupted, true);
+    assert.match(run.finalMessage, /服务重启.*运行中断/);
+    assert.equal(run.logs.at(-1).ok, false);
+    assert.equal(run.logs.at(-1).index, index === 0 ? 2 : 1);
+  }
+  assert.deepEqual(runs[0].logs[0], savedLog);
+  assert.deepEqual(runs.slice(2), savedRuns.slice(2));
+  assert.equal(runner.isBusy(flow.id), false);
+  assert.equal(store.getFlowRaw(flow.id).enabled, true);
+  assert.equal(store.getFlowRaw(flow.id).pausedAt, flow.pausedAt);
+  assert.equal(store.listNotifications().total, 0);
+
+  const flows = (await app.inject({ method: 'GET', url: '/api/flows', headers })).json();
+  assert.equal(flows.find((item) => item.id === flow.id).lastRun.interrupted, true);
+  const logs = (await app.inject({ method: 'GET', url: `/api/flows/${flow.id}/logs`, headers })).json();
+  assert.equal(logs.entries.find((entry) => entry.runId === 'queued').interrupted, true);
+  assert.equal(logs.runs.find((run) => run.id === 'timeout').timedOut, true);
+  const cancel = await app.inject({ method: 'POST', url: '/api/runs/running/cancel', headers, payload: {} });
+  assert.equal(cancel.statusCode, 409);
+  assert.deepEqual(JSON.parse(fs.readFileSync(store.runsFile, 'utf8')), runs);
+  const reopened = new Store(dir);
+  assert.deepEqual(reopened.listRuns(flow.id), runs);
+  assert.deepEqual(reopened.listRuns(flow.id, 2), runs.slice(0, 2));
+  assert.deepEqual(reopened.listRuns(undefined, 1), runs.slice(0, 1));
+  assert.deepEqual(reopened.listRuns(flow.id, 0), []);
+  assert.deepEqual(reopened.listRuns('other'), []);
+});
+
 test('cancel rejects unknown and cross-scope runs', async (t) => {
   const dir = directory(t);
   const { app, store, scheduler } = buildServer({ dataDir: dir, port: 0 });

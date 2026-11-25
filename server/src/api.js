@@ -2380,6 +2380,8 @@ export function buildServer({ dataDir, port }) {
         runId: r.id,
         startedAt: r.startedAt,
         status: r.status,
+        interrupted: r.interrupted,
+        timedOut: r.timedOut,
         index: l.index,
         name: l.name,
         message: l.message || '',
@@ -2403,6 +2405,7 @@ export function buildServer({ dataDir, port }) {
       entries: truncated,
       runs: runs.slice(0, Math.min(60, consumed)).map((r) => ({
         id: r.id, startedAt: r.startedAt, status: r.status, count: (r.logs || []).length,
+        interrupted: r.interrupted, timedOut: r.timedOut,
         summary: r.summary || '', finalMessage: r.finalMessage || '', diagnosis: r.diagnosis || null,
       })),
       hasMore,

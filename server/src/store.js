@@ -146,6 +146,26 @@ export class Store {
       delete this.meta.firstRunPassword;
       this.#save(this.metaFile, encryptMeta(this.secretKey, this.meta));
     }
+    this.#reconcileInterruptedRuns();
+  }
+
+  #reconcileInterruptedRuns() {
+    const message = '服务重启，运行中断';
+    let changed = false;
+    for (const run of this.runs) {
+      if (run.status !== 'queued' && run.status !== 'running') continue;
+      run.status = 'failed';
+      run.interrupted = true;
+      run.finalMessage = message;
+      delete run.cancelling;
+      run.logs ??= [];
+      run.logs.push({
+        stepId: null, index: run.logs.length + 1, name: '服务重启', type: 'system',
+        ok: false, message, detail: null, ms: 0,
+      });
+      changed = true;
+    }
+    if (changed) this.#save(this.runsFile, this.runs);
   }
 
   #load(file, fallback) {
@@ -305,6 +325,7 @@ export class Store {
       const last = lastByFlow.get(f.id) || null;
       const lastRun = last ? {
         id: last.id, status: last.status, startedAt: last.startedAt, finalMessage: last.finalMessage,
+        interrupted: last.interrupted, timedOut: last.timedOut,
       } : null;
       const t = todayByFlow.get(f.id) || { runs: 0, success: 0, failed: 0 };
       const today = {
@@ -591,7 +612,16 @@ export class Store {
   }
 
   listRuns(flowId, limit = 30) {
-    return this.runs.filter((r) => !flowId || r.flowId === flowId).slice(0, limit);
+    if (!flowId) return this.runs.slice(0, limit);
+    if (!Number.isInteger(limit) || limit < 0) {
+      return this.runs.filter((run) => run.flowId === flowId).slice(0, limit);
+    }
+    const matches = [];
+    for (const run of this.runs) {
+      if (matches.length === limit) break;
+      if (run.flowId === flowId) matches.push(run);
+    }
+    return matches;
   }
 
   getRun(id) {

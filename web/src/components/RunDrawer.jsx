@@ -127,7 +127,7 @@ export default function RunDrawer({ run, flowId, onClose, onPickResponse, onRepP
   const liveRun = !override && shown.status !== 'success' && shown.status !== 'failed' && shown.status !== 'cancelled';
 
   const statusLabel = shown.status === 'success' ? '执行成功'
-    : shown.status === 'failed' ? (shown.timedOut ? '运行超时' : '执行失败')
+    : shown.status === 'failed' ? (shown.interrupted ? '已中断' : shown.timedOut ? '运行超时' : '执行失败')
     : shown.status === 'cancelled' ? '已取消'
     : shown.status === 'queued' ? '排队中' : '执行中';
   const failLog = shown.logs?.find((l) => !l.ok);

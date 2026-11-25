@@ -283,7 +283,8 @@ export default function FlowList({ onOpen, onEditTemplate, onLogout }) {
     }
     const ok = st === 'success';
     const cancelled = st === 'cancelled';
-    const label = ok ? '成功' : cancelled ? '已取消' : (f.lastRun.timedOut ? '超时' : '失败');
+    const label = ok ? '成功' : cancelled ? '已取消'
+      : f.lastRun.interrupted ? '已中断' : f.lastRun.timedOut ? '超时' : '失败';
     return (
       <button className={`badge ${ok ? 'ok' : cancelled ? 'warn' : 'fail'} badge-btn`}
         title="点击查看运行日志"
