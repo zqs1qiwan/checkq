@@ -2,7 +2,6 @@ import React, { useEffect, useState } from 'react';
 import { api, set401Handler } from './api.js';
 import Login from './components/Login.jsx';
 import FlowList from './components/FlowList.jsx';
-import FlowEditor from './components/FlowEditor.jsx';
 import GlobalToast from './components/GlobalToast.jsx';
 import Logo from './components/Logo.jsx';
 import { ConfirmHost } from './confirm.jsx';
@@ -12,12 +11,21 @@ export default function App() {
   const [view, setView] = useState('loading');
   // 编辑器目标：任务流程图，或模板流程图（模板编辑不新建任务）
   const [editor, setEditor] = useState(null); // { kind: 'flow' | 'template', id }
+  const [Editor, setEditorComponent] = useState(null);
+  const [editorLoadFailed, setEditorLoadFailed] = useState(false);
 
   const openEditor = (kind, id) => {
     if (!id) return;
     setEditor({ kind, id });
     setView('editor');
+    if (Editor) return;
+    setEditorLoadFailed(false);
+    import('./components/FlowEditor.jsx').then(
+      ({ default: Component }) => setEditorComponent(() => Component),
+      () => setEditorLoadFailed(true),
+    );
   };
+  const backToList = () => setView('list');
 
   useEffect(() => {
     set401Handler(() => setView('login'));
@@ -45,11 +53,17 @@ export default function App() {
         />
       )}
       {view === 'editor' && editor && (
-        <FlowEditor
-          key={`${editor.kind}:${editor.id}`}
-          target={editor}
-          onBack={() => setView('list')}
-        />
+        Editor ? (
+          <Editor key={`${editor.kind}:${editor.id}`} target={editor} onBack={backToList} />
+        ) : (
+          <div className="boot">
+            <Logo size={30} wordSize={17} />
+            {editorLoadFailed
+              ? <span role="alert">编辑器加载失败，请刷新页面后重试。</span>
+              : <span role="status">正在加载编辑器…</span>}
+            <button className="small" onClick={backToList}>返回列表</button>
+          </div>
+        )
       )}
       <GlobalToast />
       <ConfirmHost />

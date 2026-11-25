@@ -173,7 +173,7 @@ flowchart TB
 
 | 路径 | 职责 |
 |---|---|
-| `App.jsx` / `main.jsx` | 壳、路由级状态 |
+| `App.jsx` / `main.jsx` | 应用壳和视图状态。任务或模板首次进入画布时按需加载编辑器模块。 |
 | `api.js` | 后端调用封装（无 body 请求不带 content-type） |
 | `stepTypes.js` | 复用 `server/src/model.js` 的 `STEP_TYPES` + `defaultConfig` + 出口文案 |
 | `layout.js` | 画布"整理"的 DAG 分层布局 |
