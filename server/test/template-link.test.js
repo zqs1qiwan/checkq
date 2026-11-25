@@ -75,6 +75,9 @@ const f2 = store.instantiateTemplate(tpl2.id, {});
 store.deleteTemplate(tpl2.id);
 ok(store.getFlow(f2.id).nodes[0].config.url === 'https://example.com/t2', '模板删除后任务保留最后一份流程');
 ok(store.templateInfo(store.getFlow(f2.id)).missing === true, '模板删除后标注「模板已删除」');
+const orphan = store.listFlows().find((f) => f.id === f2.id);
+assert.deepStrictEqual(orphan.template, { id: tpl2.id, name: '(模板已删除)', missing: true });
+assert.strictEqual(orphan.nodesCount, 2);
 
 // 8) 非模板任务不受影响
 const plain = store.createFlow({ name: '独立任务', nodes: nodes('https://example.com/p'), edges });

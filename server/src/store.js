@@ -322,6 +322,10 @@ export class Store {
       else if (r.status === 'failed') rec.failed++;
       todayByFlow.set(r.flowId, rec);
     }
+    const templatesById = new Map();
+    for (const template of this.templates) {
+      if (!templatesById.has(template.id)) templatesById.set(template.id, template);
+    }
     return this.flows.map((f) => {
       const last = lastByFlow.get(f.id) || null;
       const lastRun = last ? {
@@ -335,7 +339,8 @@ export class Store {
       };
       // 下次运行时间（croner nextRun，仅启用调度的任务）
       const nextRunAt = this.nextRunAt(f);
-      const resolved = this.resolveFlow(f);   // 派生任务显示的是模板当前版本
+      const template = f.tplId ? templatesById.get(f.tplId) ?? null : null;
+      const nodes = template ? template.nodes : f.nodes;
       return {
         id: f.id, name: f.name, note: f.note, cron: f.cron, timezone: f.timezone,
         enabled: f.enabled, jitterMinutes: f.jitterMinutes || 0, varsCount: Object.keys(f.vars || {}).length,
@@ -345,8 +350,8 @@ export class Store {
         isDemo: f.isDemo === true,            // 内置演练任务（P0-1）：界面标记「演示」，不参与导出
         pausedAt: f.pausedAt || null,          // 连续失败自动停用的时间
         pausedReason: f.pausedReason || '',    // 自动停用的原因（最后一次失败结论）
-        nodesCount: (resolved.nodes || []).length, tplId: f.tplId || null,
-        template: this.templateInfo(f),        // { id, name } —— 来源模板标注
+        nodesCount: (nodes || []).length, tplId: f.tplId || null,
+        template: this.templateInfo(f, template),
         lastRun,
         today,
         nextRunAt,
@@ -564,9 +569,8 @@ export class Store {
   }
 
   /** 模板信息（派生任务用：来源模板名） */
-  templateInfo(flow) {
-    if (!flow || !flow.tplId) return null;
-    const tpl = this.getTemplate(flow.tplId);
+  templateInfo(flow, tpl = flow?.tplId ? this.getTemplate(flow.tplId) : null) {
+    if (!flow?.tplId) return null;
     if (!tpl) return { id: flow.tplId, name: '(模板已删除)', missing: true };
     return { id: tpl.id, name: tpl.name, missing: false };
   }
