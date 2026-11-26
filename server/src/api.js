@@ -61,7 +61,7 @@ export function buildServer({ dataDir, port }) {
   const API_KEY_SCOPES = ['read', 'run', 'write', 'secrets'];
 
   /**
-   * API Key 的「任务范围」：flowIds / groups 任一为空表示不限制；两者都填则取并集。
+   * API Key 的「任务范围」：flowIds 和 groups 都为空表示不限制，否则按两者的并集匹配。
    * 浏览器会话与旧版单 Key 不受范围限制。
    */
   const keyAllowsFlow = (req, flow) => {
@@ -73,7 +73,7 @@ export function buildServer({ dataDir, port }) {
     return !!flow.group && groups.includes(flow.group);
   };
   /** 受限 Key 不能创建新任务/模板（新对象不在绑定范围内）；无绑定的 Key 仍可创建。 */
-  const keyCanCreate = (req) => {
+  const keyHasFullFlowScope = (req) => {
     if (!req.apiKey || req.legacyApiKey) return true;
     const ids = Array.isArray(req.apiKey.flowIds) ? req.apiKey.flowIds : [];
     const groups = Array.isArray(req.apiKey.groups) ? req.apiKey.groups : [];
@@ -1818,9 +1818,8 @@ export function buildServer({ dataDir, port }) {
 
   // ---- flows ----
   app.get('/api/flows', async (req) => {
-    const list = store.listFlows();
-    if (!req.apiKey || req.legacyApiKey) return list;
-    return list.filter((f) => keyAllowsFlow(req, f));
+    if (keyHasFullFlowScope(req)) return store.listFlows();
+    return store.listFlows(store.flows.filter((flow) => keyAllowsFlow(req, flow)));
   });
 
   // ---- templates (user-created, stored in DB) ----
@@ -1829,7 +1828,7 @@ export function buildServer({ dataDir, port }) {
     const f = store.getFlow(req.params.flowId);
     if (!f) return reply.code(404).send({ error: '流程不存在' });
     if (!keyAllowsFlow(req, f)) return keyScopeDenied(reply);
-    if (!keyCanCreate(req)) return keyScopeDenied(reply, '受限 API Key 不能创建模板');
+    if (!keyHasFullFlowScope(req)) return keyScopeDenied(reply, '受限 API Key 不能创建模板');
     const { name, desc } = req.body || {};
     const tpl = store.createTemplate({
       name: name || f.name.replace(/\s*·\s*\d+$/, '') + ' 模板',
@@ -1846,7 +1845,7 @@ export function buildServer({ dataDir, port }) {
   app.get('/api/templates', async () => store.listTemplates());
 
   app.post('/api/templates', async (req, reply) => {
-    if (!keyCanCreate(req)) return keyScopeDenied(reply, '受限 API Key 不能创建模板');
+    if (!keyHasFullFlowScope(req)) return keyScopeDenied(reply, '受限 API Key 不能创建模板');
     const { name, desc, vars, varNames, nodes, edges, log, notify } = req.body || {};
     const errors = validateFlow({ name, nodes, edges, vars });
     if (errors.length) return reply.code(400).send({ error: errors.join('; ') });
@@ -1855,21 +1854,21 @@ export function buildServer({ dataDir, port }) {
   });
 
   app.put('/api/templates/:id', async (req, reply) => {
-    if (!keyCanCreate(req)) return keyScopeDenied(reply, '受限 API Key 不能修改模板');
+    if (!keyHasFullFlowScope(req)) return keyScopeDenied(reply, '受限 API Key 不能修改模板');
     const t = store.updateTemplate(req.params.id, req.body || {});
     if (!t) return reply.code(404).send({ error: 'not found' });
     return t;
   });
 
   app.delete('/api/templates/:id', async (req, reply) => {
-    if (!keyCanCreate(req)) return keyScopeDenied(reply, '受限 API Key 不能删除模板');
+    if (!keyHasFullFlowScope(req)) return keyScopeDenied(reply, '受限 API Key 不能删除模板');
     const ok = store.deleteTemplate(req.params.id);
     return ok ? { ok: true } : reply.code(404).send({ error: 'not found' });
   });
 
   // 模板 → 生成任务实例（变量差异化）
   app.post('/api/templates/:id/instantiate', async (req, reply) => {
-    if (!keyCanCreate(req)) return keyScopeDenied(reply, '受限 API Key 不能创建任务');
+    if (!keyHasFullFlowScope(req)) return keyScopeDenied(reply, '受限 API Key 不能创建任务');
     const { name, vars, note } = req.body || {};
     const flow = store.instantiateTemplate(req.params.id, { name, vars, note });
     if (!flow) return reply.code(404).send({ error: '模板不存在' });
@@ -1907,7 +1906,7 @@ export function buildServer({ dataDir, port }) {
 
   // CSV 批量建任务（4.3）
   app.post('/api/templates/:id/instantiate-csv', async (req, reply) => {
-    if (!keyCanCreate(req)) return keyScopeDenied(reply, '受限 API Key 不能创建任务');
+    if (!keyHasFullFlowScope(req)) return keyScopeDenied(reply, '受限 API Key 不能创建任务');
     const { csv } = req.body || {};
     if (!csv || typeof csv !== 'string') return reply.code(400).send({ error: '缺少 csv 内容' });
     const tpl = store.getTemplate(req.params.id);
@@ -1981,7 +1980,7 @@ export function buildServer({ dataDir, port }) {
   });
 
   app.post('/api/flows', async (req, reply) => {
-    if (!keyCanCreate(req)) return keyScopeDenied(reply, '受限 API Key 不能创建任务');
+    if (!keyHasFullFlowScope(req)) return keyScopeDenied(reply, '受限 API Key 不能创建任务');
     const flow = req.body || {};
     const errors = validateFlow(flow);
     if (errors.length) return reply.code(400).send({ error: errors.join('; ') });
@@ -2071,7 +2070,7 @@ export function buildServer({ dataDir, port }) {
 
   // 克隆任务：复制为新任务（PRD §4.4）
   app.post('/api/flows/:id/clone', async (req, reply) => {
-    if (!keyCanCreate(req)) return keyScopeDenied(reply, '受限 API Key 不能克隆任务');
+    if (!keyHasFullFlowScope(req)) return keyScopeDenied(reply, '受限 API Key 不能克隆任务');
     const f = store.getFlow(req.params.id);
     if (!f) return reply.code(404).send({ error: 'not found' });
     const seq = store.flows.filter((x) => x.name.startsWith(f.name)).length + 1;
@@ -2198,7 +2197,7 @@ export function buildServer({ dataDir, port }) {
 
   // 模板市场索引导入（规范见 docs/TEMPLATE-MARKET.md）：从 URL 拉取 {name,desc,vars,nodes,edges,log} 建模板
   app.post('/api/templates/from-url', async (req, reply) => {
-    if (!keyCanCreate(req)) return keyScopeDenied(reply, '受限 API Key 不能创建模板');
+    if (!keyHasFullFlowScope(req)) return keyScopeDenied(reply, '受限 API Key 不能创建模板');
     const { url } = req.body || {};
     if (!url || !/^https?:\/\//i.test(String(url))) return reply.code(400).send({ error: '缺少合法 url' });
     let data;
@@ -2223,7 +2222,7 @@ export function buildServer({ dataDir, port }) {
     const group = String((req.body || {}).group || '').trim().replace(/\s+/g, ' ').slice(0, 40);
     if (ids.length > 200) return reply.code(400).send({ error: '单次最多 200 个' });
     if (req.apiKey && !req.legacyApiKey) {
-      if (action === 'set-group' && !keyCanCreate(req)) {
+      if (action === 'set-group' && !keyHasFullFlowScope(req)) {
         return keyScopeDenied(reply, '受限 API Key 不能修改任务分组');
       }
       const outOfScope = ids.map((id) => store.getFlowRaw(id)).filter((f) => f && !keyAllowsFlow(req, f));
@@ -2569,7 +2568,7 @@ export function buildServer({ dataDir, port }) {
   });
 
   app.post('/api/market/import', async (req, reply) => {
-    if (!keyCanCreate(req)) return keyScopeDenied(reply, '受限 API Key 不能创建模板');
+    if (!keyHasFullFlowScope(req)) return keyScopeDenied(reply, '受限 API Key 不能创建模板');
     const { url, id, mode } = req.body || {};
     if (!url || !id) return reply.code(400).send({ error: '缺少 url/id' });
     let data;
@@ -2600,7 +2599,7 @@ export function buildServer({ dataDir, port }) {
   });
 
   app.post('/api/market/subscribe', async (req, reply) => {
-    if (!keyCanCreate(req)) return keyScopeDenied(reply, '受限 API Key 不能修改市场订阅');
+    if (!keyHasFullFlowScope(req)) return keyScopeDenied(reply, '受限 API Key 不能修改市场订阅');
     const url = String((req.body || {}).url || '').trim();
     if (!/^https?:\/\//i.test(url)) return reply.code(400).send({ error: '索引地址必须是 http/https' });
     let data;

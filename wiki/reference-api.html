@@ -28,7 +28,7 @@
 <link rel="apple-touch-icon" href="./assets/brand/apple-touch-icon.png" />
 <link rel="stylesheet" href="./assets/style.css" />
 <link rel="sitemap" type="application/xml" href="https://zqs1qiwan.github.io/checkq/sitemap.xml" />
-<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebSite","@id":"https://zqs1qiwan.github.io/checkq/#website","url":"https://zqs1qiwan.github.io/checkq/","name":"CheckQ 文档","inLanguage":"zh-CN","description":"CheckQ 是开源的可视化 HTTP 自动化流程引擎：积木式流程、调度与失败重试、日志与通知、模板联动、REST API 与 MCP。","publisher":{"@type":"Organization","name":"CheckQ","url":"https://github.com/zqs1qiwan/checkq","logo":{"@type":"ImageObject","url":"https://zqs1qiwan.github.io/checkq/assets/brand/checkq-mark.svg","width":120,"height":120}}},{"@type":"TechArticle","@id":"https://zqs1qiwan.github.io/checkq/reference-api.html#article","headline":"API 参考","name":"API 参考","description":"CheckQ REST API 完整参考：鉴权、通用字段、任务 / 运行 / 模板 / 系统端点与错误码，面向 Agent 与外部脚本。","url":"https://zqs1qiwan.github.io/checkq/reference-api.html","mainEntityOfPage":"https://zqs1qiwan.github.io/checkq/reference-api.html","inLanguage":"zh-CN","dateModified":"2026-11-25","isPartOf":{"@id":"https://zqs1qiwan.github.io/checkq/#website"},"image":"https://zqs1qiwan.github.io/checkq/assets/social-preview.png","publisher":{"@type":"Organization","name":"CheckQ","url":"https://github.com/zqs1qiwan/checkq"}}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebSite","@id":"https://zqs1qiwan.github.io/checkq/#website","url":"https://zqs1qiwan.github.io/checkq/","name":"CheckQ 文档","inLanguage":"zh-CN","description":"CheckQ 是开源的可视化 HTTP 自动化流程引擎：积木式流程、调度与失败重试、日志与通知、模板联动、REST API 与 MCP。","publisher":{"@type":"Organization","name":"CheckQ","url":"https://github.com/zqs1qiwan/checkq","logo":{"@type":"ImageObject","url":"https://zqs1qiwan.github.io/checkq/assets/brand/checkq-mark.svg","width":120,"height":120}}},{"@type":"TechArticle","@id":"https://zqs1qiwan.github.io/checkq/reference-api.html#article","headline":"API 参考","name":"API 参考","description":"CheckQ REST API 完整参考：鉴权、通用字段、任务 / 运行 / 模板 / 系统端点与错误码，面向 Agent 与外部脚本。","url":"https://zqs1qiwan.github.io/checkq/reference-api.html","mainEntityOfPage":"https://zqs1qiwan.github.io/checkq/reference-api.html","inLanguage":"zh-CN","dateModified":"2026-11-26","isPartOf":{"@id":"https://zqs1qiwan.github.io/checkq/#website"},"image":"https://zqs1qiwan.github.io/checkq/assets/social-preview.png","publisher":{"@type":"Organization","name":"CheckQ","url":"https://github.com/zqs1qiwan/checkq"}}]}</script>
 <script>(function(){try{var k='checkq-wiki-theme';var s=window.localStorage.getItem(k);var m=(s==='light'||s==='dark')?s:((window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches)?'light':'dark');document.documentElement.setAttribute('data-mode',m);}catch(e){}document.documentElement.classList.add('js');})();</script>
 <noscript><style>.copy-btn,.search{display:none !important}</style></noscript>
 </head>
@@ -120,7 +120,7 @@
 </details>
     <article class="doc">
 <h1 id="checkq-rest-api-ai-ready-参考">CheckQ REST API — AI-ready 参考<a class="h-anchor" href="#checkq-rest-api-ai-ready-参考" aria-label="本节永久链接">#</a></h1>
-<p class="doc-meta"><span>v0.6.5</span><span>更新于 2026-11-25</span><a class="edit-link" href="https://github.com/zqs1qiwan/checkq/edit/main/docs/API.md" target="_blank" rel="noopener noreferrer">在 GitHub 编辑此页 ↗</a></p>
+<p class="doc-meta"><span>v0.6.5</span><span>更新于 2026-11-26</span><a class="edit-link" href="https://github.com/zqs1qiwan/checkq/edit/main/docs/API.md" target="_blank" rel="noopener noreferrer">在 GitHub 编辑此页 ↗</a></p>
 <blockquote><p>本文面向 Agent / MCP / 外部脚本。所有端点相对基址 <code>http://&lt;host&gt;:&lt;port&gt;</code>（服务端默认监听 <code>8888</code>；仓库提供的 docker-compose 映射到宿主 <code>18888</code>）。
 鉴权二选一：<strong>Cookie Session</strong>（<code>POST /api/login</code>）或 <strong>X-API-Key</strong>（设置页生成，或 <code>POST /api/system/apikeys</code>）。
 Content-Type: <code>application/json</code>。所有响应 JSON；错误统一 <code>{ error: string }</code> + HTTP 状态码。</p></blockquote>
@@ -234,7 +234,7 @@ curl -s -H &#39;X-API-Key: &lt;key&gt;&#39; -X POST http://host:8888/api/flows/&
         </div>
       </div>
       <div class="foot-meta">
-        <p>v0.6.5 · 生成于 2026-11-25 15:27 UTC · 由 <code>tools/build-wiki.cjs</code> 从 <code>docs/</code> 与内置页面生成</p>
+        <p>v0.6.5 · 生成于 2026-11-26 13:54 UTC · 由 <code>tools/build-wiki.cjs</code> 从 <code>docs/</code> 与内置页面生成</p>
         <p><a class="to-top" href="#top">↑ 返回顶部</a></p>
       </div>
     </footer>

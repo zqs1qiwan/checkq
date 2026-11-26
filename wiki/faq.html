@@ -28,7 +28,7 @@
 <link rel="apple-touch-icon" href="./assets/brand/apple-touch-icon.png" />
 <link rel="stylesheet" href="./assets/style.css" />
 <link rel="sitemap" type="application/xml" href="https://zqs1qiwan.github.io/checkq/sitemap.xml" />
-<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebSite","@id":"https://zqs1qiwan.github.io/checkq/#website","url":"https://zqs1qiwan.github.io/checkq/","name":"CheckQ 文档","inLanguage":"zh-CN","description":"CheckQ 是开源的可视化 HTTP 自动化流程引擎：积木式流程、调度与失败重试、日志与通知、模板联动、REST API 与 MCP。","publisher":{"@type":"Organization","name":"CheckQ","url":"https://github.com/zqs1qiwan/checkq","logo":{"@type":"ImageObject","url":"https://zqs1qiwan.github.io/checkq/assets/brand/checkq-mark.svg","width":120,"height":120}}},{"@type":"TechArticle","@id":"https://zqs1qiwan.github.io/checkq/faq.html#article","headline":"常见问题","name":"常见问题","description":"CheckQ 常见问题与处理：找不到入口节点、HTTP 400 与超时、变量未定义、通知太吵、忘记密码或两步验证码、API Key 权限不足。","url":"https://zqs1qiwan.github.io/checkq/faq.html","mainEntityOfPage":"https://zqs1qiwan.github.io/checkq/faq.html","inLanguage":"zh-CN","dateModified":"2026-11-25","isPartOf":{"@id":"https://zqs1qiwan.github.io/checkq/#website"},"image":"https://zqs1qiwan.github.io/checkq/assets/social-preview.png","publisher":{"@type":"Organization","name":"CheckQ","url":"https://github.com/zqs1qiwan/checkq"}}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebSite","@id":"https://zqs1qiwan.github.io/checkq/#website","url":"https://zqs1qiwan.github.io/checkq/","name":"CheckQ 文档","inLanguage":"zh-CN","description":"CheckQ 是开源的可视化 HTTP 自动化流程引擎：积木式流程、调度与失败重试、日志与通知、模板联动、REST API 与 MCP。","publisher":{"@type":"Organization","name":"CheckQ","url":"https://github.com/zqs1qiwan/checkq","logo":{"@type":"ImageObject","url":"https://zqs1qiwan.github.io/checkq/assets/brand/checkq-mark.svg","width":120,"height":120}}},{"@type":"TechArticle","@id":"https://zqs1qiwan.github.io/checkq/faq.html#article","headline":"常见问题","name":"常见问题","description":"CheckQ 常见问题与处理：找不到入口节点、HTTP 400 与超时、变量未定义、通知太吵、忘记密码或两步验证码、API Key 权限不足。","url":"https://zqs1qiwan.github.io/checkq/faq.html","mainEntityOfPage":"https://zqs1qiwan.github.io/checkq/faq.html","inLanguage":"zh-CN","dateModified":"2026-11-26","isPartOf":{"@id":"https://zqs1qiwan.github.io/checkq/#website"},"image":"https://zqs1qiwan.github.io/checkq/assets/social-preview.png","publisher":{"@type":"Organization","name":"CheckQ","url":"https://github.com/zqs1qiwan/checkq"}}]}</script>
 <script>(function(){try{var k='checkq-wiki-theme';var s=window.localStorage.getItem(k);var m=(s==='light'||s==='dark')?s:((window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches)?'light':'dark');document.documentElement.setAttribute('data-mode',m);}catch(e){}document.documentElement.classList.add('js');})();</script>
 <noscript><style>.copy-btn,.search{display:none !important}</style></noscript>
 </head>
@@ -90,7 +90,7 @@
 
     <article class="doc">
 <h1 id="常见问题">常见问题<a class="h-anchor" href="#常见问题" aria-label="本节永久链接">#</a></h1>
-<p class="doc-meta"><span>v0.6.5</span><span>更新于 2026-11-25</span><a class="edit-link" href="https://github.com/zqs1qiwan/checkq/edit/main/tools/build-wiki.cjs" target="_blank" rel="noopener noreferrer">在 GitHub 编辑此页 ↗</a></p>
+<p class="doc-meta"><span>v0.6.5</span><span>更新于 2026-11-26</span><a class="edit-link" href="https://github.com/zqs1qiwan/checkq/edit/main/tools/build-wiki.cjs" target="_blank" rel="noopener noreferrer">在 GitHub 编辑此页 ↗</a></p>
 <div class="table-wrap"><table><thead><tr><th>现象</th><th>处理</th></tr></thead><tbody><tr><td>找不到入口节点</td><td>流程成环，所有节点都有入线</td></tr><tr><td>HTTP 400</td><td>不一定是错误，断言通过即可继续；点日志步骤看响应体</td></tr><tr><td>超时</td><td>HTTP 节点超时填秒（30），不是毫秒</td></tr><tr><td>变量未定义</td><td>日志配置开启变量快照，或看运行记录里的「未定义变量」</td></tr><tr><td>提示太吵</td><td>设置 → 通知与推送 → 界面提示 → 仅错误</td></tr><tr><td>日志太啰嗦</td><td>编辑器「更多 → 日志配置」→ 记录范围「仅 log 节点」</td></tr><tr><td>忘记密码</td><td>管理员重置；或按安全说明里的容器命令重置</td></tr><tr><td>忘记两步验证码</td><td>用恢复码；管理员可在「用户管理」重置 2FA</td></tr><tr><td>弹窗贴到屏幕左上角 / 打开后背景跟着滚</td><td>已修复：弹窗用原生 <code>&lt;dialog&gt;</code> 显式居中，遮罩与弹窗用 <code>overscroll-behavior: contain</code> 收敛滚动；不再给页面加锁</td></tr><tr><td>弹窗里的下拉菜单点不到</td><td>已修复：菜单挂到该弹窗内部，避免被模态的 inert 拦住</td></tr><tr><td>窄屏顶栏按钮被挤到换行</td><td>已修复：小屏只留四个等高控件，其余动作收进「更多」</td></tr><tr><td>任务失败一次就停了</td><td>默认会按退避策略自动重试（最多 3 次）；在编辑器「调度 → 失败后重试」可关闭或调次数</td></tr><tr><td>怎么知道到底试了几次</td><td>任务详情显示策略；运行抽屉列出每次尝试与等待；通知结论带「第 N/M 次尝试」</td></tr><tr><td>API Key 报权限不足</td><td>缺哪种能力就补勾哪种作用域（只读 / 可运行 / 可修改）</td></tr></tbody></table></div>
     </article>
 <nav class="pager" aria-label="页面翻页">
@@ -124,7 +124,7 @@
         </div>
       </div>
       <div class="foot-meta">
-        <p>v0.6.5 · 生成于 2026-11-25 15:27 UTC · 由 <code>tools/build-wiki.cjs</code> 从 <code>docs/</code> 与内置页面生成</p>
+        <p>v0.6.5 · 生成于 2026-11-26 13:54 UTC · 由 <code>tools/build-wiki.cjs</code> 从 <code>docs/</code> 与内置页面生成</p>
         <p><a class="to-top" href="#top">↑ 返回顶部</a></p>
       </div>
     </footer>

@@ -11,7 +11,7 @@ const ok = (cond, msg) => { if (cond) { pass++; console.log('  PASS', msg); } el
 
 const dir = fs.mkdtempSync(os.tmpdir() + '/cq-apikey-');
 const { buildServer } = await import('../src/api.js');
-const { app, scheduler } = buildServer({ dataDir: dir, port: 0 });
+const { app, scheduler, store } = buildServer({ dataDir: dir, port: 0 });
 await app.ready();
 
 let r = await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'test1234' } });
@@ -92,6 +92,24 @@ r = await asKey(groupKey.key, 'GET', `/api/flows/${f1.id}`);
 ok(r.statusCode === 200, '分组绑定可读组内任务');
 r = await asKey(groupKey.key, 'GET', `/api/flows/${f2.id}`);
 ok(r.statusCode === 403, '分组绑定读组外任务被拒绝');
+
+const unionKey = await mkKey({ name: '任务与分组并集', scopes: ['read'], flowIds: [f2.id], groups: ['签到'] });
+const emptyKey = await mkKey({ name: '无匹配任务', scopes: ['read'], groups: ['空分组'] });
+const unrestricted = (await app.inject({ url: '/api/flows', cookies: ck })).json();
+r = await asKey(unionKey.key, 'GET', '/api/flows');
+ok(r.statusCode === 200 && JSON.stringify(r.json()) === JSON.stringify(unrestricted), '任务与分组按并集匹配，摘要和顺序一致');
+const projected = [];
+const nextRunAt = store.nextRunAt.bind(store);
+store.nextRunAt = (flow) => { projected.push(flow.id); return nextRunAt(flow); };
+try {
+  r = await asKey(groupKey.key, 'GET', '/api/flows');
+  ok(r.statusCode === 200 && projected.join() === f1.id, '仅为匹配的任务生成摘要');
+  projected.length = 0;
+  r = await asKey(emptyKey.key, 'GET', '/api/flows');
+  ok(r.statusCode === 200 && r.json().length === 0 && projected.length === 0, '无匹配任务时直接返回空列表');
+} finally {
+  delete store.nextRunAt;
+}
 
 const broadKey = await mkKey({ name: '默认全范围', scopes: ['read', 'run'] });
 r = await asKey(broadKey.key, 'GET', '/api/flows');

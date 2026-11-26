@@ -312,12 +312,15 @@ export class Store {
     }
   }
 
-  listFlows() {
+  listFlows(flows = this.flows) {
+    if (!flows.length) return [];
+    const flowIds = flows === this.flows ? null : new Set(flows.map((flow) => flow.id));
     // 预聚合「今日」运行统计（按服务器本地日期），避免每个任务都扫一遍 runs
     const { start, end } = localDayBounds();
     const todayByFlow = new Map();
     const lastByFlow = new Map();
     for (const r of this.runs) {
+      if (flowIds && !flowIds.has(r.flowId)) continue;
       if (!lastByFlow.has(r.flowId)) lastByFlow.set(r.flowId, r);
       if (!completedInRange(r, start, end)) continue;
       const rec = todayByFlow.get(r.flowId) || { runs: 0, success: 0, failed: 0 };
@@ -330,7 +333,7 @@ export class Store {
     for (const template of this.templates) {
       if (!templatesById.has(template.id)) templatesById.set(template.id, template);
     }
-    return this.flows.map((f) => {
+    return flows.map((f) => {
       const last = lastByFlow.get(f.id) || null;
       const lastRun = last ? {
         id: last.id, status: last.status, startedAt: last.startedAt, finalMessage: last.finalMessage,
