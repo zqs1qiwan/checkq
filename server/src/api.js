@@ -79,6 +79,8 @@ export function buildServer({ dataDir, port }) {
     const groups = Array.isArray(req.apiKey.groups) ? req.apiKey.groups : [];
     return !ids.length && !groups.length;
   };
+  // 缺少现存任务时无法验证原有绑定，仅允许全任务范围访问运行记录。
+  const keyAllowsRun = (req, flow) => flow ? keyAllowsFlow(req, flow) : keyHasFullFlowScope(req);
   const keyHasScope = (req, scope) => {
     if (req.legacyApiKey) return false;
     if (!req.apiKey) return true;
@@ -2368,17 +2370,14 @@ export function buildServer({ dataDir, port }) {
 
   app.get('/api/runs', async (req, reply) => {
     const { flowId, limit } = req.query;
-    if (flowId && req.apiKey && !req.legacyApiKey) {
-      const f = store.getFlowRaw(flowId);
-      if (f && !keyAllowsFlow(req, f)) return keyScopeDenied(reply);
-    }
+    if (flowId && !keyAllowsRun(req, store.getFlowRaw(flowId))) return keyScopeDenied(reply);
     const runs = store.listRuns(flowId, Math.min(Number(limit) || 30, 200));
     if (keyHasFullFlowScope(req) && keyHasScope(req, 'secrets')) return runs;
     const visible = [];
     const secretsByFlow = new Map();
     for (const run of runs) {
       const flow = store.getFlow(run.flowId);
-      if (!keyAllowsFlow(req, flow)) continue;
+      if (!keyAllowsRun(req, flow)) continue;
       if (keyHasScope(req, 'secrets')) {
         visible.push(run);
         continue;
@@ -2393,7 +2392,7 @@ export function buildServer({ dataDir, port }) {
     const r = store.getRun(req.params.id);
     if (!r) return reply.code(404).send({ error: 'not found' });
     const f = store.getFlow(r.flowId);
-    if (f && !keyAllowsFlow(req, f)) return keyScopeDenied(reply);
+    if (!keyAllowsRun(req, f)) return keyScopeDenied(reply);
     return keyHasScope(req, 'secrets') ? r : maskStoredRun(r, f ? collectDefinitionSecrets(f) : []);
   });
 
@@ -2402,7 +2401,7 @@ export function buildServer({ dataDir, port }) {
     const r = store.getRun(req.params.id);
     if (!r) return reply.code(404).send({ error: 'not found' });
     const f = store.getFlowRaw(r.flowId);
-    if (f && !keyAllowsFlow(req, f)) return keyScopeDenied(reply);
+    if (!keyAllowsRun(req, f)) return keyScopeDenied(reply);
     if (!['queued', 'running'].includes(r.status)) {
       return reply.code(409).send({ error: '这次运行已经结束', status: r.status });
     }
@@ -2417,7 +2416,7 @@ export function buildServer({ dataDir, port }) {
     const r = store.getRun(req.params.id);
     if (!r) return reply.code(404).send({ error: 'not found' });
     const flow = store.getFlow(r.flowId);
-    if (flow && !keyAllowsFlow(req, flow)) return keyScopeDenied(reply);
+    if (!keyAllowsRun(req, flow)) return keyScopeDenied(reply);
     const har = runToHar(maskStoredRun(r, flow ? collectDefinitionSecrets(flow) : []), flow);
     reply.header('content-type', 'application/json; charset=utf-8');
     reply.header('content-disposition', `attachment; filename="checkq-run-${String(r.id).replace(/[^\w-]/g, '')}.har"`);

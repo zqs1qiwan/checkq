@@ -222,6 +222,26 @@ ok(r.statusCode === 403 && store.getFlow(derived.id).nodes[0].config.url === 'ht
 r = await app.inject({ method: 'PUT', url: `/api/templates/${cleanTemplate.id}`, cookies: ck, payload: { nodes: newNodes } });
 ok(r.statusCode === 200 && store.getFlow(derived.id).nodes[0].config.url === 'https://new.example.test/', '本地会话仍可编辑带凭据的执行配置');
 
+const removedFlow = store.createFlow({ name: '待删除任务', group: '签到' });
+const orphanFlowId = removedFlow.id;
+const orphanBound = await mkKey({ name: '已删除任务绑定', scopes: ['read', 'run'], flowIds: [orphanFlowId] });
+store.deleteFlow(orphanFlowId);
+store.addRun({ id: 'orphan-run', flowId: orphanFlowId, status: 'running', startedAt: Date.now(), logs: [] });
+const base = await app.listen({ host: '127.0.0.1', port: 0 });
+for (const scopedKey of [runKey.key, groupKey.key, orphanBound.key]) {
+  const headers = { 'x-api-key': scopedKey };
+  const listed = await fetch(`${base}/api/runs`, { headers });
+  ok(listed.status === 200 && !(await listed.json()).some((run) => run.id === 'orphan-run'), '绑定密钥的历史列表排除没有所属任务的运行');
+  for (const url of [`/api/runs?flowId=${orphanFlowId}`, '/api/runs/orphan-run', '/api/runs/orphan-run/har']) {
+    const response = await fetch(base + url, { headers });
+    ok(response.status === 403, `绑定密钥无法读取 ${url}`);
+  }
+}
+const cancel = await fetch(`${base}/api/runs/orphan-run/cancel`, { method: 'POST', headers: { 'x-api-key': orphanBound.key } });
+ok(cancel.status === 403 && store.getRun('orphan-run').status === 'running', '绑定密钥无法取消没有所属任务的运行');
+const fullHistory = await fetch(`${base}/api/runs?flowId=${orphanFlowId}`, { headers: { 'x-api-key': templateReader.key } });
+ok(fullHistory.status === 200 && (await fullHistory.json())[0]?.id === 'orphan-run', '全范围只读密钥仍可查没有所属任务的运行');
+await app.close();
 scheduler.stop?.();
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
