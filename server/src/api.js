@@ -19,7 +19,7 @@ import { generateSecret, verifyTotp, generateRecoveryCodes, hashRecoveryCode, ve
 import { buildOpenApi } from './openapi.js';
 import { ipAllowed, isPrivateIp, normalizeIp } from './iprange.js';
 import { Engine, redactVars } from './engine.js';
-import { collectSecrets, hasAiInputCredentials, redactRunForExport, redactText } from './redact.js';
+import { collectSecrets, hasAiInputCredentials, maskStoredRun, redactRunForExport, redactText } from './redact.js';
 import { collectDefinitionSecrets, hasDefinitionCredentials, maskSecrets } from './secret.js';
 import { validateFlow, validateHttpOrigins } from './model.js';
 import { importHar } from './har-import.js';
@@ -2373,19 +2373,28 @@ export function buildServer({ dataDir, port }) {
       if (f && !keyAllowsFlow(req, f)) return keyScopeDenied(reply);
     }
     const runs = store.listRuns(flowId, Math.min(Number(limit) || 30, 200));
-    if (!req.apiKey || req.legacyApiKey) return runs;
-    return runs.filter((r) => {
-      const f = store.getFlowRaw(r.flowId);
-      return !f || keyAllowsFlow(req, f);
-    });
+    if (keyHasFullFlowScope(req) && keyHasScope(req, 'secrets')) return runs;
+    const visible = [];
+    const secretsByFlow = new Map();
+    for (const run of runs) {
+      const flow = store.getFlow(run.flowId);
+      if (!keyAllowsFlow(req, flow)) continue;
+      if (keyHasScope(req, 'secrets')) {
+        visible.push(run);
+        continue;
+      }
+      if (!secretsByFlow.has(run.flowId)) secretsByFlow.set(run.flowId, flow ? collectDefinitionSecrets(flow) : []);
+      visible.push(maskStoredRun(run, secretsByFlow.get(run.flowId)));
+    }
+    return visible;
   });
 
   app.get('/api/runs/:id', async (req, reply) => {
     const r = store.getRun(req.params.id);
     if (!r) return reply.code(404).send({ error: 'not found' });
-    const f = store.getFlowRaw(r.flowId);
+    const f = store.getFlow(r.flowId);
     if (f && !keyAllowsFlow(req, f)) return keyScopeDenied(reply);
-    return r;
+    return keyHasScope(req, 'secrets') ? r : maskStoredRun(r, f ? collectDefinitionSecrets(f) : []);
   });
 
   // 取消排队中/运行中的一次运行：中断 fetch/curl、delay、节点重试与任务级退避
@@ -2398,7 +2407,9 @@ export function buildServer({ dataDir, port }) {
       return reply.code(409).send({ error: '这次运行已经结束', status: r.status });
     }
     const updated = runner.cancel(r.id, 'cancelled');
-    return { ok: true, cancelling: true, run: updated || r };
+    const run = updated || r;
+    const flow = store.resolveFlow(f);
+    return { ok: true, cancelling: true, run: keyHasScope(req, 'secrets') ? run : maskStoredRun(run, flow ? collectDefinitionSecrets(flow) : []) };
   });
 
   // 单次运行导出 HAR（默认脱敏；响应体沿用日志截断）
@@ -2407,7 +2418,7 @@ export function buildServer({ dataDir, port }) {
     if (!r) return reply.code(404).send({ error: 'not found' });
     const flow = store.getFlow(r.flowId);
     if (flow && !keyAllowsFlow(req, flow)) return keyScopeDenied(reply);
-    const har = runToHar(r, flow);
+    const har = runToHar(maskStoredRun(r, flow ? collectDefinitionSecrets(flow) : []), flow);
     reply.header('content-type', 'application/json; charset=utf-8');
     reply.header('content-disposition', `attachment; filename="checkq-run-${String(r.id).replace(/[^\w-]/g, '')}.har"`);
     return har;
@@ -2443,6 +2454,8 @@ export function buildServer({ dataDir, port }) {
 
     const entries = [];
     const summaries = [];
+    const maskCredentials = !keyHasScope(req, 'secrets');
+    const secrets = maskCredentials ? collectDefinitionSecrets(f) : [];
     let nextBefore = null;
     let hasMore = false;
     for (const r of runs) {
@@ -2462,7 +2475,10 @@ export function buildServer({ dataDir, port }) {
       }
       const start = Math.max(0, end - limit);
       const split = start > 0 || resumeEnd !== null;
-      entries.push(...logs.slice(start, end).map((l, i) => ({
+      const page = logs.slice(start, end);
+      const visible = maskCredentials ? maskStoredRun(r, secrets, page) : r;
+      const visiblePage = maskCredentials ? visible.logs : page;
+      entries.push(...visiblePage.map((l, i) => ({
         runId: r.id,
         ...(split ? { position: start + i } : {}),
         startedAt: r.startedAt,
@@ -2475,14 +2491,14 @@ export function buildServer({ dataDir, port }) {
         type: l.type,
         ok: l.ok !== false,
         ms: l.ms || 0,
-        summary: r.summary || '',
-        finalMessage: r.finalMessage || '',
-        diagnosis: r.diagnosis || null,
+        summary: visible.summary || '',
+        finalMessage: visible.finalMessage || '',
+        diagnosis: visible.diagnosis || null,
       })));
       summaries.push({
         id: r.id, startedAt: r.startedAt, status: r.status, count: logs.length,
         interrupted: r.interrupted, timedOut: r.timedOut,
-        summary: r.summary || '', finalMessage: r.finalMessage || '', diagnosis: r.diagnosis || null,
+        summary: visible.summary || '', finalMessage: visible.finalMessage || '', diagnosis: visible.diagnosis || null,
       });
       nextBefore = start > 0 ? `${r.id}:${start}` : r.id;
       if (start > 0) {

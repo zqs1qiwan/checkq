@@ -43,7 +43,17 @@ const asKey = (key, method, url, payload) => app.inject({
 
 const readOnly = await mkKey({ name: '只读绑定 A', scopes: ['read'], flowIds: [f1.id] });
 store.updateFlow(f1.id, { note: '业务备注 SECRET-HEADER', pausedReason: '旧错误 SECRET-HEADER' });
-store.addRun({ id: 'legacy-output', flowId: f1.id, startedAt: Date.now(), status: 'failed', finalMessage: '旧运行 SECRET-HEADER' });
+const historical = 'historical-value-fixture';
+store.addRun({
+  id: 'legacy-output', flowId: f1.id, startedAt: Date.now(), status: 'failed', finalMessage: '旧运行 SECRET-HEADER',
+  summary: `回显 ${historical}`, vars: { ordinary: historical },
+  logs: [
+    { stepId: 'request', index: 1, type: 'http', detail: {
+      url: 'https://example.test/', method: 'GET', headers: { 'X-CSRF-Token': historical }, response: { status: 200, body: `回显 ${historical}` },
+    } },
+    ...Array.from({ length: 22 }, (_, index) => ({ stepId: `line-${index}`, index: index + 2, type: 'log', name: '记录', message: `结果 ${historical}` })),
+  ],
+});
 const listTemplate = store.createTemplate({ name: '模板 SECRET-HEADER', desc: '说明 SECRET-HEADER', nodes: f1.nodes });
 
 r = await asKey(readOnly.key, 'GET', '/api/flows');
@@ -51,6 +61,13 @@ ok(r.statusCode === 200, '只读 Key 列表 200');
 ok(r.json().length === 1 && r.json()[0].id === f1.id, '只读 Key 列表只返回绑定任务');
 ok(r.json()[0].note === '业务备注 ***' && r.json()[0].pausedReason === '旧错误 ***'
   && r.json()[0].lastRun.finalMessage === '旧运行 ***', '任务列表遮蔽定义和历史摘要中的凭据副本');
+for (const endpoint of [`/api/runs?flowId=${f1.id}`, '/api/runs/legacy-output', '/api/runs/legacy-output/har', `/api/flows/${f1.id}/logs?limit=20`]) {
+  const masked = await asKey(readOnly.key, 'GET', endpoint);
+  ok(masked.statusCode === 200 && !masked.body.includes(historical) && !masked.body.includes('SECRET-HEADER')
+    && masked.body.includes('***'), `旧运行凭据已遮蔽 ${endpoint.split('?')[0]}`);
+}
+const legacyDetail = await app.inject({ url: '/api/runs/legacy-output', cookies: ck });
+ok(legacyDetail.json().vars.ordinary === historical, '旧记录读取脱敏保留原始存储');
 const rawLists = await app.inject({ url: '/api/flows', cookies: ck });
 ok(rawLists.json().find((flow) => flow.id === f1.id).note === '业务备注 SECRET-HEADER', '登录会话仍可读取原始备注');
 const templateReader = await mkKey({ name: '全范围列表只读', scopes: ['read'] });

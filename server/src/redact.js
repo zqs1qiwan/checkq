@@ -59,6 +59,7 @@ export function trackHttpCredentials(secrets, headers, setCookies = []) {
 
 /** 将请求参数中的已识别凭据纳入运行输出脱敏。 */
 export function trackHttpUrlCredentials(secrets, url) {
+  if (typeof url !== 'string' || !url) return;
   let target;
   try { target = new URL(url); } catch { /* 地址由执行器校验 */ }
   if (target) {
@@ -306,6 +307,39 @@ export function redactLogEntry(entry, secrets = [], responseBodyLimit) {
     }
     out.detail = d;
   }
+  return out;
+}
+
+/** 读取旧运行时，结合当时记录的请求和响应补做脱敏。 */
+export function maskStoredRun(run, knownSecrets = [], logs = run.logs) {
+  const tracked = new Set([...knownSecrets, ...collectSecrets(run.vars)]);
+  for (const entry of run.logs || []) {
+    const detail = entry?.detail;
+    if (entry?.type !== 'http' || !detail) continue;
+    trackHttpUrlCredentials(tracked, detail.url);
+    trackHttpUrlCredentials(tracked, detail.proxy);
+    for (const part of [detail, detail.response].filter(Boolean)) {
+      const headers = Array.isArray(part.headers)
+        ? part.headers.filter((header) => header?.name).map(({ name, value }) => [name, value])
+        : Object.entries(part.headers || {});
+      let contentType = part.contentType;
+      for (const [name, value] of headers) {
+        const key = String(name).trim().toLowerCase();
+        if (key === 'content-type') contentType = value;
+        trackHttpCredentials(tracked, { [key]: value }, key === 'set-cookie' ? [value] : []);
+      }
+      if (Array.isArray(part.setCookie)) trackHttpCredentials(tracked, {}, part.setCookie);
+      trackHttpBodyCredentials(tracked, part.body, String(contentType || ''));
+    }
+  }
+  const secrets = [...tracked].sort((a, b) => b.length - a.length);
+  const out = { ...run };
+  for (const field of ['flowName', 'summary', 'finalMessage', 'diagnosis', 'attempts', 'vars', 'notify']) {
+    if (out[field] !== undefined) out[field] = redactDeep(out[field], secrets);
+  }
+  if (Array.isArray(logs)) out.logs = logs.map((entry) => ({
+    ...redactLogEntry(entry, secrets), name: redactKnownValues(entry?.name, secrets),
+  }));
   return out;
 }
 
