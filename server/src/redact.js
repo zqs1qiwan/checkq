@@ -68,6 +68,35 @@ export function redactText(value, secrets = []) {
   return s;
 }
 
+/** 模型输入只接受任务描述，发现凭据形态时由调用方拒绝发送。 */
+export function hasAiInputCredentials(text, secrets = []) {
+  const decoded = text.replace(/(?:%[0-9a-f]{2})+/gi, (encoded) => {
+    try { return decodeURIComponent(encoded); } catch { return encoded; }
+  });
+  const inputs = decoded === text ? [text] : [text, decoded];
+  const isCredentialField = (name) => isSensitiveHeader(name) || isSensitiveKey(name)
+    || /^(?:密码|口令|令牌|sig|signature|x-amz-signature|x-goog-signature)$/i.test(name);
+  return inputs.some((input) => {
+    if (secrets.some((secret) => secret && input.includes(secret))) return true;
+    if (/\bBearer\s+[\w.~+/=-]+|\beyJ[\w-]+\.[\w-]+\.[\w-]+/i.test(input)) return true;
+    const fields = input.matchAll(/([\w-]+|密码|口令|令牌)["']?\s*[:=：]\s*["']?([^\s"'&,;}]+)/g);
+    for (const [, name] of fields) {
+      if (isCredentialField(name)) return true;
+    }
+    for (const [, name] of input.matchAll(/["']name["']\s*:\s*["']([^"']+)["']/gi)) {
+      if (isCredentialField(name)) return true;
+    }
+    if (/\bcurl\b/i.test(input) && /\s(?:-[bu]\S|-[bu]\s+\S|--(?:cookie|user)(?:=|\s+)\S)/i.test(input)) return true;
+    for (const [candidate] of input.matchAll(/https?:\/\/[^\s<>"'，。；]+/gi)) {
+      try {
+        const url = new URL(candidate);
+        if (url.username || url.password || [...url.searchParams.keys()].some(isCredentialField)) return true;
+      } catch { /* 普通描述可以包含不完整链接 */ }
+    }
+    return false;
+  });
+}
+
 /** 脱敏 URL：userinfo、敏感 query 参数、已知变量值 */
 export function redactUrl(value, secrets = []) {
   const input = String(value ?? '');

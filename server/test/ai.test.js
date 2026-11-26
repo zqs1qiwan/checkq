@@ -249,6 +249,39 @@ await check('生成成功：结构收敛、edges 去重/剔除悬空、危险键
   assert.strictEqual(lastRequest.body.max_tokens, 512, 'generate 应使用配置的 maxTokens');
 });
 
+await check('任务描述包含凭据时在本地拒绝，模型不接到请求', async () => {
+  const storedValue = 'fixture-local-cookie-value';
+  const flow = server.store.createFlow({ name: '凭据隔离用例', vars: { cookie: storedValue } });
+  try {
+    const descriptions = [
+      '签到 Cookie: session=raw-first; theme=raw-second',
+      'Authorization: Basic Zml4dHVyZTpwYXNz',
+      '请求参数 {"password":"fixture-password"}',
+      '登录 密码：fixture-password',
+      '签到 https://user:fixture-password@example.com/check',
+      '签到 https://example.com/check?%74oken=fixture-token',
+      '签到 https://example.com/check?X-Amz-Signature=fixture-signature',
+      'curl -b "fixture-cookie" https://example.com',
+      'HAR 请求头 [{"name":"Cookie","value":"sid=fixture-value"}]',
+      `用 ${storedValue} 签到`,
+      `用 ${FAKE_KEY} 签到`,
+    ];
+    const previous = lastRequest;
+    for (const sentence of descriptions) {
+      const r = await app.inject({ method: 'POST', url: '/api/ai/generate', headers: A, payload: { sentence } });
+      status(r, 400, '在本地拒绝疑似凭据');
+      assert.match(r.json().error, /未发送给模型/);
+      assert.strictEqual(lastRequest, previous, '模型端点没有收到请求');
+    }
+    const sentence = '每天签到 https://example.com/check?mode=daily，检查状态码';
+    const safe = await app.inject({ method: 'POST', url: '/api/ai/generate', headers: A, payload: { sentence } });
+    status(safe, 200, '正常描述仍可生成');
+    assert.equal(lastRequest.body.messages[1].content, sentence);
+  } finally {
+    server.store.deleteFlow(flow.id);
+  }
+});
+
 await check('API Key：write 作用域可 generate；read 作用域 403；Key 不能调 admin 接口', async () => {
   const w = await app.inject({ method: 'POST', url: '/api/system/apikeys', headers: A, payload: { name: 'ai-write', scopes: ['write'] } });
   status(w, 200, '创建 write key');

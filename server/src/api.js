@@ -19,7 +19,7 @@ import { generateSecret, verifyTotp, generateRecoveryCodes, hashRecoveryCode, ve
 import { buildOpenApi } from './openapi.js';
 import { ipAllowed, isPrivateIp, normalizeIp } from './iprange.js';
 import { Engine, redactVars } from './engine.js';
-import { collectSecrets, redactRunForExport } from './redact.js';
+import { collectSecrets, hasAiInputCredentials, redactRunForExport } from './redact.js';
 import { maskSecrets } from './secret.js';
 import { validateFlow } from './model.js';
 import { importHar } from './har-import.js';
@@ -1644,6 +1644,15 @@ export function buildServer({ dataDir, port }) {
     if (!sentence) return reply.code(400).send({ error: '请先输入一句话描述' });
     if (sentence.length > 500) return reply.code(400).send({ error: '描述太长（最多 500 字）' });
     if (aiRateLimited(req, 'generate')) return reply.code(429).send({ error: `AI 调用过于频繁（每分钟最多 ${AI_RATE_LIMIT} 次），请稍后再试` });
+    const knownSecrets = new Set([cfg.apiKey]);
+    for (const definitions of [store.flows, store.templates]) {
+      for (const { vars } of definitions) {
+        for (const value of collectSecrets(vars)) knownSecrets.add(value);
+      }
+    }
+    if (hasAiInputCredentials(sentence, [...knownSecrets])) {
+      return reply.code(400).send({ error: '描述中包含疑似凭据，未发送给模型。请移除敏感值后重试。' });
+    }
     const sys = 'You generate CheckQ automation flow JSON. Output ONLY compact JSON, no markdown fences. Shape: '
       + '{"name":"<short task name>","cron":"<5-field cron e.g. 0 8 * * *>","nodes":[{"id":"n0","type":"http","name":"<short>","x":80,"y":60,"config":{"method":"GET","url":"<absolute https url from user text>","headers":[{"name":"user-agent","value":"Mozilla/5.0","enabled":true}],"body":"","asserts":[]}},{"id":"n1","type":"log","name":"记录结果","x":360,"y":60,"config":{"text":"完成：{{last.status}}"}}],"edges":[{"id":"e0","source":"n0","sourceHandle":"success","target":"n1"}]} '
       + 'Rules: only node types http,log,set,delay; first node must be http with a real absolute url from the user text; node ids must be unique; edges may only reference existing node ids (sourceHandle success/failed for http, next for others); cron must be a 5-field cron or empty string; if user says 看到X算成功 set asserts:[{"res":["X"],"from":"content"}]; <=5 nodes; JSON only.';
