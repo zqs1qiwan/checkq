@@ -127,7 +127,7 @@ X-API-Key: <key>
 ### 运行记录
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | /api/runs?flowId=&limit= | 列表（默认 limit 30，上限 200） |
+| GET | /api/runs?flowId=&limit= | 运行列表，先按授权范围筛选，再按 `limit` 截取，默认 30，范围 1–200 |
 | GET | /api/runs/:id | 单条详情（完整 logs） |
 | POST | /api/runs/:id/cancel | 取消排队中或运行中的此次运行；非 `queued/running` 返回 409。排队取消会立即移出队列，原运行请求会返回取消结果。运行中取消会中断 HTTP/curl、delay、节点重试和任务级退避。状态写 `cancelled`，不触发自动停用与任务通知 |
 | GET | /api/runs/:id/har | 导出单次运行的 HAR（默认脱敏；响应体沿用日志截断） |

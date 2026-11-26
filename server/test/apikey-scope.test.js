@@ -226,8 +226,18 @@ const removedFlow = store.createFlow({ name: '待删除任务', group: '签到' 
 const orphanFlowId = removedFlow.id;
 const orphanBound = await mkKey({ name: '已删除任务绑定', scopes: ['read', 'run'], flowIds: [orphanFlowId] });
 store.deleteFlow(orphanFlowId);
+const latestAuthorized = store.listRuns(f1.id, 1)[0].id;
 store.addRun({ id: 'orphan-run', flowId: orphanFlowId, status: 'running', startedAt: Date.now(), logs: [] });
+store.addRun({ id: 'newer-outside-scope', flowId: f2.id, status: 'success', startedAt: Date.now(), logs: [] });
 const base = await app.listen({ host: '127.0.0.1', port: 0 });
+for (const key of [editorKey.key, groupKey.key, runKey.key]) {
+  const headers = { 'x-api-key': key };
+  for (const limit of ['1', '-1']) {
+    const response = await fetch(`${base}/api/runs?limit=${limit}`, { headers });
+    const history = await response.json();
+    ok(response.status === 200 && history.length === 1 && history[0].id === latestAuthorized, '历史条数按可访问的记录计算');
+  }
+}
 for (const scopedKey of [runKey.key, groupKey.key, orphanBound.key]) {
   const headers = { 'x-api-key': scopedKey };
   const listed = await fetch(`${base}/api/runs`, { headers });

@@ -2371,21 +2371,20 @@ export function buildServer({ dataDir, port }) {
   app.get('/api/runs', async (req, reply) => {
     const { flowId, limit } = req.query;
     if (flowId && !keyAllowsRun(req, store.getFlowRaw(flowId))) return keyScopeDenied(reply);
-    const runs = store.listRuns(flowId, Math.min(Number(limit) || 30, 200));
-    if (keyHasFullFlowScope(req) && keyHasScope(req, 'secrets')) return runs;
-    const visible = [];
+    const maxRuns = Math.max(1, Math.min(200, Math.floor(Number(limit) || 30)));
+    const allowedFlowIds = !flowId && !keyHasFullFlowScope(req)
+      ? new Set(store.flows.filter((flow) => keyAllowsFlow(req, flow)).map((flow) => flow.id))
+      : undefined;
+    const runs = store.listRuns(flowId, maxRuns, allowedFlowIds);
+    if (keyHasScope(req, 'secrets')) return runs;
     const secretsByFlow = new Map();
-    for (const run of runs) {
-      const flow = store.getFlow(run.flowId);
-      if (!keyAllowsRun(req, flow)) continue;
-      if (keyHasScope(req, 'secrets')) {
-        visible.push(run);
-        continue;
+    return runs.map((run) => {
+      if (!secretsByFlow.has(run.flowId)) {
+        const flow = store.getFlow(run.flowId);
+        secretsByFlow.set(run.flowId, flow ? collectDefinitionSecrets(flow) : []);
       }
-      if (!secretsByFlow.has(run.flowId)) secretsByFlow.set(run.flowId, flow ? collectDefinitionSecrets(flow) : []);
-      visible.push(maskStoredRun(run, secretsByFlow.get(run.flowId)));
-    }
-    return visible;
+      return maskStoredRun(run, secretsByFlow.get(run.flowId));
+    });
   });
 
   app.get('/api/runs/:id', async (req, reply) => {
