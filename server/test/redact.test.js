@@ -61,7 +61,9 @@ test('引擎运行日志与 SSE 推送都不含请求/响应凭据', async (t) =
         'content-type': 'application/json',
         'set-cookie': 'sid=RESPONSE_COOKIE_SECRET_123456; Path=/; HttpOnly',
       });
-      res.end(JSON.stringify({ ok: true, token: 'RESPONSE_TOKEN_SECRET_123456' }));
+      res.end(JSON.stringify({ ok: true, token: 'RESPONSE_TOKEN_SECRET_123456', reflected: req.headers['x-api-key'],
+        echoes: [req.headers.cookie.split('=')[1], req.headers.authorization.split(' ')[1], 'RESPONSE_COOKIE_SECRET_123456'],
+      }));
     });
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -79,22 +81,26 @@ test('引擎运行日志与 SSE 推送都不含请求/响应凭据', async (t) =
         method: 'POST',
         url: `http://127.0.0.1:${server.address().port}/check?token=QUERY_SECRET_VALUE_123456`,
         headers: [
-          { name: 'cookie', value: 'COOKIE_SECRET_VALUE_123456', enabled: true },
-          { name: 'authorization', value: 'Bearer TOKEN_SECRET_VALUE_123456', enabled: true },
+          { name: 'cookie', value: 'sid=INLINE_COOKIE_FIXTURE_123456', enabled: true },
+          { name: 'authorization', value: 'Bearer INLINE_AUTH_FIXTURE_123456', enabled: true },
+          { name: 'x-api-key', value: 'INLINE_KEY_FIXTURE_123456', enabled: true },
         ],
         body: '{"password":"BODY_SECRET_VALUE_123456","name":"ok"}',
       },
-    }],
-    edges: [],
+    }, { id: 'extract', type: 'extract', config: { mode: 'json', path: 'reflected', name: 'copy' } }],
+    edges: [{ source: 'n', target: 'extract', sourceHandle: 'success' }],
   };
   const result = await new Engine(flow).run({
     debug: true,
     logSink: (entry) => seen.push(entry),
   });
-  const all = JSON.stringify(result.logs) + JSON.stringify(seen) + result.finalMessage;
+  assert.equal(result.vars.copy, 'INLINE_KEY_FIXTURE_123456', '内部步骤仍能使用原始响应');
+  assert.equal(result.redactedVars.copy, '***');
+  const all = JSON.stringify([result.logs, seen, result.redactedVars, result.summary]) + result.finalMessage;
   for (const secret of [
     'COOKIE_SECRET_VALUE_123456', 'TOKEN_SECRET_VALUE_123456', 'QUERY_SECRET_VALUE_123456',
     'BODY_SECRET_VALUE_123456', 'RESPONSE_COOKIE_SECRET_123456', 'RESPONSE_TOKEN_SECRET_123456',
+    'INLINE_COOKIE_FIXTURE_123456', 'INLINE_AUTH_FIXTURE_123456', 'INLINE_KEY_FIXTURE_123456',
   ]) {
     assert.ok(!all.includes(secret), `日志不应包含 ${secret}`);
   }

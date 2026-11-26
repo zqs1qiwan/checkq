@@ -41,6 +41,27 @@ export function collectSecrets(vars) {
   return [...out].sort((a, b) => b.length - a.length);
 }
 
+/** 收集实际请求凭据和会话 Cookie，供整次运行的输出脱敏。 */
+export function trackHttpCredentials(secrets, headers, setCookies = []) {
+  for (const [name, value] of Object.entries(headers)) {
+    if (!isSensitiveHeader(name) && !isSensitiveKey(name)) continue;
+    addSecret(secrets, value);
+    if (name === 'cookie') {
+      for (const pair of String(value).split(';')) trackCookieValue(secrets, pair);
+    } else if (name.endsWith('authorization')) {
+      addSecret(secrets, String(value).replace(/^\S+\s+/, ''));
+    }
+  }
+  for (const cookie of setCookies) {
+    trackCookieValue(secrets, String(cookie).split(';', 1)[0]);
+  }
+}
+
+function trackCookieValue(secrets, pair) {
+  const index = pair.indexOf('=');
+  if (index >= 0) addSecret(secrets, pair.slice(index + 1).trim().replace(/^"(.*)"$/, '$1'));
+}
+
 function flattenStrings(v, depth = 0) {
   if (depth > 4 || v === null || v === undefined) return [];
   if (typeof v === 'string') return [v];

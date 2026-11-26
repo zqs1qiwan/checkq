@@ -13,7 +13,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { ProxyAgent } from 'undici';
 import { fileURLToPath } from 'node:url';
-import { collectSecrets, redactLogEntry, redactText } from './redact.js';
+import { collectSecrets, redactDeep, redactLogEntry, redactText, trackHttpCredentials } from './redact.js';
 import { isSensitiveName } from './sensitive-name.js';
 import { parseAllowedOrigin } from './model.js';
 
@@ -186,7 +186,13 @@ export class Engine {
   async run({ trigger = 'manual', runId, logSink, debugStopId, debug, signal } = {}) {
     const flow = this.flow;
     const vars = { ...(flow.vars || {}) };
-    const state = { vars, last: null, steps: {}, cookieJar: new CookieJar(), signal };
+    const credentials = new Set(collectSecrets(vars));
+    const currentSecrets = () => {
+      for (const secret of collectSecrets(vars)) credentials.add(secret);
+      return [...credentials].sort((a, b) => b.length - a.length);
+    };
+    const state = { vars, last: null, steps: {}, cookieJar: new CookieJar(), signal, credentials };
+    const emit = logSink && ((entry) => logSink(redactLogEntry(entry, currentSecrets())));
     const logs = [];
     const missing = new Set();
 
@@ -249,7 +255,7 @@ export class Engine {
           message: finalMessage, detail: null, ms: 0, cancelled: true,
         };
         logs.push(lastLog);
-        if (logSink) logSink(redactLogEntry(lastLog, collectSecrets(vars)));
+        emit?.(lastLog);
         break;
       }
       stepCount++;
@@ -265,10 +271,10 @@ export class Engine {
         ms: 0,
       };
       try {
-        const outcome = await this.execNode(node, state, stepLog, missing, logs, logSink);
+        const outcome = await this.execNode(node, state, stepLog, missing, logs, emit);
         stepLog.ms = Date.now() - started;
         logs.push(stepLog);
-        if (logSink && shouldDisplay(stepLog)) logSink(redactLogEntry(stepLog, collectSecrets(vars)));
+        if (emit && shouldDisplay(stepLog)) emit(stepLog);
         if (missing.size) {
           stepLog.missing = [...missing];
           missing.clear();
@@ -334,7 +340,7 @@ export class Engine {
         stepLog.message = cancelled ? '运行已取消' : `步骤异常: ${err.message}`;
         stepLog.ms = Date.now() - started;
         logs.push(stepLog);
-        if (logSink && shouldDisplay(stepLog)) logSink(redactLogEntry(stepLog, collectSecrets(vars)));
+        if (emit && shouldDisplay(stepLog)) emit(stepLog);
         failed = true;
         finalMessage = stepLog.message;
         break;
@@ -350,7 +356,7 @@ export class Engine {
     //   all       = 所有步骤（默认，调试）
     //   log       = 仅 log 节点 + 失败步骤（qinglong/qiandao 风格，用户只看调教好的干净日志）
     //   log-final = 合并所有 log 节点为一条汇总日志 + 失败步骤
-    const secrets = collectSecrets(vars);
+    const secrets = currentSecrets();
     let trimmedLogs = logs;
     if (!debugMode && (effectiveRecord === 'log' || effectiveRecord === 'log-final')) {
       const displayed = logs.filter((l) => shouldDisplay(l));
@@ -388,8 +394,9 @@ export class Engine {
       : '';
 
     // include.varsSnapshot=false：不记录运行级变量快照（PRD §4.7.4）
-    if (!this.logInclude.varsSnapshot) return { ok: !failed, cancelled: finalMessage === '运行已取消', logs: trimmedLogs, vars: {}, finalMessage, summary };
-    return { ok: !failed, cancelled: finalMessage === '运行已取消', logs: trimmedLogs, vars, finalMessage, summary };
+    const snapshot = this.logInclude.varsSnapshot ? vars : {};
+    return { ok: !failed, cancelled: finalMessage === '运行已取消', logs: trimmedLogs, vars: snapshot,
+      redactedVars: redactVars(snapshot, secrets), finalMessage, summary };
   }
 
   findEntryNode() {
@@ -435,6 +442,7 @@ export class Engine {
         if (headers.cookie !== before) jarUsed = 1;
       }
     }
+    trackHttpCredentials(state.credentials, headers);
     let body = null;
     if (c.body && method !== 'GET' && method !== 'HEAD') {
       const b = renderTemplate(c.body, vars, missing);
@@ -489,6 +497,7 @@ export class Engine {
           respHeaders = Object.fromEntries(resp.headers.entries());
           setCookies = resp.headers.getSetCookie ? resp.headers.getSetCookie() : [];
         }
+        trackHttpCredentials(state.credentials, {}, setCookies);
         const location = respHeaders.location;
         if (location && [301, 302, 303, 307, 308].includes(status) && (protectRedirect || redirectMode === 'error')) {
           await resp?.body?.cancel();
@@ -623,7 +632,7 @@ export class Engine {
             const wait = retry.backoffMs * attempt; // 线性退避
             stepLog.message = `${result.message} → 重试 ${attempt}/${retry.times}（${wait}ms 后）`;
             logs.push({ ...stepLog, ok: true }); // 重试过程记录为中间日志
-            if (logSink) logSink(redactLogEntry(logs[logs.length - 1], collectSecrets(state.vars)));
+            logSink?.(logs[logs.length - 1]);
             await sleep(wait, state.signal);
             continue;
           }
@@ -983,10 +992,10 @@ async function httpViaCurl(url, method, headers, body, timeoutMs, follow, proxyU
 
 /** 头部脱敏：cookie/authorization 只留前 12 字符（日志展示用） */
 /** 通用脱敏（PRD §4.7.3 扩展）：变量快照等场景，敏感名变量的值整体打码 */
-export function redactVars(vars) {
+export function redactVars(vars, secrets = []) {
   const out = {};
   for (const [k, v] of Object.entries(vars || {})) {
-    out[k] = isSensitiveName(k) ? '***' : v;
+    out[k] = isSensitiveName(k) ? '***' : redactDeep(v, secrets);
   }
   return out;
 }

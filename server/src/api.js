@@ -272,7 +272,7 @@ export function buildServer({ dataDir, port }) {
               run.finalMessage = outcome.finalMessage || (outcome.ok ? '' : '执行失败');
             }
             run.summary = outcome.summary || '';
-            run.vars = redactVars(outcome.vars || {});
+            run.vars = outcome.redactedVars ?? redactVars(outcome.vars || {});
           } catch (err) {
             if (controller.signal.aborted) {
               const timedOut = record.reason === 'timeout';
