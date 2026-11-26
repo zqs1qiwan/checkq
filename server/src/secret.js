@@ -21,6 +21,7 @@ export { isSensitiveName };
 const PREFIX = 'enc:v1:';
 const IV_LEN = 12;
 const TAG_LEN = 16;
+const ENCRYPTED_NODE_TYPES = new Set(['http', 'notify']);
 
 /** 取（或生成）数据加密密钥 */
 export function secretKey(dataDir) {
@@ -171,7 +172,7 @@ export function encryptSecrets(key, obj) {
   }
   if (Array.isArray(out.nodes)) {
     out.nodes = out.nodes.map((node) => {
-      if (node?.type !== 'http' || !node.config || typeof node.config !== 'object') return node;
+      if (!ENCRYPTED_NODE_TYPES.has(node?.type) || !node.config || typeof node.config !== 'object') return node;
       if (!hasDefinitionCredentials({ nodes: [node] })) return node;
       return { ...node, config: encryptValue(key, JSON.stringify(node.config)) };
     });
@@ -195,12 +196,13 @@ export function decryptSecrets(key, obj) {
   }
   if (Array.isArray(out.nodes)) {
     out.nodes = out.nodes.map((node) => {
-      if (node?.type !== 'http' || !isEncrypted(node.config)) return node;
+      if (!ENCRYPTED_NODE_TYPES.has(node?.type) || !isEncrypted(node.config)) return node;
       try {
         const config = JSON.parse(decryptValue(key, node.config));
         if (config && typeof config === 'object' && !Array.isArray(config)) return { ...node, config };
       } catch { /* 无法还原时保留磁盘上的密文，避免启动后覆盖。 */ }
-      throw new Error('无法解密 HTTP 节点配置。请检查 CHECKQ_SECRET 或数据目录中的 .secret 是否与当前数据匹配。');
+      const label = node.type === 'http' ? 'HTTP' : '通知';
+      throw new Error(`无法解密 ${label} 节点配置。请检查 CHECKQ_SECRET 或数据目录中的 .secret 是否与当前数据匹配。`);
     });
   }
   return out;
@@ -282,8 +284,10 @@ function maskNode(node, secrets) {
   else if (config.proxy && typeof config.proxy === 'object' && typeof config.proxy.url === 'string') {
     config.proxy = { ...config.proxy, url: redactUrl(config.proxy.url, secrets) };
   }
-  if (typeof config.webhookUrl === 'string') config.webhookUrl = redactUrl(config.webhookUrl, secrets);
-  if (typeof config.barkUrl === 'string') config.barkUrl = redactUrl(config.barkUrl, secrets);
+  for (const field of ['webhookUrl', 'barkUrl']) {
+    if (typeof config[field] !== 'string' || !config[field]) continue;
+    config[field] = node.type === 'notify' ? '***' : redactUrl(config[field], secrets);
+  }
   if (config.body !== undefined) config.body = redactBody(config.body, contentType, secrets);
   if (typeof config.text === 'string') config.text = redactText(config.text, secrets);
   if (Array.isArray(config.channels)) config.channels = maskChannels(config.channels);

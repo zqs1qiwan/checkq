@@ -222,6 +222,7 @@ ssh root@checkq.local 'docker exec checkq node -e "
 **加密范围**（`server/src/secret.js`）：
 - **变量**：名字命中 `cookie|token|sess|auth|password|passwd|secret|api_key|credential|jwt|bearer|refresh`，或值形态像凭据（长 base64/hex、JWT `eyJ…`、含 `sess=`/`token=` 的 cookie 串）→ 加密；
 - **HTTP 节点**：识别出内联凭据时，任务和模板将该节点的完整请求配置加密保存。旧明文配置在下次存储重写时加密，运行时自动解密。启动时如果无法解密，CheckQ 会中止启动并保留原始数据文件。可恢复匹配的 `CHECKQ_SECRET` 或 `.secret` 后重试。回退到不支持该格式的版本时，可使用经密码验证的完整备份迁移。
+- **通知节点**：带渠道凭据的节点配置加密保存。Webhook 和 Bark 地址可能在路径里包含密钥，因此整个地址会在受限 API 回包及脱敏导出中遮蔽。节点解密失败时与 HTTP 节点一样中止启动并保留原始文件。
 - **通知渠道**：`token / key / pass / password / secret / url / user` 等字段 → 加密（Telegram bot token、SMTP 密码、webhook URL 里的签名都在内）；
 - **meta**：`meta.ai.apiKey`（AI 助手模型密钥）与旧版 `meta.apiKey` → 加密；密码仍只存 scrypt 哈希；
 - **不加密**：普通变量（如 `ua`、`site`）、流程图、脚本代码、日志记录 —— 保持可读、可 diff、可 grep。
