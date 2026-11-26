@@ -63,7 +63,7 @@
 - **CSRF**：写操作（POST/PUT/DELETE）校验 `Origin` 必须同源，跨站一律 403（浏览器表单/图片攻击不带同源 Origin）；会话 Cookie 同时 `SameSite=Strict`；
 - **CSP 与内联样式**：组件里存在少量内联 `style`，因此 `style-src` 保留 `'unsafe-inline'`；`script-src` 严格 `'self'`（无内联脚本、无第三方 CDN）；
 - **注入面**：HTTP 节点的 URL/头/体为用户自有配置，属于「用户对自己目标的主动请求」，不属于服务端注入；引擎内不使用 `eval` 渲染模板（表达式走白名单函数 + jexl 沙箱，1s 超时）；
-- **敏感信息脱敏**：运行日志在写盘和 SSE 推送前统一脱敏（`server/src/redact.js`）：Cookie / Set-Cookie / Authorization / API Key 等请求与响应头、URL userinfo 与敏感 query、JSON/表单请求体和响应体、动态提取值、断言证据与关键字摘要；执行内部变量保持原值，避免破坏提取链。执行器跟踪实际发送的敏感请求头、URL 认证信息、敏感查询参数、JSON 和表单中的敏感字段，以及收到的 Cookie 值。已识别的值即使出现在响应的普通字段、后续日志或其他名称的变量快照中，也会一并脱敏。响应体先脱敏，再按 `resBodyLimit` 截断，避免在预览边界留下凭据片段。
+- **敏感信息脱敏**：运行日志在写盘和 SSE 推送前统一脱敏（`server/src/redact.js`）：Cookie / Set-Cookie / Authorization / API Key 等请求与响应头、URL userinfo 与敏感 query、JSON/表单请求体和响应体、动态提取值、断言证据与关键字摘要；执行内部变量保持原值，避免破坏提取链。执行器跟踪实际发送的敏感请求头、URL 认证信息、敏感查询参数、JSON 和表单中的敏感字段，以及收到的 Cookie 值。已识别的值即使出现在响应的普通字段、后续日志或其他名称的变量快照中，也会一并脱敏。响应体和变量步骤的日志预览都先脱敏再截断。响应体预览长度由 `resBodyLimit` 控制。
 
 
 ### 6.1 执行隔离与资源上限（0.6.4）

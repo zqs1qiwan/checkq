@@ -191,7 +191,7 @@ export class Engine {
       for (const secret of collectSecrets(vars)) credentials.add(secret);
       return [...credentials].sort((a, b) => b.length - a.length);
     };
-    const state = { vars, last: null, steps: {}, cookieJar: new CookieJar(), signal, credentials };
+    const state = { vars, last: null, steps: {}, cookieJar: new CookieJar(), signal, credentials, currentSecrets };
     const emit = logSink && ((entry) => logSink(redactLogEntry(entry, currentSecrets(), this.resBodyLimit)));
     const logs = [];
     const missing = new Set();
@@ -608,6 +608,14 @@ export class Engine {
     return { ok: true };
   }
 
+  /** 写入原值供后续步骤使用，日志预览先脱敏再截断。 */
+  setVariable(state, stepLog, name, value, showEllipsis = false) {
+    state.vars[name] = value;
+    const secrets = state.currentSecrets();
+    const preview = isSensitiveName(name) ? '***' : redactText(value, secrets);
+    stepLog.message = `${name} = ${preview.slice(0, 120)}${showEllipsis && preview.length > 120 ? '…' : ''}`;
+  }
+
   /** 执行单个节点。returns { handle } 或 null(失败) */
   async execNode(node, state, stepLog, missing, logs, logSink) {
     const vars = state.vars;
@@ -666,8 +674,7 @@ export class Engine {
         } else {
           rendered = renderTemplate(String(raw), vars, missing);
         }
-        vars[c.name] = rendered;
-        stepLog.message = `${c.name} = ${String(rendered).slice(0, 120)}`;
+        this.setVariable(state, stepLog, c.name, rendered);
         return { handle: 'next' };
       }
 
@@ -685,8 +692,7 @@ export class Engine {
             if (c.optional === false) { stepLog.ok = false; return null; }
           } else {
             const val = typeof cur === 'object' ? JSON.stringify(cur) : String(cur);
-            vars[c.name] = val;
-            stepLog.message = `${c.name} = ${val.slice(0, 120)}`;
+            this.setVariable(state, stepLog, c.name, val);
           }
           return { handle: 'next' };
         }
@@ -715,8 +721,7 @@ export class Engine {
             val = hn ? String(h[hn] ?? '') : '';
           }
           if (val) {
-            vars[c.name] = val;
-            stepLog.message = `${c.name} = ${val.length > 120 ? val.slice(0, 120) + '…' : val}`;
+            this.setVariable(state, stepLog, c.name, val, true);
           } else {
             stepLog.message = c.mode === 'setCookie' ? '响应无 Set-Cookie' : `响应头未命中: ${c.headerName}`;
             if (c.optional === false) { stepLog.ok = false; return null; }
@@ -736,8 +741,7 @@ export class Engine {
         }
         if (m) {
           const val = m.length > 1 ? m[1] : m[0];
-          vars[c.name] = val;
-          stepLog.message = `${c.name} = ${String(val).slice(0, 120)}`;
+          this.setVariable(state, stepLog, c.name, val);
         } else {
           stepLog.message = `提取未命中: /${c.re}/ ← ${c.from}`;
           if (c.optional === false) {

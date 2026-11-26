@@ -82,6 +82,46 @@ test('响应日志先遮蔽凭据再截断，断言仍读取完整原文', async
   }
 });
 
+test('变量步骤的日志在截断前遮蔽长凭据', async (t) => {
+  const secret = 'long-private-fixture-' + 'x'.repeat(160);
+  const server = http.createServer((req, res) => {
+    const value = req.headers['x-api-key'];
+    res.writeHead(200, { 'content-type': 'application/json', 'x-reflected': value, 'set-cookie': `sid=${value}; Path=/` });
+    res.end(JSON.stringify({ value }));
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+
+  const nodes = [
+    { id: 'request', type: 'http', config: {
+      url: `http://127.0.0.1:${server.address().port}/`, headers: [{ name: 'x-api-key', value: secret }],
+    } },
+    { id: 'json', type: 'extract', config: { name: 'fromJson', mode: 'json', path: 'value' } },
+    { id: 'header', type: 'extract', config: { name: 'fromHeader', mode: 'header', headerName: 'X-Reflected' } },
+    { id: 'cookie', type: 'extract', config: { name: 'fromCookie', mode: 'setCookie' } },
+    { id: 'regex', type: 'extract', config: { name: 'fromRegex', from: 'last.text', re: '"value":"([^"]+)"' } },
+    { id: 'set', type: 'set', config: { name: 'copy', value: '{{fromJson}}' } },
+    { id: 'public', type: 'set', config: { name: 'ordinary', value: 'z'.repeat(150) } },
+    { id: 'short', type: 'set', config: { name: 'password', value: 'pin42' } },
+  ];
+  const edges = nodes.slice(1).map((node, index) => ({ source: nodes[index].id, target: node.id }));
+  const streamed = [];
+  const result = await new Engine({ nodes, edges, log: { record: 'all', debug: true } })
+    .run({ logSink: (entry) => streamed.push(entry) });
+  assert.equal(result.ok, true);
+  for (const name of ['fromJson', 'fromHeader', 'fromRegex', 'copy']) assert.equal(result.vars[name], secret);
+  assert.equal(result.vars.fromCookie, `sid=${secret}`);
+  for (const logs of [result.logs, streamed]) {
+    for (const id of ['json', 'header', 'cookie', 'regex', 'set']) {
+      const message = logs.find((entry) => entry.stepId === id).message;
+      assert.doesNotMatch(message, /long-private-fixture/);
+      assert.match(message, /\*\*\*/);
+    }
+    assert.equal(logs.find((entry) => entry.stepId === 'public').message, `ordinary = ${'z'.repeat(120)}`);
+    assert.equal(logs.find((entry) => entry.stepId === 'short').message, 'password = ***');
+  }
+});
+
 test('引擎运行日志与 SSE 推送都不含请求/响应凭据', async (t) => {
   const seen = [];
   const server = http.createServer((req, res) => {
