@@ -1407,8 +1407,8 @@ export function buildServer({ dataDir, port }) {
   class AiError extends Error {
     constructor(message, status = 502) { super(message); this.status = status; }
   }
-  /** 有上限地读取响应体，避免异常端点用超大错误页拖垮内存 */
-  const aiReadText = async (res, limit = 65536) => {
+  /** 限制成功响应的读取量。 */
+  const aiReadText = async (res, limit) => {
     if (!res.body || typeof res.body.getReader !== 'function') return '';
     const reader = res.body.getReader();
     const dec = new TextDecoder();
@@ -1437,6 +1437,7 @@ export function buildServer({ dataDir, port }) {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: 'Bearer ' + cfg.apiKey },
         body: JSON.stringify({ model: cfg.model, temperature, max_tokens: maxTokens, messages }),
+        redirect: 'manual',
         signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (e) {
@@ -1444,16 +1445,20 @@ export function buildServer({ dataDir, port }) {
       if (name === 'TimeoutError' || name === 'AbortError' || e?.code === 'ABORT_ERR' || e?.code === 'UND_ERR_HEADERS_TIMEOUT') {
         throw new AiError(`AI 接口超时（${Math.round(timeoutMs / 1000)} 秒未响应）`, 504);
       }
-      throw new AiError(`无法连接 AI 接口：${aiSafeText(e?.message || e, cfg.apiKey)}`, 502);
+      throw new AiError('无法连接 AI 接口，请检查 Base URL 和网络连接', 502);
     }
-    const raw = await aiReadText(r, r.ok ? 1_000_000 : 65536).catch(() => '');
     if (!r.ok) {
+      await r.body?.cancel().catch(() => {});
+      if (r.status >= 300 && r.status < 400) {
+        throw new AiError(`AI 接口返回重定向（HTTP ${r.status}），请配置最终 Base URL`, 502);
+      }
       const hint = r.status === 401 ? '（API Key 无效或未授权）'
         : r.status === 404 ? '（接口地址不存在，请确认 Base URL 是否指向 OpenAI 兼容的 /v1）'
           : r.status === 429 ? '（已被上游限流，请稍后再试）'
             : r.status === 400 ? '（请求被上游拒绝，请检查模型名/参数）' : '';
-      throw new AiError(`LLM 接口错误 ${r.status}${hint}: ${aiSafeText(raw, cfg.apiKey)}`, 502);
+      throw new AiError(`LLM 接口错误 ${r.status}${hint}`, 502);
     }
+    const raw = await aiReadText(r, 1_000_000);
     let data;
     try {
       data = JSON.parse(raw);

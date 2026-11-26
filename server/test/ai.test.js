@@ -19,6 +19,7 @@ const MASKED_KEY = FAKE_KEY.slice(0, 4) + '…';
 
 // ---- 本地 mock OpenAI 兼容端点（临时端口）----
 let lastRequest = null;
+let redirectHits = 0;
 const sockets = new Set();
 const mock = http.createServer((req, res) => {
   let raw = '';
@@ -31,10 +32,19 @@ const mock = http.createServer((req, res) => {
       res.writeHead(status, { 'content-type': contentType });
       res.end(typeof payload === 'string' ? payload : JSON.stringify(payload));
     };
+    if (req.url === '/redirect-target') {
+      redirectHits++;
+      return send(200, { choices: [{ message: { content: 'ok' } }] });
+    }
     if (req.url !== '/v1/chat/completions') return send(404, { error: { message: 'not found' } });
     const model = String(body.model || '');
     if (model === 'hang') return; // 故意不响应：测试超时（客户端 AbortSignal 中断）
     if (model === 'err-401') return send(401, { error: { message: `invalid key ${FAKE_KEY}` } });
+    if (model === 'redirect') {
+      res.writeHead(307, { location: '/redirect-target' });
+      return res.end();
+    }
+    if (model === 'err-echo') return send(400, { error: { message: `upstream-private-marker ${raw}` } });
     if (model === 'bad-json') return send(200, 'this is not json', 'text/plain');
     if (model === 'gen-ok') {
       // 恶意 config：__proto__ / constructor 键必须被服务端过滤
@@ -307,8 +317,27 @@ await check('测试连接失败：401 中文提示且不回显 Key', async () =>
   const j = r.json();
   assert.strictEqual(j.ok, false);
   assert.match(j.error, /401/);
-  assert.match(j.error, /\*\*\*/, '上游回显的 Key 应被打码');
+  assert.match(j.error, /API Key 无效或未授权/);
+  assert.doesNotMatch(j.error, /invalid key/);
   noKey(r.body, '401 错误');
+});
+
+await check('AI 请求遇到 307 时不访问重定向目标', async () => {
+  status(await app.inject({ method: 'PUT', url: '/api/system/ai', headers: A, payload: { baseUrl: MOCK, apiKey: MASKED_KEY, model: 'redirect' } }), 200, '切换到 redirect');
+  const r = await app.inject({ method: 'POST', url: '/api/ai/test', headers: A, payload: {} });
+  assert.equal(redirectHits, 0);
+  status(r, 502, '拒绝跟随重定向');
+  assert.match(r.json().error, /重定向/);
+});
+
+await check('模型错误正文不进入 API 回包或审计记录', async () => {
+  status(await app.inject({ method: 'PUT', url: '/api/system/ai', headers: A, payload: { baseUrl: MOCK, apiKey: MASKED_KEY, model: 'err-echo' } }), 200, '切换到 err-echo');
+  const sentence = '每天访问 https://example.com 检查 fixture-private-description';
+  const r = await app.inject({ method: 'POST', url: '/api/ai/generate', headers: A, payload: { sentence } });
+  status(r, 502, '上游错误');
+  assert.match(r.json().error, /400/);
+  const audit = JSON.stringify(server.store.listAudit(20));
+  for (const text of [r.body, audit]) assert.doesNotMatch(text, /upstream-private-marker|fixture-private-description/);
 });
 
 await check('测试连接失败：404 提示检查 Base URL', async () => {
