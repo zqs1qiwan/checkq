@@ -245,7 +245,7 @@ export function redactDeep(value, secrets = [], depth = 0) {
  * 脱敏一条 StepLog（返回新对象，不改执行内部状态）。
  * detail 里 URL、请求/响应 headers、body、Set-Cookie、proxy 全部覆盖。
  */
-export function redactLogEntry(entry, secrets = []) {
+export function redactLogEntry(entry, secrets = [], responseBodyLimit) {
   if (!entry || typeof entry !== 'object') return entry;
   const out = { ...entry };
   if (out.message) out.message = redactText(out.message, secrets);
@@ -272,7 +272,11 @@ export function redactLogEntry(entry, secrets = []) {
       if (r.headers) r.headers = redactHeaders(r.headers, secrets);
       if (Array.isArray(r.setCookie)) r.setCookie = r.setCookie.map(() => PLACEHOLDER);
       if (r.body !== undefined) {
-        r.body = redactBody(r.body, r.headers?.['content-type'] || '', secrets);
+        const raw = r.body;
+        r.body = responseBodyLimit === 0 ? '' : redactBody(raw, r.headers?.['content-type'] || '', secrets);
+        if (responseBodyLimit !== undefined && typeof r.body === 'string' && r.body.length > responseBodyLimit) {
+          r.body = r.body.slice(0, responseBodyLimit) + `… (${raw.length} bytes)`;
+        }
       }
       d.response = r;
     }

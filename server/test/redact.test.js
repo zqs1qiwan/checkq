@@ -52,6 +52,36 @@ test('日志条目脱敏覆盖请求头、响应 Set-Cookie 与动态提取值',
   assert.ok(text.includes('***'));
 });
 
+test('响应日志先遮蔽凭据再截断，断言仍读取完整原文', async (t) => {
+  const reflected = 'private-inline-fixture';
+  const returned = 'private-response-fixture';
+  const server = http.createServer((req, res) => {
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify(req.url === '/reflect' ? { value: req.headers['x-api-key'] } : { password: returned }));
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+
+  for (const [route, limit] of [['/reflect', 14], ['/field', 17]]) {
+    const streamed = [];
+    const result = await new Engine({
+      log: { record: 'all', debug: true, resBodyLimit: limit },
+      nodes: [{ id: 'request', type: 'http', config: {
+        url: `http://127.0.0.1:${server.address().port}${route}`,
+        headers: [{ name: 'x-api-key', value: reflected }],
+        asserts: [{ from: 'content', res: ['[a-z-]{20,}"'] }],
+      } }],
+      edges: [],
+    }).run({ logSink: (entry) => streamed.push(entry) });
+    assert.equal(result.ok, true);
+    for (const logs of [result.logs, streamed]) {
+      const preview = logs.find((entry) => entry.type === 'http').detail.response.body;
+      assert.doesNotMatch(preview, /priv/);
+      assert.match(preview, /\*\*\*/);
+    }
+  }
+});
+
 test('引擎运行日志与 SSE 推送都不含请求/响应凭据', async (t) => {
   const seen = [];
   const server = http.createServer((req, res) => {

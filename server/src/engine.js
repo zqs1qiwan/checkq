@@ -192,7 +192,7 @@ export class Engine {
       return [...credentials].sort((a, b) => b.length - a.length);
     };
     const state = { vars, last: null, steps: {}, cookieJar: new CookieJar(), signal, credentials };
-    const emit = logSink && ((entry) => logSink(redactLogEntry(entry, currentSecrets())));
+    const emit = logSink && ((entry) => logSink(redactLogEntry(entry, currentSecrets(), this.resBodyLimit)));
     const logs = [];
     const missing = new Set();
 
@@ -385,7 +385,7 @@ export class Engine {
 
     // 非调试模式：成功步骤不落请求/响应细节（保留失败步骤详情便于排障）
     // 注：clean 模式下 http 步骤本就不入日志，故此处无需再裁剪。
-    trimmedLogs = trimmedLogs.map((l) => redactLogEntry(l, secrets));
+    trimmedLogs = trimmedLogs.map((l) => redactLogEntry(l, secrets, this.resBodyLimit));
     finalMessage = redactText(finalMessage, secrets);
 
     // 运行摘要：关键字提取结果汇总（PRD：每次运行关心什么值，一眼可见）
@@ -558,18 +558,12 @@ export class Engine {
     const duration = Date.now() - t0;
     state.last = { status, statusText, headers: respHeaders, text, json, ms: duration, setCookies: setCookies || [] };
     state.steps[node.id] = state.last;
-    // resBodyLimit 截断（PRD §4.7.4：默认 2000，0-100000；0 = 不记录响应体）
-    const limit = this.resBodyLimit === undefined ? 2000 : this.resBodyLimit;
-    const recBody = !include.resBody
-      ? undefined
-      : limit === 0
-        ? ''
-        : text.length > limit ? text.slice(0, limit) + `… (${text.length} bytes)` : text;
+    // 日志出口统一先脱敏，再按 resBodyLimit 截断。
     stepLog.detail.response = {
       status,
       headers: respHeaders,
       setCookie: (setCookies || []).length ? setCookies : undefined,
-      body: recBody,
+      body: include.resBody ? text : undefined,
       ms: duration,
     };
 
