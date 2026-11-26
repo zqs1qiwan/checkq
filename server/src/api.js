@@ -1840,8 +1840,8 @@ export function buildServer({ dataDir, port }) {
 
   // ---- flows ----
   app.get('/api/flows', async (req) => {
-    if (keyHasFullFlowScope(req)) return store.listFlows();
-    return store.listFlows(store.flows.filter((flow) => keyAllowsFlow(req, flow)));
+    const flows = keyHasFullFlowScope(req) ? store.flows : store.flows.filter((flow) => keyAllowsFlow(req, flow));
+    return store.listFlows(flows, { maskCredentials: !keyHasScope(req, 'secrets') });
   });
 
   // ---- templates (user-created, stored in DB) ----
@@ -1864,7 +1864,7 @@ export function buildServer({ dataDir, port }) {
     return { id: tpl.id, name: tpl.name };
   });
 
-  app.get('/api/templates', async () => store.listTemplates());
+  app.get('/api/templates', async (req) => store.listTemplates({ maskCredentials: !keyHasScope(req, 'secrets') }));
 
   app.post('/api/templates', async (req, reply) => {
     if (!keyHasFullFlowScope(req)) return keyScopeDenied(reply, '受限 API Key 不能创建模板');
@@ -2020,7 +2020,7 @@ export function buildServer({ dataDir, port }) {
     if (!f) return reply.code(404).send({ error: 'not found' });
     // structure = 结构事实（P0-2）：缺线出口 / 孤立步骤 / 起点 / 循环体范围，画布与检查清单共用
     const structure = analyzeStructure(f);
-    return { ...visibleDefinition(req, f), template: store.templateInfo(f), structure };
+    return { ...visibleDefinition(req, f), template: store.templateInfo(f, undefined, !keyHasScope(req, 'secrets')), structure };
   });
 
   app.put('/api/flows/:id', async (req, reply) => {
@@ -2051,7 +2051,7 @@ export function buildServer({ dataDir, port }) {
     scheduler.rebuild();
     // 派生任务改了脚本内容 → 自动转为独立任务（前端提示一次）
     const detached = f && f.detached ? f.detached : null;
-    return { ...visibleDefinition(req, f), template: store.templateInfo(f), detached };
+    return { ...visibleDefinition(req, f), template: store.templateInfo(f, undefined, !keyHasScope(req, 'secrets')), detached };
   });
 
   app.delete('/api/flows/:id', async (req, reply) => {
@@ -2584,7 +2584,7 @@ export function buildServer({ dataDir, port }) {
       entries: parsed.entries.map(previewOf),
       newCount,
       subscribed: !!sub,
-      localTemplates: store.listTemplates().map((t) => ({ id: t.id, name: t.name, sourceId: t.market?.sourceId || null })),
+      localTemplates: store.listTemplates({ maskCredentials: !keyHasScope(req, 'secrets') }).map((t) => ({ id: t.id, name: t.name, sourceId: t.market?.sourceId || null })),
     };
   });
 

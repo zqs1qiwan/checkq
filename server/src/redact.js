@@ -132,6 +132,7 @@ function addSecret(set, value) {
 }
 
 export function redactKnownValues(text, secrets) {
+  if (typeof text !== 'string') return text;
   for (const secret of secrets || []) {
     if (secret && text.includes(secret)) text = text.split(secret).join(PLACEHOLDER);
   }

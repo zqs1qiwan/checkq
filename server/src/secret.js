@@ -216,9 +216,10 @@ export function maskSecrets(obj) {
   if (!obj || typeof obj !== 'object') return obj;
   const out = { ...obj };
   const secrets = collectDefinitionSecrets(obj);
-  for (const field of ['name', 'desc', 'note']) {
+  for (const field of ['name', 'desc', 'note', 'group', 'pausedReason']) {
     if (typeof out[field] === 'string') out[field] = redactKnownValues(out[field], secrets);
   }
+  if (out.market) out.market = redactDeep(out.market, secrets);
   if (out.vars && typeof out.vars === 'object') {
     const vars = {};
     for (const [k, v] of Object.entries(out.vars)) {

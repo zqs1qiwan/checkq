@@ -8,7 +8,8 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { Cron } from 'croner';
 import { hashPwd, checkPassword, hashApiKey } from './auth.js';
-import { secretKey, encryptSecrets, decryptSecrets, maskSecrets, encryptChannels, decryptChannels, maskChannels, encryptMeta, decryptMeta } from './secret.js';
+import { collectDefinitionSecrets, secretKey, encryptSecrets, decryptSecrets, maskSecrets, encryptChannels, decryptChannels, maskChannels, encryptMeta, decryptMeta } from './secret.js';
+import { redactDeep, redactKnownValues } from './redact.js';
 import { normalizeRetry, DEFAULT_RETRY } from './retry.js';
 import { normalizeRecovery, nextProbeTime } from './recovery.js';
 
@@ -312,7 +313,7 @@ export class Store {
     }
   }
 
-  listFlows(flows = this.flows) {
+  listFlows(flows = this.flows, { maskCredentials = false } = {}) {
     if (!flows.length) return [];
     const flowIds = flows === this.flows ? null : new Set(flows.map((flow) => flow.id));
     // 预聚合「今日」运行统计（按服务器本地日期），避免每个任务都扫一遍 runs
@@ -334,9 +335,13 @@ export class Store {
       if (!templatesById.has(template.id)) templatesById.set(template.id, template);
     }
     return flows.map((f) => {
+      const template = f.tplId ? templatesById.get(f.tplId) ?? null : null;
+      const nodes = template ? template.nodes : f.nodes;
+      const secrets = maskCredentials ? collectDefinitionSecrets({ vars: f.vars, nodes }) : [];
+      const redact = (value) => redactKnownValues(value, secrets);
       const last = lastByFlow.get(f.id) || null;
       const lastRun = last ? {
-        id: last.id, status: last.status, startedAt: last.startedAt, finalMessage: last.finalMessage,
+        id: last.id, status: last.status, startedAt: last.startedAt, finalMessage: redact(last.finalMessage),
         interrupted: last.interrupted, timedOut: last.timedOut,
       } : null;
       const t = todayByFlow.get(f.id) || { runs: 0, success: 0, failed: 0 };
@@ -346,19 +351,17 @@ export class Store {
       };
       // 下次运行时间（croner nextRun，仅启用调度的任务）
       const nextRunAt = this.nextRunAt(f);
-      const template = f.tplId ? templatesById.get(f.tplId) ?? null : null;
-      const nodes = template ? template.nodes : f.nodes;
       return {
-        id: f.id, name: f.name, note: f.note, cron: f.cron, timezone: f.timezone,
+        id: f.id, name: redact(f.name), note: redact(f.note), cron: f.cron, timezone: f.timezone,
         enabled: f.enabled, jitterMinutes: f.jitterMinutes || 0, varsCount: Object.keys(f.vars || {}).length,
-        group: f.group || '',                  // 分组名（空 = 未分组）
+        group: redact(f.group || ''),                  // 分组名（空 = 未分组）
         retry: normalizeRetry(f.retry),       // 失败重试策略（列表/详情展示用）
         recovery: normalizeRecovery(f.recovery), // 自动恢复探测配置与运行态
         isDemo: f.isDemo === true,            // 内置演练任务（P0-1）：界面标记「演示」，不参与导出
         pausedAt: f.pausedAt || null,          // 连续失败自动停用的时间
-        pausedReason: f.pausedReason || '',    // 自动停用的原因（最后一次失败结论）
+        pausedReason: redact(f.pausedReason || ''), // 自动停用的原因（最后一次失败结论）
         nodesCount: (nodes || []).length, tplId: f.tplId || null,
-        template: this.templateInfo(f, template),
+        template: this.templateInfo(f, template, maskCredentials),
         lastRun,
         today,
         nextRunAt,
@@ -498,20 +501,23 @@ export class Store {
   }
 
   // ---- templates ----
-  listTemplates() {
+  listTemplates({ maskCredentials = false } = {}) {
     if (!this.templates.length) return [];
     const taskCounts = new Map();
     for (const { tplId } of this.flows) {
       if (tplId) taskCounts.set(tplId, (taskCounts.get(tplId) || 0) + 1);
     }
-    return this.templates.map((t) => ({
-      id: t.id, name: t.name, desc: t.desc, source: t.source,
-      varNames: t.varNames || [],
-      nodesCount: (t.nodes || []).length,
-      taskCount: taskCounts.get(t.id) || 0,
-      updatedAt: t.updatedAt || t.createdAt || 0,
-      market: t.market || null,   // 市场来源 { sourceId, sourceUrl, sha256, importedAt }
-    }));
+    return this.templates.map((t) => {
+      const secrets = maskCredentials ? collectDefinitionSecrets(t) : [];
+      return {
+        id: t.id, name: redactKnownValues(t.name, secrets), desc: redactKnownValues(t.desc, secrets), source: t.source,
+        varNames: t.varNames || [],
+        nodesCount: (t.nodes || []).length,
+        taskCount: taskCounts.get(t.id) || 0,
+        updatedAt: t.updatedAt || t.createdAt || 0,
+        market: maskCredentials && t.market ? redactDeep(t.market, secrets) : t.market || null,
+      };
+    });
   }
 
   getTemplate(id) {
@@ -576,10 +582,11 @@ export class Store {
   }
 
   /** 模板信息（派生任务用：来源模板名） */
-  templateInfo(flow, tpl = flow?.tplId ? this.getTemplate(flow.tplId) : null) {
+  templateInfo(flow, tpl = flow?.tplId ? this.getTemplate(flow.tplId) : null, maskCredentials = false) {
     if (!flow?.tplId) return null;
     if (!tpl) return { id: flow.tplId, name: '(模板已删除)', missing: true };
-    return { id: tpl.id, name: tpl.name, missing: false };
+    const name = maskCredentials ? redactKnownValues(tpl.name, collectDefinitionSecrets(tpl)) : tpl.name;
+    return { id: tpl.id, name, missing: false };
   }
 
   deleteTemplate(id) {

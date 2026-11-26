@@ -42,10 +42,21 @@ const asKey = (key, method, url, payload) => app.inject({
 });
 
 const readOnly = await mkKey({ name: '只读绑定 A', scopes: ['read'], flowIds: [f1.id] });
+store.updateFlow(f1.id, { note: '业务备注 SECRET-HEADER', pausedReason: '旧错误 SECRET-HEADER' });
+store.addRun({ id: 'legacy-output', flowId: f1.id, startedAt: Date.now(), status: 'failed', finalMessage: '旧运行 SECRET-HEADER' });
+const listTemplate = store.createTemplate({ name: '模板 SECRET-HEADER', desc: '说明 SECRET-HEADER', nodes: f1.nodes });
 
 r = await asKey(readOnly.key, 'GET', '/api/flows');
 ok(r.statusCode === 200, '只读 Key 列表 200');
 ok(r.json().length === 1 && r.json()[0].id === f1.id, '只读 Key 列表只返回绑定任务');
+ok(r.json()[0].note === '业务备注 ***' && r.json()[0].pausedReason === '旧错误 ***'
+  && r.json()[0].lastRun.finalMessage === '旧运行 ***', '任务列表遮蔽定义和历史摘要中的凭据副本');
+const rawLists = await app.inject({ url: '/api/flows', cookies: ck });
+ok(rawLists.json().find((flow) => flow.id === f1.id).note === '业务备注 SECRET-HEADER', '登录会话仍可读取原始备注');
+const templateReader = await mkKey({ name: '全范围列表只读', scopes: ['read'] });
+const templateList = await asKey(templateReader.key, 'GET', '/api/templates');
+const listedTemplate = templateList.json().find((template) => template.id === listTemplate.id);
+ok(listedTemplate?.name === '模板 ***' && listedTemplate?.desc === '说明 ***', '模板列表遮蔽名称和说明中的凭据副本');
 
 r = await asKey(readOnly.key, 'GET', `/api/flows/${f1.id}`);
 ok(r.statusCode === 200, '只读 Key 读绑定任务 200');
@@ -95,7 +106,7 @@ ok(r.statusCode === 403, '分组绑定读组外任务被拒绝');
 
 const unionKey = await mkKey({ name: '任务与分组并集', scopes: ['read'], flowIds: [f2.id], groups: ['签到'] });
 const emptyKey = await mkKey({ name: '无匹配任务', scopes: ['read'], groups: ['空分组'] });
-const unrestricted = (await app.inject({ url: '/api/flows', cookies: ck })).json();
+const unrestricted = (await asKey(templateReader.key, 'GET', '/api/flows')).json();
 r = await asKey(unionKey.key, 'GET', '/api/flows');
 ok(r.statusCode === 200 && JSON.stringify(r.json()) === JSON.stringify(unrestricted), '任务与分组按并集匹配，摘要和顺序一致');
 const projected = [];
