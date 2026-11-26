@@ -131,7 +131,7 @@ function addSecret(set, value) {
   }
 }
 
-function redactKnownValues(text, secrets) {
+export function redactKnownValues(text, secrets) {
   for (const secret of secrets || []) {
     if (secret && text.includes(secret)) text = text.split(secret).join(PLACEHOLDER);
   }
@@ -200,13 +200,14 @@ export function redactUrl(value, secrets = []) {
   }
 }
 
-function redactHeaders(headers, secrets) {
+export function redactHeaders(headers, secrets) {
   if (!headers || typeof headers !== 'object') return headers;
   if (Array.isArray(headers)) {
     return headers.map((h) => {
       if (!h || typeof h !== 'object') return redactText(h, secrets);
       const out = { ...h };
-      if (isSensitiveHeader(h.name) || isSensitiveKey(h.name)) out.value = PLACEHOLDER;
+      const name = String(h.name || '').trim();
+      if (isSensitiveHeader(name) || isSensitiveKey(name)) out.value = PLACEHOLDER;
       else if (typeof out.value === 'string') out.value = redactText(out.value, secrets);
       return out;
     });
@@ -315,7 +316,8 @@ export function redactRunForExport(run, secrets = []) {
     status, finalMessage, summary, attempt, maxAttempts, recovered,
   } = run;
   return {
-    id, flowId, flowName, trigger, startedAt, finishedAt, durationMs,
+    id, flowId, trigger, startedAt, finishedAt, durationMs,
+    flowName: typeof flowName === 'string' ? redactKnownValues(flowName, secrets) : flowName,
     status,
     finalMessage: finalMessage ? redactText(finalMessage, secrets) : '',
     summary: summary ? redactText(summary, secrets) : '',
@@ -323,7 +325,7 @@ export function redactRunForExport(run, secrets = []) {
     logs: (run.logs || []).map((l) => ({
       stepId: l.stepId,
       index: l.index,
-      name: l.name,
+      name: typeof l.name === 'string' ? redactKnownValues(l.name, secrets) : l.name,
       type: l.type,
       ok: l.ok !== false,
       message: redactText(l.message || '', secrets),

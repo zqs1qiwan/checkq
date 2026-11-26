@@ -20,7 +20,7 @@ import { buildOpenApi } from './openapi.js';
 import { ipAllowed, isPrivateIp, normalizeIp } from './iprange.js';
 import { Engine, redactVars } from './engine.js';
 import { collectSecrets, hasAiInputCredentials, redactRunForExport, redactText } from './redact.js';
-import { hasDefinitionCredentials, maskSecrets } from './secret.js';
+import { collectDefinitionSecrets, hasDefinitionCredentials, maskSecrets } from './secret.js';
 import { validateFlow, validateHttpOrigins } from './model.js';
 import { importHar } from './har-import.js';
 import { parseCurl } from './curl-import.js';
@@ -2300,7 +2300,7 @@ export function buildServer({ dataDir, port }) {
   // 备份/恢复：导出 flows/runs/templates（meta 密码不导出）；恢复以新 ID 导入避免覆盖
   // 备份（默认脱敏：cookie/token/密码等一律清空，适合分享与存档）
   app.get('/api/system/backup', async () => {
-    const secretsByFlow = new Map(store.flows.map((f) => [f.id, collectSecrets(f.vars)]));
+    const secretsByFlow = new Map(store.flows.map((f) => [f.id, collectDefinitionSecrets(f)]));
     return {
       version: VERSION,
       exportedAt: new Date().toISOString(),

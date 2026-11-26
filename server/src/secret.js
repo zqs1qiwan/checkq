@@ -11,7 +11,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { isSensitiveName } from './sensitive-name.js';
-import { collectSecrets, redactBody, redactDeep, redactText, redactUrl } from './redact.js';
+import {
+  collectSecrets, redactBody, redactDeep, redactHeaders, redactKnownValues, redactText, redactUrl,
+  trackHttpBodyCredentials, trackHttpCredentials, trackHttpUrlCredentials,
+} from './redact.js';
 
 export { isSensitiveName };
 
@@ -186,20 +189,46 @@ export function decryptSecrets(key, obj) {
   return out;
 }
 
+/** 收集变量和 HTTP 节点的凭据，供定义副本与备份摘要脱敏。 */
+export function collectDefinitionSecrets(definition) {
+  const inline = new Set();
+  for (const node of Array.isArray(definition.nodes) ? definition.nodes : []) {
+    if (node?.type !== 'http' || !node.config) continue;
+    const { headers, url, proxy, body } = node.config;
+    let contentType = '';
+    for (const header of Array.isArray(headers) ? headers : []) {
+      if (!header?.name) continue;
+      const name = String(header.name).trim().toLowerCase();
+      if (name === 'content-type') contentType = String(header.value || '');
+      trackHttpCredentials(inline, { [name]: header.value });
+    }
+    trackHttpUrlCredentials(inline, url);
+    trackHttpUrlCredentials(inline, proxy?.url ?? proxy);
+    trackHttpBodyCredentials(inline, body, contentType);
+  }
+  // 模板引用保留在普通字段中，解析后的实际变量值仍参与脱敏。
+  const literals = [...inline].filter((value) => !/\{\{|%7b%7b/i.test(value));
+  return [...new Set([...collectSecrets(definition.vars), ...literals])].sort((a, b) => b.length - a.length);
+}
+
 /** 导出/备份时的脱敏（保留结构，敏感值替换为占位） */
 export function maskSecrets(obj) {
   if (!obj || typeof obj !== 'object') return obj;
   const out = { ...obj };
-  const secrets = collectSecrets(out.vars);
+  const secrets = collectDefinitionSecrets(obj);
+  for (const field of ['name', 'desc', 'note']) {
+    if (typeof out[field] === 'string') out[field] = redactKnownValues(out[field], secrets);
+  }
   if (out.vars && typeof out.vars === 'object') {
     const vars = {};
     for (const [k, v] of Object.entries(out.vars)) {
-      vars[k] = isSensitiveName(k) || looksSensitiveValue(v) ? '' : v;
+      vars[k] = isSensitiveName(k) || looksSensitiveValue(v) ? '' : (secrets.length ? redactDeep(v, secrets) : v);
     }
     out.vars = vars;
   }
   if (out.notify && Array.isArray(out.notify.channels)) {
     out.notify = { ...out.notify, channels: maskChannels(out.notify.channels) };
+    if (typeof out.notify.template === 'string') out.notify.template = redactKnownValues(out.notify.template, secrets);
   }
   if (Array.isArray(out.nodes)) {
     out.nodes = out.nodes.map((n) => maskNode(n, secrets));
@@ -220,17 +249,13 @@ export function hasDefinitionCredentials(definition) {
 }
 
 /** 节点内联凭据：URL/代理、Cookie/Authorization 头、body、通知节点密钥 */
-const NODE_SECRET_HEADER = /^(cookie|set-cookie|authorization|proxy-authorization|x-api-key|api-key|x-auth-token|access-token|refresh-token|token|password|secret)$/i;
 function maskNode(node, secrets) {
   if (!node || typeof node !== 'object') return node;
   const out = { ...node };
   if (!out.config || typeof out.config !== 'object') return out;
   const config = redactDeep(out.config, secrets);
   if (Array.isArray(config.headers)) {
-    config.headers = config.headers.map((h) => {
-      if (!h || typeof h !== 'object') return h;
-      return NODE_SECRET_HEADER.test(String(h.name || '')) ? { ...h, value: '***' } : h;
-    });
+    config.headers = redactHeaders(config.headers, secrets);
   }
   const headers = Array.isArray(config.headers) ? config.headers : [];
   const contentType = headers.find((h) => String(h?.name || '').toLowerCase() === 'content-type')?.value || '';

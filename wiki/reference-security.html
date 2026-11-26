@@ -185,7 +185,7 @@ ssh root@checkq.local &#39;docker exec checkq node -e &quot;
 <ul><li>运行日志与变量快照对 <code>cookie</code>/<code>authorization</code> 等头自动脱敏；</li><li>登录日志不记录凭据；审计日志只记动作与账号，不记值；</li><li>数据目录文件权限已收紧为 <code>600</code>（<code>meta.json / flows.json / runs.json / templates.json / notifications.json</code>）。</li></ul>
 <h3 id="123-与两者相比我们更强-更弱的地方">12.3 与两者相比，我们更强 / 更弱的地方<a class="h-anchor" href="#123-与两者相比我们更强-更弱的地方" aria-label="本节永久链接">#</a></h3>
 <p><strong>更强</strong>：</p>
-<ol><li>凭据静态加密（AES-256-GCM）+ 认证标签 —— qiandao 用的是 AES-CBC（无认证标签），qinglong 干脆明文；</li><li>备份默认脱敏，完整备份需二次密码 —— 两者的备份都含明文凭据；</li><li>密钥独立于用户密码（改密码不会作废 cookie），并可从环境注入（便于集中管理）；</li><li>密钥文件 600 且不暴露在任何接口。</li></ol>
+<ol><li>凭据静态加密（AES-256-GCM）+ 认证标签 —— qiandao 用的是 AES-CBC（无认证标签），qinglong 干脆明文；</li><li>默认备份遮蔽已识别的凭据及其在普通变量、备注和运行摘要中的已知副本。完整备份需再次验证密码，包含明文凭据。</li><li>密钥独立于用户密码（改密码不会作废 cookie），并可从环境注入（便于集中管理）；</li><li>密钥文件 600 且不暴露在任何接口。</li></ol>
 <p><strong>更弱 / 取舍</strong>：</p>
 <ol><li>不做邮箱验证与邮件找回（没有邮件服务）；</li><li>不显示 2FA 二维码（避免把 TOTP 密钥交给第三方二维码服务）；</li><li>加密只覆盖「流程变量 + 通知渠道」，<strong>运行历史里的响应体仍可能有站点返回的凭据</strong>（如某些站点在响应里回显 token）—— 已做日志级脱敏，但不是全量加密；</li><li>加密发生在应用层，<strong>磁盘备份/快照工具（如 NAS 快照）仍能看到密文</strong>，只有拿到 <code>.secret</code> 才能解 —— 这一点与 qiandao 相同（密钥与密文同机）。</li></ol>
 <h3 id="124-建议的后续动作可选">12.4 建议的后续动作（可选）<a class="h-anchor" href="#124-建议的后续动作可选" aria-label="本节永久链接">#</a></h3>
@@ -225,7 +225,7 @@ cd server &amp;&amp; for f in test/*.test.js; do node $f; done   # 全量 272 �
         </div>
       </div>
       <div class="foot-meta">
-        <p>v0.6.5 · 生成于 2026-11-26 14:44 UTC · 由 <code>tools/build-wiki.cjs</code> 从 <code>docs/</code> 与内置页面生成</p>
+        <p>v0.6.5 · 生成于 2026-11-26 14:48 UTC · 由 <code>tools/build-wiki.cjs</code> 从 <code>docs/</code> 与内置页面生成</p>
         <p><a class="to-top" href="#top">↑ 返回顶部</a></p>
       </div>
     </footer>
