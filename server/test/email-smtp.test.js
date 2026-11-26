@@ -22,6 +22,7 @@ function check(name, cond, extra = '') {
 
 // ---- 假 SMTP 服务器 ----
 const captured = { authUser: '', authPass: '', mailFrom: '', rcpt: [], data: '' };
+let rejectAuth = false;
 const smtp = net.createServer((socket) => {
   let buf = '';
   let auth = 0;
@@ -47,7 +48,11 @@ const smtp = net.createServer((socket) => {
       if (/^EHLO/i.test(line)) socket.write('250-fake\r\n250-AUTH LOGIN\r\n250 OK\r\n');
       else if (/^AUTH LOGIN/i.test(line)) { auth = 1; socket.write('334 VXNlcm5hbWU6\r\n'); }
       else if (auth === 1) { captured.authUser = Buffer.from(line, 'base64').toString('utf8'); auth = 2; socket.write('334 UGFzc3dvcmQ6\r\n'); }
-      else if (auth === 2) { captured.authPass = Buffer.from(line, 'base64').toString('utf8'); auth = 0; socket.write('235 Authentication successful\r\n'); }
+      else if (auth === 2) {
+        captured.authPass = Buffer.from(line, 'base64').toString('utf8');
+        auth = 0;
+        socket.write(rejectAuth ? `535 rejected ${line}\r\n` : '235 Authentication successful\r\n');
+      }
       else if (/^MAIL FROM:/i.test(line)) { captured.mailFrom = line; socket.write('250 OK\r\n'); }
       else if (/^RCPT TO:/i.test(line)) { captured.rcpt.push(line); socket.write('250 OK\r\n'); }
       else if (/^DATA/i.test(line)) { inData = true; socket.write('354 End data with <CR><LF>.<CR><LF>\r\n'); }
@@ -89,6 +94,12 @@ const bodyB64 = captured.data.split('\r\n\r\n')[1] || '';
 const bodyText = Buffer.from(bodyB64.replace(/\r\n/g, ''), 'base64').toString('utf8');
 check('正文含任务名/状态', bodyText.includes('mail-test') && bodyText.includes('成功'), bodyText.slice(0, 120));
 check('主题 UTF-8 编码', /Subject: =\?UTF-8\?B\?/.test(captured.data), captured.data.slice(0, 200));
+
+rejectAuth = true;
+const denied = await app.inject({ method: 'POST', url: `/api/flows/${flow.id}/notify-test`, headers: { cookie } });
+check('SMTP 认证失败只保留阶段与响应码', denied.statusCode === 502
+  && denied.json().results[0].error === 'AUTH 密码失败（SMTP 535）'
+  && !denied.body.includes(Buffer.from(captured.authPass).toString('base64')));
 
 await new Promise((res) => smtp.close(res));
 await app.close();

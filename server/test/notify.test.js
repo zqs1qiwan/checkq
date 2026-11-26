@@ -19,7 +19,9 @@ globalThis.fetch = async (url, opts) => {
   calls.push({ url: String(url), opts: opts || {} });
   const u = String(url);
   let body = {};
-  if (u.includes('api.telegram.org')) body = { ok: true };
+  if (u.includes('api.telegram.org/botfixture-error/')) {
+    body = { ok: false, error_code: 401, description: 'provider-private-marker' };
+  } else if (u.includes('api.telegram.org')) body = { ok: true };
   else if (u.includes('sctapi.ftqq.com')) body = { code: 0, message: 'success' };
   else if (u.includes('oapi.dingtalk.com')) body = { errcode: 0, errmsg: 'ok' };
   else if (u.includes('qyapi.weixin.qq.com')) body = { errcode: 0, errmsg: 'ok' };
@@ -111,6 +113,23 @@ const bad = await app.inject({
 const badFlow = bad.json();
 const rb = await app.inject({ method: 'POST', url: `/api/flows/${badFlow.id}/notify-test`, headers: { cookie } });
 check('未知渠道 → 502 + 失败结果', rb.statusCode === 502 && (rb.json().results || []).some((x) => !x.ok), rb.body);
+
+const providerFlow = server.store.createFlow({ name: 'provider-error', retry: { enabled: false }, nodes: [{ id: 'n', type: 'notify', config: {
+  tgToken: 'fixture-error', tgChat: 'example', text: 'fixture',
+} }], notify: { channels: [{ type: 'telegram', token: 'fixture-error', chat: 'example' }] } });
+const serverLogs = [];
+const originalError = console.error;
+let providerNotice, providerRun;
+try {
+  console.error = (...parts) => serverLogs.push(parts.join(' '));
+  providerNotice = await app.inject({ method: 'POST', url: `/api/flows/${providerFlow.id}/notify-test`, headers: { cookie } });
+  providerRun = await app.inject({ method: 'POST', url: `/api/flows/${providerFlow.id}/run`, headers: { cookie }, payload: {} });
+} finally {
+  console.error = originalError;
+}
+check('供应商错误保留状态码与服务错误码', providerNotice.statusCode === 502 && providerNotice.body.includes('HTTP 200 code=401'));
+check('上游错误正文不会进入 API 或运行日志', providerRun.statusCode === 200 && providerRun.json().status === 'failed'
+  && providerRun.body.includes('HTTP 200 code=401') && ![providerNotice.body, providerRun.body, ...serverLogs].some((s) => s.includes('provider-private-marker')));
 
 globalThis.fetch = realFetch;
 await app.close();

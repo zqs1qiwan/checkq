@@ -21,6 +21,11 @@ function timeoutSignal(ms = TIMEOUT_MS) {
   return AbortSignal.timeout(ms);
 }
 
+function providerError(status, code) {
+  const hasCode = Number.isSafeInteger(code) && Math.abs(code) <= 9999999;
+  return new Error(`HTTP ${status}${hasCode ? ` code=${code}` : ''}`);
+}
+
 /** 钉钉/飞书机器人签名：timestamp + "\n" + secret 做 HMAC-SHA256，base64 后拼到 URL */
 export function signBotUrl(ch) {
   const url = String(ch.url || '');
@@ -59,7 +64,7 @@ export async function sendChannel(ch, text, ctx = {}, deps = {}) {
         signal: timeoutSignal(),
       });
       const j = await res.json().catch(() => ({}));
-      if (!res.ok || (j.code !== undefined && j.code !== 200)) throw new Error(`HTTP ${res.status} code=${j.code} ${j.msg || ''}`);
+      if (!res.ok || (j.code !== undefined && j.code !== 200)) throw providerError(res.status, j.code);
     } else if (type === 'gotify') {
       const base = String(ch.url || '').replace(/\/+$/, '');
       const res = await fetch(`${base}/message?token=${encodeURIComponent(ch.token || '')}`, {
@@ -87,7 +92,7 @@ export async function sendChannel(ch, text, ctx = {}, deps = {}) {
         signal: timeoutSignal(),
       });
       const j = await res.json().catch(() => ({}));
-      if (!res.ok || j.ok === false) throw new Error(`HTTP ${res.status} ${j.description || ''}`);
+      if (!res.ok || j.ok === false) throw providerError(res.status, j.error_code);
     } else if (type === 'bark') {
       const u = (ch.url || '').replace(/\/+$/, '');
       const title2 = encodeURIComponent(title || 'CheckQ');
@@ -104,8 +109,7 @@ export async function sendChannel(ch, text, ctx = {}, deps = {}) {
         signal: timeoutSignal(),
       });
       const j = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(`HTTP ${res.status} ${j.message || ''}`);
-      if (j.code !== undefined && j.code !== 0) throw new Error(`HTTP ${res.status} code=${j.code} ${j.message || ''}`);
+      if (!res.ok || (j.code !== undefined && j.code !== 0)) throw providerError(res.status, j.code);
     } else if (type === 'dingtalk') {
       const url = signBotUrl(ch);
       const res = await fetch(url, {
@@ -114,7 +118,7 @@ export async function sendChannel(ch, text, ctx = {}, deps = {}) {
         signal: timeoutSignal(),
       });
       const j = await res.json().catch(() => ({}));
-      if (!res.ok || j.errcode !== 0) throw new Error(`HTTP ${res.status} errcode=${j.errcode} ${j.errmsg || ''}`);
+      if (!res.ok || j.errcode !== 0) throw providerError(res.status, j.errcode);
     } else if (type === 'wecom') {
       const res = await fetch(ch.url, {
         method: 'POST', headers: { 'content-type': 'application/json' },
@@ -122,7 +126,7 @@ export async function sendChannel(ch, text, ctx = {}, deps = {}) {
         signal: timeoutSignal(),
       });
       const j = await res.json().catch(() => ({}));
-      if (!res.ok || j.errcode !== 0) throw new Error(`HTTP ${res.status} errcode=${j.errcode} ${j.errmsg || ''}`);
+      if (!res.ok || j.errcode !== 0) throw providerError(res.status, j.errcode);
     } else if (type === 'feishu') {
       const url = signBotUrl(ch);
       const res = await fetch(url, {
@@ -131,7 +135,7 @@ export async function sendChannel(ch, text, ctx = {}, deps = {}) {
         signal: timeoutSignal(),
       });
       const j = await res.json().catch(() => ({}));
-      if (!res.ok || j.code !== 0) throw new Error(`HTTP ${res.status} code=${j.code} ${j.msg || ''}`);
+      if (!res.ok || j.code !== 0) throw providerError(res.status, j.code);
     } else {
       throw new Error('未知通知类型: ' + type);
     }
@@ -200,7 +204,8 @@ export function smtpSend(ch, subject, text) {
     });
     const cmd = async (line) => { socket.write(line + '\r\n'); return read(); };
     const expect = (resp, code, what) => {
-      if (!resp || !resp.startsWith(String(code))) throw new Error(`${what} 失败: ${String(resp || '').split('\n').pop()}`);
+      const actual = /^(\d{3})(?:[ -]|$)/.exec(resp?.split('\n').at(-1) || '')?.[1];
+      if (actual !== String(code)) throw new Error(`${what}失败（${actual ? `SMTP ${actual}` : 'SMTP 响应无效'}）`);
       return resp;
     };
 
