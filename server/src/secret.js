@@ -207,6 +207,18 @@ export function maskSecrets(obj) {
   return out;
 }
 
+/** 复用脱敏规则识别已有凭据，忽略 URL 和请求体的格式变化。 */
+export function hasDefinitionCredentials(definition) {
+  const changedToMask = (original, masked) => {
+    if (original === masked || original == null || original === '') return false;
+    if (masked && typeof masked === 'object') {
+      return Object.keys(masked).some((key) => changedToMask(original[key], masked[key]));
+    }
+    return typeof masked === 'string' && (masked === '' || masked.includes('***') || /%2A%2A%2A/i.test(masked));
+  };
+  return changedToMask(definition, maskSecrets(definition));
+}
+
 /** 节点内联凭据：URL/代理、Cookie/Authorization 头、body、通知节点密钥 */
 const NODE_SECRET_HEADER = /^(cookie|set-cookie|authorization|proxy-authorization|x-api-key|api-key|x-auth-token|access-token|refresh-token|token|password|secret)$/i;
 function maskNode(node, secrets) {

@@ -49,7 +49,7 @@ const mkKey = async (scopes) => {
 
 const readKey = await mkKey(['read']);
 const runKey = await mkKey(['read', 'run']);
-const fullKey = await mkKey(['read', 'run', 'write']);
+const fullKey = await mkKey(['read', 'run', 'write', 'secrets']);
 
 await check('只读 key 可以查任务列表', async () => {
   const r = await app.inject({ method: 'GET', url: '/api/flows', headers: { 'x-api-key': readKey } });

@@ -20,7 +20,7 @@ import { buildOpenApi } from './openapi.js';
 import { ipAllowed, isPrivateIp, normalizeIp } from './iprange.js';
 import { Engine, redactVars } from './engine.js';
 import { collectSecrets, hasAiInputCredentials, redactRunForExport } from './redact.js';
-import { maskSecrets } from './secret.js';
+import { hasDefinitionCredentials, maskSecrets } from './secret.js';
 import { validateFlow } from './model.js';
 import { importHar } from './har-import.js';
 import { parseCurl } from './curl-import.js';
@@ -87,6 +87,10 @@ export function buildServer({ dataDir, port }) {
   /** API Key 的任务和模板回包使用同一凭据可见性规则。 */
   const visibleDefinition = (req, definition) => (keyHasScope(req, 'secrets') ? definition : maskSecrets(definition));
   const keyScopeDenied = (reply, message = '该 API Key 的任务范围不包含此任务') => reply.code(403).send({ error: message });
+  const modifiesExecution = (patch) => ['nodes', 'edges', 'vars', 'varNames', 'notify', 'log', 'tplId'].some((field) => Object.hasOwn(patch, field));
+  const templateUsesCredentials = (template) => hasDefinitionCredentials(template)
+    || store.flows.some((flow) => flow.tplId === template.id && hasDefinitionCredentials(flow));
+  const rejectCredentialEdit = (reply) => keyScopeDenied(reply, '此配置涉及任务凭据，请在 CheckQ 内修改执行配置');
   const loginLocked = (ip) => {
     const rec = loginFails.get(ip);
     if (!rec) return false;
@@ -1870,9 +1874,13 @@ export function buildServer({ dataDir, port }) {
 
   app.put('/api/templates/:id', async (req, reply) => {
     if (!keyHasFullFlowScope(req)) return keyScopeDenied(reply, '受限 API Key 不能修改模板');
-    const t = store.updateTemplate(req.params.id, req.body || {});
-    if (!t) return reply.code(404).send({ error: 'not found' });
-    return visibleDefinition(req, t);
+    const template = store.getTemplate(req.params.id);
+    if (!template) return reply.code(404).send({ error: 'not found' });
+    const patch = req.body || {};
+    if (!keyHasScope(req, 'secrets') && modifiesExecution(patch) && templateUsesCredentials(template)) {
+      return rejectCredentialEdit(reply);
+    }
+    return visibleDefinition(req, store.updateTemplate(template.id, patch));
   });
 
   app.delete('/api/templates/:id', async (req, reply) => {
@@ -2022,6 +2030,13 @@ export function buildServer({ dataDir, port }) {
         return reply.code(409).send({
           error: '任务已被其他窗口或 Agent 修改，请刷新后再保存', conflict: true, rev: Number(f0.rev) || 0,
         });
+      }
+    }
+    if (!keyHasScope(req, 'secrets') && modifiesExecution(patch)) {
+      const targetTemplate = patch.tplId && store.getTemplate(patch.tplId);
+      if (hasDefinitionCredentials(f0) || (f0.tplId && hasDefinitionCredentials(store.getFlowRaw(f0.id)))
+          || (targetTemplate && hasDefinitionCredentials(targetTemplate))) {
+        return rejectCredentialEdit(reply);
       }
     }
     const errors = validateFlow({ ...f0, ...patch });
@@ -2603,6 +2618,7 @@ export function buildServer({ dataDir, port }) {
     const name = existing && mode === 'copy' ? `${resolved.template.name}（副本）` : resolved.template.name;
     let tpl;
     if (existing && mode === 'overwrite') {
+      if (!keyHasScope(req, 'secrets') && templateUsesCredentials(existing)) return rejectCredentialEdit(reply);
       tpl = store.updateTemplate(existing.id, { ...resolved.template, name, market });
     } else {
       tpl = store.createTemplate({ ...resolved.template, name, market }, 'market');

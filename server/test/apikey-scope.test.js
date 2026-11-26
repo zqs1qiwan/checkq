@@ -146,6 +146,10 @@ ok(r.statusCode === 200 && r.json().vars?.token === 'SECRET-TOKEN', 'secrets 作
 const editorKey = await mkKey({ name: '修改任务，无凭据读取权', scopes: ['read', 'write'], flowIds: [f1.id] });
 const saved = await asKey(editorKey.key, 'PUT', `/api/flows/${f1.id}`, { note: 'Agent 更新备注' });
 ok(saved.statusCode === 200 && saved.json().note === 'Agent 更新备注' && saved.json().vars?.cookie === '' && !saved.body.includes('SECRET-HEADER'), '任务保存回包保留编辑结果并脱敏');
+const forbiddenEdit = await asKey(editorKey.key, 'PUT', `/api/flows/${f1.id}`, {
+  nodes: f1.nodes.map((node) => ({ ...node, config: { ...node.config, url: 'https://other.example.test/' } })),
+});
+ok(forbiddenEdit.statusCode === 403 && store.getFlow(f1.id).nodes[0].config.url === 'https://example.com/api', '修改任务密钥不能改写带凭据的执行配置');
 const curl = await asKey(editorKey.key, 'POST', `/api/flows/${f1.id}/curl`, { nodeId: 'n0' });
 ok(curl.statusCode === 200 && !curl.body.includes('SECRET-HEADER'), 'cURL 回包不包含内联凭据');
 const legacyKey = 'fixture-legacy-key';
@@ -168,6 +172,18 @@ const clone = await asKey(globalEditor.key, 'POST', `/api/flows/${f1.id}/clone`,
 ok(clone.statusCode === 200 && clone.json().vars?.cookie === '' && !clone.body.includes('SECRET-HEADER'), '克隆回包不返回原任务凭据');
 const templateAfter = await asKey(runKey.key, 'GET', `/api/templates/${tpl.json().id}`);
 ok(templateAfter.json().vars?.token === 'SECRET-TOKEN', '模板更新保留原凭据');
+
+const cleanNodes = [{ id: 'request', type: 'http', config: { method: 'POST', url: 'https://example.test', body: '{ "mode": "daily" }' } }];
+const cleanTemplate = store.createTemplate({ name: '共享流程', nodes: cleanNodes, edges: [] });
+const cleanFlow = store.createFlow({ name: '无凭据草稿', nodes: cleanNodes, edges: [] });
+const newNodes = [{ ...cleanNodes[0], config: { ...cleanNodes[0].config, url: 'https://new.example.test/' } }];
+r = await asKey(globalEditor.key, 'PUT', `/api/flows/${cleanFlow.id}`, { nodes: newNodes });
+ok(r.statusCode === 200, '无凭据草稿允许编辑请求目标');
+const derived = store.instantiateTemplate(cleanTemplate.id, { vars: { password: 'local-fixture-password' } });
+r = await asKey(globalEditor.key, 'PUT', `/api/templates/${cleanTemplate.id}`, { nodes: newNodes });
+ok(r.statusCode === 403 && store.getFlow(derived.id).nodes[0].config.url === 'https://example.test', '模板更新也检查派生任务的凭据');
+r = await app.inject({ method: 'PUT', url: `/api/templates/${cleanTemplate.id}`, cookies: ck, payload: { nodes: newNodes } });
+ok(r.statusCode === 200 && store.getFlow(derived.id).nodes[0].config.url === 'https://new.example.test/', '本地会话仍可编辑带凭据的执行配置');
 
 scheduler.stop?.();
 console.log(`\n${pass} passed, ${fail} failed`);
