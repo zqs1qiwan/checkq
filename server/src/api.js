@@ -1660,8 +1660,8 @@ export function buildServer({ dataDir, port }) {
     if (aiRateLimited(req, 'generate')) return reply.code(429).send({ error: `AI 调用过于频繁（每分钟最多 ${AI_RATE_LIMIT} 次），请稍后再试` });
     const knownSecrets = new Set([cfg.apiKey]);
     for (const definitions of [store.flows, store.templates]) {
-      for (const { vars } of definitions) {
-        for (const value of collectSecrets(vars)) knownSecrets.add(value);
+      for (const definition of definitions) {
+        for (const value of collectDefinitionSecrets(definition)) knownSecrets.add(value);
       }
     }
     if (hasAiInputCredentials(sentence, [...knownSecrets])) {

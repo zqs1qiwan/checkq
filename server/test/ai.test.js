@@ -261,7 +261,18 @@ await check('生成成功：结构收敛、edges 去重/剔除悬空、危险键
 
 await check('任务描述包含凭据时在本地拒绝，模型不接到请求', async () => {
   const storedValue = 'fixture-local-cookie-value';
-  const flow = server.store.createFlow({ name: '凭据隔离用例', vars: { cookie: storedValue } });
+  const inlineHeader = 'fixture inline+/header';
+  const inlineBody = 'fixture-inline-json-value';
+  const inlineQuery = 'fixture-inline-query-value';
+  const flow = server.store.createFlow({ name: '凭据隔离用例', vars: { cookie: storedValue }, nodes: [{
+    id: 'request', type: 'http', config: {
+      url: `https://example.test/check?token=${inlineQuery}`,
+      headers: [{ name: 'X-CSRF-Token', value: inlineHeader }],
+    },
+  }] });
+  const template = server.store.createTemplate({ name: '模板凭据隔离用例', nodes: [{
+    id: 'request', type: 'http', config: { url: 'https://example.test/', body: JSON.stringify({ password: inlineBody }) },
+  }] });
   try {
     const descriptions = [
       '签到 Cookie: session=raw-first; theme=raw-second',
@@ -274,6 +285,10 @@ await check('任务描述包含凭据时在本地拒绝，模型不接到请求'
       'curl -b "fixture-cookie" https://example.com',
       'HAR 请求头 [{"name":"Cookie","value":"sid=fixture-value"}]',
       `用 ${storedValue} 签到`,
+      `用 ${inlineHeader} 签到`,
+      `用 ${encodeURIComponent(inlineHeader)} 签到`,
+      `用 ${inlineQuery} 签到`,
+      `用 ${inlineBody} 签到`,
       `用 ${FAKE_KEY} 签到`,
     ];
     const previous = lastRequest;
@@ -281,6 +296,7 @@ await check('任务描述包含凭据时在本地拒绝，模型不接到请求'
       const r = await app.inject({ method: 'POST', url: '/api/ai/generate', headers: A, payload: { sentence } });
       status(r, 400, '在本地拒绝疑似凭据');
       assert.match(r.json().error, /未发送给模型/);
+      assert.ok(!r.body.includes(sentence), '回包不应复述原始描述');
       assert.strictEqual(lastRequest, previous, '模型端点没有收到请求');
     }
     const sentence = '每天签到 https://example.com/check?mode=daily，检查状态码';
@@ -289,6 +305,7 @@ await check('任务描述包含凭据时在本地拒绝，模型不接到请求'
     assert.equal(lastRequest.body.messages[1].content, sentence);
   } finally {
     server.store.deleteFlow(flow.id);
+    server.store.deleteTemplate(template.id);
   }
 });
 

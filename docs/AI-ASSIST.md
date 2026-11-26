@@ -35,7 +35,7 @@
 | `POST /api/ai/test` | **仅 admin** | 用已保存配置发一条「只回复 ok」的最小请求 → `{ ok, latencyMs, model, sample, usage }`；body 可带 `{ timeoutSec }`（1–120）仅本次覆盖；401/404/超时/非 JSON 返回中文错误；审计 `ai.test` |
 | `POST /api/ai/generate` | 登录用户（API Key 需 `write` 作用域） | 代理调用 `POST {baseUrl}/chat/completions`，超时读配置（默认 60s），`max_tokens` 读配置（默认 1024）；30 次/分钟；审计 `ai.generate`（只记输入长度/结果，不记 prompt） |
 
-生成前，CheckQ 在本地检查描述。发现常见凭据字段、带认证信息的 URL、当前模型密钥或已保存的敏感任务变量值时，返回 400，模型端点不会收到请求。检测依赖凭据格式和已知值。描述只填写任务动作、目标和成功条件，凭据在 CheckQ 内配置。
+生成前，CheckQ 在本地检查描述。发现常见凭据字段、带认证信息的 URL、当前模型密钥，或任务与模板中已识别的敏感变量、HTTP 请求头、URL 参数及请求体凭据时，返回 400，模型端点不会收到请求。检测依赖凭据格式和已知值。描述只填写任务动作、目标和成功条件，凭据在 CheckQ 内配置。
 
 **服务端结构校验（任何 AI 产物都必须过）**
 
