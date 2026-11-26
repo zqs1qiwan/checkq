@@ -169,6 +169,13 @@ export function encryptSecrets(key, obj) {
   if (out.notify && Array.isArray(out.notify.channels)) {
     out.notify = { ...out.notify, channels: encryptChannels(key, out.notify.channels) };
   }
+  if (Array.isArray(out.nodes)) {
+    out.nodes = out.nodes.map((node) => {
+      if (node?.type !== 'http' || !node.config || typeof node.config !== 'object') return node;
+      if (!hasDefinitionCredentials({ nodes: [node] })) return node;
+      return { ...node, config: encryptValue(key, JSON.stringify(node.config)) };
+    });
+  }
   return out;
 }
 
@@ -185,6 +192,13 @@ export function decryptSecrets(key, obj) {
   }
   if (out.notify && Array.isArray(out.notify.channels)) {
     out.notify = { ...out.notify, channels: decryptChannels(key, out.notify.channels) };
+  }
+  if (Array.isArray(out.nodes)) {
+    out.nodes = out.nodes.map((node) => {
+      if (node?.type !== 'http' || !isEncrypted(node.config)) return node;
+      const plain = decryptValue(key, node.config);
+      return { ...node, config: plain ? JSON.parse(plain) : {} };
+    });
   }
   return out;
 }

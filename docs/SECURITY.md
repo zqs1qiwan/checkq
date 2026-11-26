@@ -221,6 +221,7 @@ ssh root@checkq.local 'docker exec checkq node -e "
 
 **加密范围**（`server/src/secret.js`）：
 - **变量**：名字命中 `cookie|token|sess|auth|password|passwd|secret|api_key|credential|jwt|bearer|refresh`，或值形态像凭据（长 base64/hex、JWT `eyJ…`、含 `sess=`/`token=` 的 cookie 串）→ 加密；
+- **HTTP 节点**：识别出内联凭据时，任务和模板将该节点的完整请求配置加密保存。旧明文配置在下次存储重写时加密，运行时自动解密。回退到不支持该格式的版本时，可使用经密码验证的完整备份迁移。
 - **通知渠道**：`token / key / pass / password / secret / url / user` 等字段 → 加密（Telegram bot token、SMTP 密码、webhook URL 里的签名都在内）；
 - **meta**：`meta.ai.apiKey`（AI 助手模型密钥）与旧版 `meta.apiKey` → 加密；密码仍只存 scrypt 哈希；
 - **不加密**：普通变量（如 `ua`、`site`）、流程图、脚本代码、日志记录 —— 保持可读、可 diff、可 grep。
@@ -257,7 +258,7 @@ ssh root@checkq.local 'docker exec checkq node -e "
 **更弱 / 取舍**：
 1. 不做邮箱验证与邮件找回（没有邮件服务）；
 2. 不显示 2FA 二维码（避免把 TOTP 密钥交给第三方二维码服务）；
-3. 加密只覆盖「流程变量 + 通知渠道」，**运行历史里的响应体仍可能有站点返回的凭据**（如某些站点在响应里回显 token）—— 已做日志级脱敏，但不是全量加密；
+3. 任务变量、通知渠道和含已识别内联凭据的 HTTP 节点配置支持静态加密。运行历史使用日志脱敏，历史文件仍可能保留未识别的值。
 4. 加密发生在应用层，**磁盘备份/快照工具（如 NAS 快照）仍能看到密文**，只有拿到 `.secret` 才能解 —— 这一点与 qiandao 相同（密钥与密文同机）。
 
 ### 12.4 建议的后续动作（可选）

@@ -2,9 +2,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import http from 'node:http';
 import { test } from 'node:test';
 import { buildServer } from '../src/api.js';
 import { maskSecrets } from '../src/secret.js';
+import { Engine } from '../src/engine.js';
+import { Store } from '../src/store.js';
 
 process.env.ADMIN_PASSWORD = 'test1234';
 
@@ -58,6 +61,47 @@ test('模板/任务导出：节点内联凭据、URL、body 与通知密钥全�
   assert.equal(masked.note, '请求使用 ***');
   assert.equal(masked.nodes[1].config.tgToken, '***');
   assert.equal(masked.nodes[1].config.tgChat, '***');
+});
+
+test('旧任务与模板的内联配置重写后加密，重启仍能发出同样的请求', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cq-inline-storage-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const seen = [];
+  const upstream = http.createServer(async (req, res) => {
+    let text = '';
+    for await (const chunk of req) text += chunk;
+    seen.push({ header: req.headers['x-csrf-token'], body: JSON.parse(text) });
+    res.end('ok');
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  t.after(() => { upstream.closeAllConnections(); upstream.close(); });
+  const username = 'inline-login-fixture';
+  const value = 'inline-header-fixture';
+  const url = `http://127.0.0.1:${upstream.address().port}/`;
+  const config = { url, method: 'POST', headers: [{ name: 'X-CSRF-Token', value }], body: JSON.stringify({ username }) };
+  const clean = { url, method: 'GET', headers: [{ name: 'X-Mode', value: 'plain' }] };
+  const nodes = [{ id: 'protected', type: 'http', config }, { id: 'public', type: 'http', config: clean }];
+  const flowsFile = path.join(dir, 'flows.json');
+  const templatesFile = path.join(dir, 'templates.json');
+  fs.writeFileSync(flowsFile, JSON.stringify([{ id: 'legacy-flow', name: '旧任务', nodes, edges: [] }]));
+  fs.writeFileSync(templatesFile, JSON.stringify([{ id: 'legacy-template', name: '旧模板', nodes, edges: [] }]));
+  const store = new Store(dir);
+  assert.deepEqual(store.getFlow('legacy-flow').nodes[0].config, config);
+  store.flush();
+  for (const file of [flowsFile, templatesFile]) {
+    const disk = fs.readFileSync(file, 'utf8');
+    assert.ok(!disk.includes(value) && !disk.includes(username));
+    const [protectedNode, publicNode] = JSON.parse(disk)[0].nodes;
+    assert.match(protectedNode.config, /^enc:v1:/);
+    assert.deepEqual(publicNode.config, clean);
+  }
+  const reopened = new Store(dir);
+  const flow = reopened.getFlow('legacy-flow');
+  assert.deepEqual(flow.nodes[0].config, config);
+  assert.deepEqual(reopened.getTemplate('legacy-template').nodes[0].config, config);
+  const result = await new Engine(flow).run();
+  assert.equal(result.ok, true);
+  assert.deepEqual(seen, [{ header: value, body: { username } }]);
 });
 
 test('默认备份：历史运行日志只留审计摘要，不带原始 detail', async (t) => {
