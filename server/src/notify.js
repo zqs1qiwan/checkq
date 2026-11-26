@@ -17,8 +17,13 @@ export const SUMMARY_CHANNEL_TYPES = new Set([
 
 const TIMEOUT_MS = 15000;
 
-function timeoutSignal(ms = TIMEOUT_MS) {
-  return AbortSignal.timeout(ms);
+async function fetchNotification(url, options) {
+  const response = await fetch(url, { ...options, redirect: 'manual', signal: AbortSignal.timeout(TIMEOUT_MS) });
+  if (response.status >= 300 && response.status < 400) {
+    await response.body?.cancel().catch(() => {});
+    throw new Error(`HTTP ${response.status} 重定向，请配置最终投递地址`);
+  }
+  return response;
 }
 
 function providerError(status, code) {
@@ -45,9 +50,9 @@ export async function sendChannel(ch, text, ctx = {}, deps = {}) {
   const title = ctx.title || ch?.title;
   try {
     if (type === 'webhook') {
-      const res = await fetch(ch.url, {
+      const res = await fetchNotification(ch.url, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: text, signal: timeoutSignal(),
+        body: text,
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
     } else if (type === 'inbox') {
@@ -58,38 +63,35 @@ export async function sendChannel(ch, text, ctx = {}, deps = {}) {
         flowId: ctx.flowId || null, flowName: ctx.flowName || '',
       });
     } else if (type === 'pushplus') {
-      const res = await fetch('https://www.pushplus.plus/send', {
+      const res = await fetchNotification('https://www.pushplus.plus/send', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ token: String(ch.token || '').trim(), title: title || 'CheckQ 通知', content: text, template: ch.template || 'txt' }),
-        signal: timeoutSignal(),
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok || (j.code !== undefined && j.code !== 200)) throw providerError(res.status, j.code);
     } else if (type === 'gotify') {
       const base = String(ch.url || '').replace(/\/+$/, '');
-      const res = await fetch(`${base}/message?token=${encodeURIComponent(ch.token || '')}`, {
+      const res = await fetchNotification(`${base}/message?token=${encodeURIComponent(ch.token || '')}`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ title: title || 'CheckQ', message: text, priority: Number(ch.priority) || 5 }),
-        signal: timeoutSignal(),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
     } else if (type === 'ntfy') {
       const base = String(ch.url || 'https://ntfy.sh').replace(/\/+$/, '');
       const topic = String(ch.topic || '').trim();
       if (!topic) throw new Error('缺少 topic');
-      const res = await fetch(`${base}/${encodeURIComponent(topic)}`, {
+      const res = await fetchNotification(`${base}/${encodeURIComponent(topic)}`, {
         method: 'POST',
         headers: { 'content-type': 'text/plain; charset=utf-8', Title: title || 'CheckQ', Priority: String(ch.priority || 'default') },
-        body: text, signal: timeoutSignal(),
+        body: text,
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
     } else if (type === 'email') {
       await smtpSend(ch, ch.subject || title || '[CheckQ] 通知', text);
     } else if (type === 'telegram') {
-      const res = await fetch(`https://api.telegram.org/bot${ch.token}/sendMessage`, {
+      const res = await fetchNotification(`https://api.telegram.org/bot${ch.token}/sendMessage`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ chat_id: ch.chat, text, disable_web_page_preview: true }),
-        signal: timeoutSignal(),
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok || j.ok === false) throw providerError(res.status, j.error_code);
@@ -97,42 +99,36 @@ export async function sendChannel(ch, text, ctx = {}, deps = {}) {
       const u = (ch.url || '').replace(/\/+$/, '');
       const title2 = encodeURIComponent(title || 'CheckQ');
       const body = encodeURIComponent(text);
-      const res = await fetch(`${u}/${title2}/${body}${ch.group ? '?group=' + encodeURIComponent(ch.group) : ''}`, {
-        signal: timeoutSignal(),
-      });
+      const res = await fetchNotification(`${u}/${title2}/${body}${ch.group ? '?group=' + encodeURIComponent(ch.group) : ''}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
     } else if (type === 'serverchan') {
       const key = String(ch.key || '').trim();
-      const res = await fetch(`https://sctapi.ftqq.com/${key}.send`, {
+      const res = await fetchNotification(`https://sctapi.ftqq.com/${key}.send`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ title: title || 'CheckQ 通知', desp: text }),
-        signal: timeoutSignal(),
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok || (j.code !== undefined && j.code !== 0)) throw providerError(res.status, j.code);
     } else if (type === 'dingtalk') {
       const url = signBotUrl(ch);
-      const res = await fetch(url, {
+      const res = await fetchNotification(url, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ msgtype: 'markdown', markdown: { title: title || 'CheckQ 通知', text } }),
-        signal: timeoutSignal(),
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok || j.errcode !== 0) throw providerError(res.status, j.errcode);
     } else if (type === 'wecom') {
-      const res = await fetch(ch.url, {
+      const res = await fetchNotification(ch.url, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ msgtype: 'markdown', markdown: { content: text } }),
-        signal: timeoutSignal(),
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok || j.errcode !== 0) throw providerError(res.status, j.errcode);
     } else if (type === 'feishu') {
       const url = signBotUrl(ch);
-      const res = await fetch(url, {
+      const res = await fetchNotification(url, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ msg_type: 'text', content: { text } }),
-        signal: timeoutSignal(),
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok || j.code !== 0) throw providerError(res.status, j.code);

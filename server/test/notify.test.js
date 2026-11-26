@@ -6,6 +6,7 @@ process.env.ADMIN_PASSWORD = 'test1234';
 import assert from 'node:assert';
 import fs from 'node:fs';
 import os from 'node:os';
+import http from 'node:http';
 
 const dir = fs.mkdtempSync(os.tmpdir() + '/cq-notify-');
 const { buildServer } = await import('../src/api.js');
@@ -132,6 +133,38 @@ check('上游错误正文不会进入 API 或运行日志', providerRun.statusCo
   && providerRun.body.includes('HTTP 200 code=401') && ![providerNotice.body, providerRun.body, ...serverLogs].some((s) => s.includes('provider-private-marker')));
 
 globalThis.fetch = realFetch;
+let delivered = 0;
+const receiver = http.createServer((req, res) => {
+  delivered++;
+  req.resume();
+  res.end('ok');
+});
+await new Promise((resolve) => receiver.listen(0, '127.0.0.1', resolve));
+let attempted = 0;
+const privateLocation = `http://127.0.0.1:${receiver.address().port}/private-destination-fixture`;
+const redirector = http.createServer((req, res) => {
+  attempted++;
+  req.resume();
+  res.writeHead(307, { location: privateLocation }).end('private-response-fixture');
+});
+await new Promise((resolve) => redirector.listen(0, '127.0.0.1', resolve));
+try {
+  const webhookUrl = `http://127.0.0.1:${redirector.address().port}/webhook`;
+  const flow = server.store.createFlow({ name: 'redirect fixture', retry: { enabled: false },
+    nodes: [{ id: 'n', type: 'notify', config: { webhookUrl, text: 'fixture' } }],
+    notify: { channels: [{ type: 'webhook', url: webhookUrl }] },
+  });
+  const notice = await app.inject({ method: 'POST', url: `/api/flows/${flow.id}/notify-test`, headers: { cookie } });
+  const run = await app.inject({ method: 'POST', url: `/api/flows/${flow.id}/run`, headers: { cookie }, payload: {} });
+  check('HTTP 307 提示配置最终地址', notice.statusCode === 502 && run.json().status === 'failed'
+    && [notice.body, run.body].every((body) => /307.*最终/.test(body) && !/private-(?:destination|response)-fixture/.test(body)));
+  check('通知测试和运行均不发送重定向请求', attempted === 2 && delivered === 0);
+} finally {
+  for (const local of [redirector, receiver]) {
+    local.closeAllConnections();
+    await new Promise((resolve) => local.close(resolve));
+  }
+}
 await app.close();
 scheduler.stop();
 console.log(`\n${passed}/${passed + failed} passed`);
