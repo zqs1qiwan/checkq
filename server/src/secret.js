@@ -196,8 +196,11 @@ export function decryptSecrets(key, obj) {
   if (Array.isArray(out.nodes)) {
     out.nodes = out.nodes.map((node) => {
       if (node?.type !== 'http' || !isEncrypted(node.config)) return node;
-      const plain = decryptValue(key, node.config);
-      return { ...node, config: plain ? JSON.parse(plain) : {} };
+      try {
+        const config = JSON.parse(decryptValue(key, node.config));
+        if (config && typeof config === 'object' && !Array.isArray(config)) return { ...node, config };
+      } catch { /* 无法还原时保留磁盘上的密文，避免启动后覆盖。 */ }
+      throw new Error('无法解密 HTTP 节点配置。请检查 CHECKQ_SECRET 或数据目录中的 .secret 是否与当前数据匹配。');
     });
   }
   return out;

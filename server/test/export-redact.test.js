@@ -95,6 +95,17 @@ test('旧任务与模板的内联配置重写后加密，重启仍能发出同�
     assert.match(protectedNode.config, /^enc:v1:/);
     assert.deepEqual(publicNode.config, clean);
   }
+  const files = [flowsFile, templatesFile];
+  const before = files.map((file) => fs.readFileSync(file, 'utf8'));
+  const previousKey = process.env.CHECKQ_SECRET;
+  try {
+    process.env.CHECKQ_SECRET = `${previousKey || 'fixture'}-wrong-key`;
+    assert.throws(() => new Store(dir), /无法解密 HTTP 节点配置/);
+    assert.deepEqual(files.map((file) => fs.readFileSync(file, 'utf8')), before);
+  } finally {
+    if (previousKey === undefined) delete process.env.CHECKQ_SECRET;
+    else process.env.CHECKQ_SECRET = previousKey;
+  }
   const reopened = new Store(dir);
   const flow = reopened.getFlow('legacy-flow');
   assert.deepEqual(flow.nodes[0].config, config);
