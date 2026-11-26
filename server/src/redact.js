@@ -41,7 +41,7 @@ export function collectSecrets(vars) {
   return [...out].sort((a, b) => b.length - a.length);
 }
 
-/** 收集实际请求凭据和会话 Cookie，供整次运行的输出脱敏。 */
+/** 收集请求和响应凭据头及会话 Cookie，供整次运行的输出脱敏。 */
 export function trackHttpCredentials(secrets, headers, setCookies = []) {
   for (const [name, value] of Object.entries(headers)) {
     if (!isSensitiveHeader(name) && !isSensitiveKey(name)) continue;
@@ -58,7 +58,7 @@ export function trackHttpCredentials(secrets, headers, setCookies = []) {
 }
 
 /** 将请求参数中的已识别凭据纳入运行输出脱敏。 */
-export function trackHttpParameterCredentials(secrets, url, body, contentType = '') {
+export function trackHttpUrlCredentials(secrets, url) {
   let target;
   try { target = new URL(url); } catch { /* 地址由执行器校验 */ }
   if (target) {
@@ -67,6 +67,14 @@ export function trackHttpParameterCredentials(secrets, url, body, contentType = 
       try { addSecret(secrets, decodeURIComponent(value)); } catch { /* 保留原编码值 */ }
     }
     trackSensitiveParams(secrets, target.searchParams);
+  }
+}
+
+/** 跟踪请求或响应体中的敏感字段，接受执行器已解析的 JSON。 */
+export function trackHttpBodyCredentials(secrets, body, contentType = '') {
+  if (body && typeof body === 'object') {
+    trackSensitiveFields(secrets, body);
+    return;
   }
   if (typeof body !== 'string' || !body) return;
   const type = contentType.toLowerCase();

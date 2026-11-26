@@ -122,6 +122,39 @@ test('变量步骤的日志在截断前遮蔽长凭据', async (t) => {
   }
 });
 
+test('上游签发的凭据提取到普通变量后仍会脱敏', async (t) => {
+  const issued = 'issued-value-fixture';
+  const header = 'response-header-fixture';
+  const server = http.createServer((req, res) => {
+    const form = req.url === '/form';
+    res.writeHead(200, { 'content-type': form ? 'application/x-www-form-urlencoded' : 'application/json', 'x-auth-token': header });
+    res.end(form ? new URLSearchParams({ refresh_token: issued }).toString() : JSON.stringify({ data: { access_token: issued } }));
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+
+  for (const route of ['/json', '/form']) {
+    const streamed = [];
+    const extract = route === '/form'
+      ? { from: 'last.text', re: 'refresh_token=([^&]+)' }
+      : { mode: 'json', path: 'data.access_token' };
+    const result = await new Engine({
+      log: { record: 'all', debug: true, include: { resBody: false } },
+      nodes: [
+        { id: 'request', type: 'http', config: { url: `http://127.0.0.1:${server.address().port}${route}` } },
+        { id: 'body', type: 'extract', config: { ...extract, name: 'bodyCopy' } },
+        { id: 'header', type: 'extract', config: { mode: 'header', headerName: 'X-Auth-Token', name: 'headerCopy' } },
+      ],
+      edges: [{ source: 'request', target: 'body' }, { source: 'body', target: 'header' }],
+    }).run({ logSink: (entry) => streamed.push(entry) });
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.vars, { bodyCopy: issued, headerCopy: header });
+    assert.deepEqual(result.redactedVars, { bodyCopy: '***', headerCopy: '***' });
+    const output = JSON.stringify([result.logs, streamed]);
+    for (const value of [issued, header]) assert.ok(!output.includes(value));
+  }
+});
+
 test('引擎运行日志与 SSE 推送都不含请求/响应凭据', async (t) => {
   const seen = [];
   const server = http.createServer((req, res) => {
