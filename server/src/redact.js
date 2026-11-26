@@ -310,8 +310,8 @@ export function redactLogEntry(entry, secrets = [], responseBodyLimit) {
   return out;
 }
 
-/** 读取旧运行时，结合当时记录的请求和响应补做脱敏。 */
-export function maskStoredRun(run, knownSecrets = [], logs = run.logs) {
+/** 从旧运行保留的请求、响应和变量快照识别凭据。 */
+function collectStoredRunSecrets(run, knownSecrets) {
   const tracked = new Set([...knownSecrets, ...collectSecrets(run.vars)]);
   for (const entry of run.logs || []) {
     const detail = entry?.detail;
@@ -332,7 +332,12 @@ export function maskStoredRun(run, knownSecrets = [], logs = run.logs) {
       trackHttpBodyCredentials(tracked, part.body, String(contentType || ''));
     }
   }
-  const secrets = [...tracked].sort((a, b) => b.length - a.length);
+  return [...tracked].sort((a, b) => b.length - a.length);
+}
+
+/** 读取旧运行时，结合当时记录的请求和响应补做脱敏。 */
+export function maskStoredRun(run, knownSecrets = [], logs = run.logs) {
+  const secrets = collectStoredRunSecrets(run, knownSecrets);
   const out = { ...run };
   for (const field of ['flowName', 'summary', 'finalMessage', 'diagnosis', 'attempts', 'vars', 'notify']) {
     if (out[field] !== undefined) out[field] = redactDeep(out[field], secrets);
@@ -344,8 +349,9 @@ export function maskStoredRun(run, knownSecrets = [], logs = run.logs) {
 }
 
 /** 备份/导出时，把 run 只保留审计需要、且不含原始日志详情的字段 */
-export function redactRunForExport(run, secrets = []) {
+export function redactRunForExport(run, knownSecrets = []) {
   if (!run || typeof run !== 'object') return run;
+  const secrets = collectStoredRunSecrets(run, knownSecrets);
   const {
     id, flowId, flowName, trigger, startedAt, finishedAt, durationMs,
     status, finalMessage, summary, attempt, maxAttempts, recovered,

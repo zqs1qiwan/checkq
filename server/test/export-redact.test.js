@@ -79,6 +79,7 @@ test('默认备份：历史运行日志只留审计摘要，不带原始 detail'
   store.addRun({
     id: 'run-legacy', flowId: flow.id, flowName: flow.name, trigger: 'manual',
     startedAt: Date.now(), status: 'failed', finalMessage: 'cookie=BACKUP_COOKIE_SECRET_123456',
+    summary: '服务返回 BACKUP_RESPONSE_SECRET_123456',
     logs: [{
       stepId: 'n', index: 1, name: '请求', type: 'http', ok: false,
       message: '站点回显 BACKUP_INLINE_COOKIE_123456',
@@ -90,6 +91,11 @@ test('默认备份：历史运行日志只留审计摘要，不带原始 detail'
     }],
   });
 
+  store.addRun({
+    id: 'run-without-flow', flowId: 'deleted-flow', startedAt: Date.now(), status: 'success',
+    finalMessage: '旧令牌 BACKUP_ORPHAN_FIXTURE_123456',
+    logs: [{ type: 'http', detail: { headers: [{ name: 'X-Auth-Token', value: 'BACKUP_ORPHAN_FIXTURE_123456' }] } }],
+  });
   const login = await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'test1234' } });
   const headers = { cookie: login.headers['set-cookie'].split(';')[0] };
   const template = store.createTemplate({ name: 'shareable', desc: '业务说明 BACKUP_INLINE_COOKIE_123456', vars: { alias: 'BACKUP_INLINE_COOKIE_123456' }, nodes: flow.nodes });
@@ -98,16 +104,24 @@ test('默认备份：历史运行日志只留审计摘要，不带原始 detail'
   assert.equal(shared.json().desc, '业务说明 ***');
   assert.equal(shared.json().vars.alias, '***');
   assert.ok(!shared.body.includes('BACKUP_INLINE_COOKIE_123456'));
-  const backup = await app.inject({ url: '/api/system/backup', headers });
-  assert.equal(backup.statusCode, 200);
-  const body = backup.json();
+  const base = await app.listen({ host: '127.0.0.1', port: 0 });
+  const backup = await fetch(`${base}/api/system/backup`, { headers });
+  assert.equal(backup.status, 200);
+  const body = await backup.json();
   const text = JSON.stringify(body);
   for (const secret of [
     'BACKUP_COOKIE_SECRET_123456', 'BACKUP_URL_SECRET_123456', 'BACKUP_INLINE_COOKIE_123456',
-    'BACKUP_RESPONSE_SECRET_123456',
+    'BACKUP_RESPONSE_SECRET_123456', 'BACKUP_ORPHAN_FIXTURE_123456',
   ]) {
     assert.ok(!text.includes(secret), `默认备份不应包含 ${secret}`);
   }
-  assert.equal(body.runs[0].logs[0].detail, undefined);
+  assert.ok(body.runs.every((run) => run.logs.every((entry) => entry.detail === undefined)));
+  assert.equal(body.runs.find((run) => run.id === 'run-legacy').summary, '服务返回 ***');
+  assert.equal(body.runs.find((run) => run.id === 'run-without-flow').finalMessage, '旧令牌 ***');
   assert.equal(body.masked, true);
+
+  const full = await app.inject({ method: 'POST', url: '/api/system/backup', headers, payload: { password: 'test1234' } });
+  assert.equal(full.statusCode, 200);
+  assert.equal(full.json().masked, false);
+  assert.equal(full.json().runs.find((run) => run.id === 'run-without-flow').finalMessage, '旧令牌 BACKUP_ORPHAN_FIXTURE_123456');
 });
