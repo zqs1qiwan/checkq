@@ -80,11 +80,12 @@ export function buildServer({ dataDir, port }) {
     return !ids.length && !groups.length;
   };
   const keyHasScope = (req, scope) => {
-    if (!req.apiKey || req.legacyApiKey) return true;
+    if (req.legacyApiKey) return false;
+    if (!req.apiKey) return true;
     return (req.apiKeyScopes || []).includes(scope);
   };
-  /** API Key 默认只看到脱敏后的任务定义；secrets 作用域才返回明文凭据。 */
-  const visibleFlow = (req, flow) => (keyHasScope(req, 'secrets') ? flow : maskSecrets(flow));
+  /** API Key 的任务和模板回包使用同一凭据可见性规则。 */
+  const visibleDefinition = (req, definition) => (keyHasScope(req, 'secrets') ? definition : maskSecrets(definition));
   const keyScopeDenied = (reply, message = '该 API Key 的任务范围不包含此任务') => reply.code(403).send({ error: message });
   const loginLocked = (ip) => {
     const rec = loginFails.get(ip);
@@ -1857,7 +1858,7 @@ export function buildServer({ dataDir, port }) {
     if (!keyHasFullFlowScope(req)) return keyScopeDenied(reply, '受限 API Key 不能修改模板');
     const t = store.updateTemplate(req.params.id, req.body || {});
     if (!t) return reply.code(404).send({ error: 'not found' });
-    return t;
+    return visibleDefinition(req, t);
   });
 
   app.delete('/api/templates/:id', async (req, reply) => {
@@ -1872,7 +1873,7 @@ export function buildServer({ dataDir, port }) {
     const { name, vars, note } = req.body || {};
     const flow = store.instantiateTemplate(req.params.id, { name, vars, note });
     if (!flow) return reply.code(404).send({ error: '模板不存在' });
-    return flow;
+    return visibleDefinition(req, flow);
   });
 
   // 模板联动：派生任务始终跟随模板（这里无需任何同步操作，模板一改任务立刻变）
@@ -1882,7 +1883,7 @@ export function buildServer({ dataDir, port }) {
   app.get('/api/templates/:id', async (req, reply) => {
     const t = store.getTemplate(req.params.id);
     if (!t) return reply.code(404).send({ error: 'not found' });
-    return keyHasScope(req, 'secrets') ? t : maskSecrets(t);
+    return visibleDefinition(req, t);
   });
 
   // 模板导出（4.3）：脱敏 —— 敏感变量默认值置空，样本不导出
@@ -1984,7 +1985,7 @@ export function buildServer({ dataDir, port }) {
     const flow = req.body || {};
     const errors = validateFlow(flow);
     if (errors.length) return reply.code(400).send({ error: errors.join('; ') });
-    return store.createFlow(flow);
+    return visibleDefinition(req, store.createFlow(flow));
   });
 
   app.get('/api/flows/:id', async (req, reply) => {
@@ -1992,7 +1993,7 @@ export function buildServer({ dataDir, port }) {
     if (!f) return reply.code(404).send({ error: 'not found' });
     // structure = 结构事实（P0-2）：缺线出口 / 孤立步骤 / 起点 / 循环体范围，画布与检查清单共用
     const structure = analyzeStructure(f);
-    return { ...visibleFlow(req, f), template: store.templateInfo(f), structure };
+    return { ...visibleDefinition(req, f), template: store.templateInfo(f), structure };
   });
 
   app.put('/api/flows/:id', async (req, reply) => {
@@ -2016,7 +2017,7 @@ export function buildServer({ dataDir, port }) {
     scheduler.rebuild();
     // 派生任务改了脚本内容 → 自动转为独立任务（前端提示一次）
     const detached = f && f.detached ? f.detached : null;
-    return { ...f, template: store.templateInfo(f), detached };
+    return { ...visibleDefinition(req, f), template: store.templateInfo(f), detached };
   });
 
   app.delete('/api/flows/:id', async (req, reply) => {
@@ -2091,7 +2092,7 @@ export function buildServer({ dataDir, port }) {
       recovery: f.recovery, // 恢复探测配置也随副本复制；是否启用由用户再确认
       tplId: f.tplId || null,
     });
-    return clone;
+    return visibleDefinition(req, clone);
   });
 
   // 复制为 curl（PRD §4.7.2）：从节点配置生成等价 curl 命令
@@ -2099,7 +2100,7 @@ export function buildServer({ dataDir, port }) {
     const f = store.getFlow(req.params.id);
     if (!f) return reply.code(404).send({ error: 'not found' });
     const { nodeId, vars } = req.body || {};
-    const node = (f.nodes || []).find((n) => n.id === nodeId);
+    const node = (visibleDefinition(req, f).nodes || []).find((n) => n.id === nodeId);
     if (!node || node.type !== 'http') return reply.code(400).send({ error: 'node not found or not http' });
     const c = node.config || {};
     const method = (c.method || 'GET').toUpperCase();

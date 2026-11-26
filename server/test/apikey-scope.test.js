@@ -143,6 +143,32 @@ ok(r.statusCode === 200 && r.json().vars?.token === '', '无 secrets 作用域�
 r = await asKey(runKey.key, 'GET', `/api/templates/${tpl.json().id}`);
 ok(r.statusCode === 200 && r.json().vars?.token === 'SECRET-TOKEN', 'secrets 作用域模板变量可读');
 
+const editorKey = await mkKey({ name: '修改任务，无凭据读取权', scopes: ['read', 'write'], flowIds: [f1.id] });
+const saved = await asKey(editorKey.key, 'PUT', `/api/flows/${f1.id}`, { note: 'Agent 更新备注' });
+ok(saved.statusCode === 200 && saved.json().note === 'Agent 更新备注' && saved.json().vars?.cookie === '' && !saved.body.includes('SECRET-HEADER'), '任务保存回包保留编辑结果并脱敏');
+const curl = await asKey(editorKey.key, 'POST', `/api/flows/${f1.id}/curl`, { nodeId: 'n0' });
+ok(curl.statusCode === 200 && !curl.body.includes('SECRET-HEADER'), 'cURL 回包不包含内联凭据');
+const legacyKey = 'fixture-legacy-key';
+store.meta.apiKey = legacyKey;
+try {
+  const legacyRead = await asKey(legacyKey, 'GET', `/api/flows/${f1.id}`);
+  ok(legacyRead.statusCode === 200 && legacyRead.json().vars?.cookie === '' && !legacyRead.body.includes('SECRET-HEADER'), '旧版单密钥读取也按无 secrets 处理');
+} finally {
+  delete store.meta.apiKey;
+}
+const privileged = await asKey(runKey.key, 'GET', `/api/flows/${f1.id}`);
+ok(privileged.json().vars?.cookie === 'SECRET-COOKIE' && privileged.body.includes('SECRET-HEADER'), '保存备注后原凭据仍可供授权调用者读取');
+
+const globalEditor = await mkKey({ name: '全范围修改，无凭据读取权', scopes: ['read', 'write'] });
+const savedTemplate = await asKey(globalEditor.key, 'PUT', `/api/templates/${tpl.json().id}`, { desc: 'Agent 更新描述' });
+ok(savedTemplate.statusCode === 200 && savedTemplate.json().desc === 'Agent 更新描述' && savedTemplate.json().vars?.token === '', '模板保存回包脱敏');
+const instance = await asKey(globalEditor.key, 'POST', `/api/templates/${tpl.json().id}/instantiate`, { name: '派生任务' });
+ok(instance.statusCode === 200 && instance.json().vars?.token === '', '实例化回包不返回模板凭据');
+const clone = await asKey(globalEditor.key, 'POST', `/api/flows/${f1.id}/clone`, {});
+ok(clone.statusCode === 200 && clone.json().vars?.cookie === '' && !clone.body.includes('SECRET-HEADER'), '克隆回包不返回原任务凭据');
+const templateAfter = await asKey(runKey.key, 'GET', `/api/templates/${tpl.json().id}`);
+ok(templateAfter.json().vars?.token === 'SECRET-TOKEN', '模板更新保留原凭据');
+
 scheduler.stop?.();
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
