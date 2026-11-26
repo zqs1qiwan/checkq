@@ -122,15 +122,25 @@ function addSecret(set, value) {
   const s = String(value || '');
   // 太短的值容易误伤普通文本；cookie/token 实际都远长于 6 位
   if (s.length < 6) return;
+  if (set.has(s)) return;
   set.add(s);
+  if (/^[\w.*-]+$/.test(s)) return;
+  for (const encoded of [encodeURIComponent(s.toWellFormed()), new URLSearchParams({ v: s }).toString().slice(2)]) {
+    set.add(encoded);
+    set.add(encoded.replace(/%[A-F0-9]{2}/g, (part) => part.toLowerCase()));
+  }
+}
+
+function redactKnownValues(text, secrets) {
+  for (const secret of secrets || []) {
+    if (secret && text.includes(secret)) text = text.split(secret).join(PLACEHOLDER);
+  }
+  return text;
 }
 
 /** 替换已知敏感值，并兜住常见 `cookie=...` / `Bearer ...` 形式 */
 export function redactText(value, secrets = []) {
-  let s = String(value ?? '');
-  for (const secret of secrets || []) {
-    if (secret && s.includes(secret)) s = s.split(secret).join(PLACEHOLDER);
-  }
+  let s = redactKnownValues(String(value ?? ''), secrets);
   s = s.replace(INLINE_SECRET, `$1${PLACEHOLDER}`);
   s = s.replace(BEARER, `Bearer ${PLACEHOLDER}`);
   return s;
@@ -173,6 +183,10 @@ export function redactUrl(value, secrets = []) {
     const u = new URL(input);
     if (u.username) u.username = PLACEHOLDER;
     if (u.password) u.password = PLACEHOLDER;
+    for (const part of ['pathname', 'hash']) {
+      const masked = redactKnownValues(u[part], secrets);
+      if (masked !== u[part]) u[part] = masked;
+    }
     for (const key of [...u.searchParams.keys()]) {
       if (isSensitiveKey(key)) u.searchParams.set(key, PLACEHOLDER);
       else {

@@ -12,6 +12,17 @@ test('URL 脱敏：userinfo 与敏感 query 不外泄', () => {
   assert.ok(out.includes('page=1'));
 });
 
+test('URL 路径和片段遮蔽已知凭据的 URL 编码形式', () => {
+  const value = 'fixture +/ 值';
+  const encoded = encodeURIComponent(value);
+  const formEncoded = new URLSearchParams({ v: value }).toString().slice(2);
+  const secrets = collectSecrets({ token: value });
+  assert.equal(redactUrl(`https://example.com/path/${encoded}#value=${formEncoded}`, secrets),
+    'https://example.com/path/***#value=***');
+  assert.equal(redactUrl('https://example.com/path/ordinary#section', secrets),
+    'https://example.com/path/ordinary#section');
+});
+
 test('body 脱敏：JSON 与表单敏感字段整体打码', () => {
   const json = redactBody('{"username":"u","password":"p@ss-value","nested":{"token":"tok-value"}}', 'application/json');
   const parsed = JSON.parse(json);
@@ -123,7 +134,9 @@ test('变量步骤的日志在截断前遮蔽长凭据', async (t) => {
 });
 
 test('上游签发的凭据提取到普通变量后仍会脱敏', async (t) => {
-  const issued = 'issued-value-fixture';
+  const issued = 'issued value+/凭据';
+  const encoded = encodeURIComponent(issued);
+  const formEncoded = new URLSearchParams({ refresh_token: issued }).toString().split('=')[1];
   const header = 'response-header-fixture';
   const server = http.createServer((req, res) => {
     const form = req.url === '/form';
@@ -144,14 +157,16 @@ test('上游签发的凭据提取到普通变量后仍会脱敏', async (t) => {
         { id: 'request', type: 'http', config: { url: `http://127.0.0.1:${server.address().port}${route}` } },
         { id: 'body', type: 'extract', config: { ...extract, name: 'bodyCopy' } },
         { id: 'header', type: 'extract', config: { mode: 'header', headerName: 'X-Auth-Token', name: 'headerCopy' } },
+        { id: 'encode', type: 'set', config: { name: 'encodedCopy', value: route === '/form' ? '{{bodyCopy}}' : '{{bodyCopy|urlencode}}' } },
       ],
-      edges: [{ source: 'request', target: 'body' }, { source: 'body', target: 'header' }],
+      edges: [{ source: 'request', target: 'body' }, { source: 'body', target: 'header' }, { source: 'header', target: 'encode' }],
     }).run({ logSink: (entry) => streamed.push(entry) });
     assert.equal(result.ok, true);
-    assert.deepEqual(result.vars, { bodyCopy: issued, headerCopy: header });
-    assert.deepEqual(result.redactedVars, { bodyCopy: '***', headerCopy: '***' });
+    assert.deepEqual(result.vars, { bodyCopy: route === '/form' ? formEncoded : issued, headerCopy: header,
+      encodedCopy: route === '/form' ? formEncoded : encoded });
+    assert.deepEqual(result.redactedVars, { bodyCopy: '***', headerCopy: '***', encodedCopy: '***' });
     const output = JSON.stringify([result.logs, streamed]);
-    for (const value of [issued, header]) assert.ok(!output.includes(value));
+    for (const value of [issued, header, encoded, formEncoded]) assert.ok(!output.includes(value));
   }
 });
 
