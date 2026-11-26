@@ -57,6 +57,45 @@ export function trackHttpCredentials(secrets, headers, setCookies = []) {
   }
 }
 
+/** 将请求参数中的已识别凭据纳入运行输出脱敏。 */
+export function trackHttpParameterCredentials(secrets, url, body, contentType = '') {
+  let target;
+  try { target = new URL(url); } catch { /* 地址由执行器校验 */ }
+  if (target) {
+    for (const value of [target.username, target.password]) {
+      addSecret(secrets, value);
+      try { addSecret(secrets, decodeURIComponent(value)); } catch { /* 保留原编码值 */ }
+    }
+    trackSensitiveParams(secrets, target.searchParams);
+  }
+  if (typeof body !== 'string' || !body) return;
+  const type = contentType.toLowerCase();
+  if (type.includes('json') || /^[\[{]/.test(body.trimStart())) {
+    let parsed;
+    try { parsed = JSON.parse(body); } catch { return; }
+    trackSensitiveFields(secrets, parsed);
+  } else if (type.includes('x-www-form-urlencoded') || /^[^=&\s]+=[^&]*(?:&[^=&\s]+=[^&]*)*$/.test(body)) {
+    trackSensitiveParams(secrets, new URLSearchParams(body));
+  }
+}
+
+function trackSensitiveParams(secrets, params) {
+  for (const [name, value] of params) {
+    if (isSensitiveKey(name)) addSecret(secrets, value);
+  }
+}
+
+function trackSensitiveFields(secrets, object, depth = 0) {
+  if (!object || typeof object !== 'object' || depth > 8) return;
+  for (const [name, value] of Object.entries(object)) {
+    if (isSensitiveKey(name)) {
+      for (const item of flattenStrings(value)) addSecret(secrets, item);
+    } else {
+      trackSensitiveFields(secrets, value, depth + 1);
+    }
+  }
+}
+
 function trackCookieValue(secrets, pair) {
   const index = pair.indexOf('=');
   if (index >= 0) addSecret(secrets, pair.slice(index + 1).trim().replace(/^"(.*)"$/, '$1'));

@@ -13,7 +13,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { ProxyAgent } from 'undici';
 import { fileURLToPath } from 'node:url';
-import { collectSecrets, redactDeep, redactLogEntry, redactText, trackHttpCredentials } from './redact.js';
+import { collectSecrets, redactDeep, redactLogEntry, redactText, trackHttpCredentials, trackHttpParameterCredentials } from './redact.js';
 import { isSensitiveName } from './sensitive-name.js';
 import { parseAllowedOrigin } from './model.js';
 
@@ -453,6 +453,8 @@ export class Engine {
     if (c.proxy && c.proxy.url) {
       proxyUrl = String(renderTemplate(c.proxy.url, vars, missing)).trim();
     }
+    trackHttpParameterCredentials(state.credentials, url, body, String(headers['content-type'] || ''));
+    if (proxyUrl) trackHttpParameterCredentials(state.credentials, proxyUrl);
     stepLog.detail = { method, url, headers, body, attempt, proxy: proxyUrl || undefined, jar: jarUsed || undefined };
     // include 开关（level=all 时生效；failure/summary 的裁剪在 run 末尾统一处理）
     const include = this.logInclude || { reqHeaders: true, reqBody: true, resBody: true };
@@ -516,6 +518,7 @@ export class Engine {
             }
           }
           responseUrl = next.href;
+          trackHttpParameterCredentials(state.credentials, responseUrl);
           continue;
         }
         if (!resp) break;

@@ -55,14 +55,19 @@ test('日志条目脱敏覆盖请求头、响应 Set-Cookie 与动态提取值',
 test('引擎运行日志与 SSE 推送都不含请求/响应凭据', async (t) => {
   const seen = [];
   const server = http.createServer((req, res) => {
-    void req.on('data', () => {});
+    let body = '';
+    req.setEncoding('utf8').on('data', (chunk) => { body += chunk; });
     req.on('end', () => {
+      const query = new URL(req.url, 'http://localhost').searchParams.getAll('token');
+      const password = req.headers['content-type'] === 'application/x-www-form-urlencoded'
+        ? new URLSearchParams(body).get('password') : JSON.parse(body).account.password;
       res.writeHead(200, {
         'content-type': 'application/json',
         'set-cookie': 'sid=RESPONSE_COOKIE_SECRET_123456; Path=/; HttpOnly',
       });
       res.end(JSON.stringify({ ok: true, token: 'RESPONSE_TOKEN_SECRET_123456', reflected: req.headers['x-api-key'],
-        echoes: [req.headers.cookie.split('=')[1], req.headers.authorization.split(' ')[1], 'RESPONSE_COOKIE_SECRET_123456'],
+        echoes: [req.headers.cookie.split('=')[1], req.headers.authorization.split(' ')[1], 'RESPONSE_COOKIE_SECRET_123456', ...query, password],
+        publicField: 'ordinary-response-value',
       }));
     });
   });
@@ -79,28 +84,32 @@ test('引擎运行日志与 SSE 推送都不含请求/响应凭据', async (t) =
     nodes: [{
       id: 'n', type: 'http', name: '请求', config: {
         method: 'POST',
-        url: `http://127.0.0.1:${server.address().port}/check?token=QUERY_SECRET_VALUE_123456`,
+        url: `http://127.0.0.1:${server.address().port}/check?token=QUERY_SECRET_VALUE_123456&token=second%2Bquery%2Ffixture`,
         headers: [
           { name: 'cookie', value: 'sid=INLINE_COOKIE_FIXTURE_123456', enabled: true },
           { name: 'authorization', value: 'Bearer INLINE_AUTH_FIXTURE_123456', enabled: true },
           { name: 'x-api-key', value: 'INLINE_KEY_FIXTURE_123456', enabled: true },
         ],
-        body: '{"password":"BODY_SECRET_VALUE_123456","name":"ok"}',
+        body: '{"account":{"password":"BODY_SECRET_VALUE_123456"},"name":"ok"}',
       },
     }, { id: 'extract', type: 'extract', config: { mode: 'json', path: 'reflected', name: 'copy' } }],
     edges: [{ source: 'n', target: 'extract', sourceHandle: 'success' }],
   };
-  const result = await new Engine(flow).run({
-    debug: true,
-    logSink: (entry) => seen.push(entry),
-  });
+  const run = () => new Engine(flow).run({ debug: true, logSink: (entry) => seen.push(entry) });
+  const result = await run();
   assert.equal(result.vars.copy, 'INLINE_KEY_FIXTURE_123456', '内部步骤仍能使用原始响应');
   assert.equal(result.redactedVars.copy, '***');
-  const all = JSON.stringify([result.logs, seen, result.redactedVars, result.summary]) + result.finalMessage;
+  flow.nodes[0].config.headers.push({ name: 'Content-Type', value: 'application/x-www-form-urlencoded' });
+  flow.nodes[0].config.body = 'password=fixture+form%2Bvalue&name=ordinary';
+  const formResult = await run();
+  assert.equal(formResult.ok, true);
+  const all = JSON.stringify([result.logs, formResult.logs, seen, result.redactedVars, result.summary]) + result.finalMessage;
+  assert.match(all, /ordinary-response-value/);
   for (const secret of [
     'COOKIE_SECRET_VALUE_123456', 'TOKEN_SECRET_VALUE_123456', 'QUERY_SECRET_VALUE_123456',
     'BODY_SECRET_VALUE_123456', 'RESPONSE_COOKIE_SECRET_123456', 'RESPONSE_TOKEN_SECRET_123456',
     'INLINE_COOKIE_FIXTURE_123456', 'INLINE_AUTH_FIXTURE_123456', 'INLINE_KEY_FIXTURE_123456',
+    'second+query/fixture', 'fixture form+value',
   ]) {
     assert.ok(!all.includes(secret), `日志不应包含 ${secret}`);
   }
