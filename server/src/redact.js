@@ -273,6 +273,7 @@ export function redactDeep(value, secrets = [], depth = 0) {
 export function redactLogEntry(entry, secrets = [], responseBodyLimit) {
   if (!entry || typeof entry !== 'object') return entry;
   const out = { ...entry };
+  if (typeof out.name === 'string') out.name = redactKnownValues(out.name, secrets);
   if (out.message) out.message = redactText(out.message, secrets);
   if (out.finalMessage) out.finalMessage = redactText(out.finalMessage, secrets);
   if (Array.isArray(out.keywords)) {
@@ -342,9 +343,7 @@ export function maskStoredRun(run, knownSecrets = [], logs = run.logs) {
   for (const field of ['flowName', 'summary', 'finalMessage', 'diagnosis', 'attempts', 'vars', 'notify']) {
     if (out[field] !== undefined) out[field] = redactDeep(out[field], secrets);
   }
-  if (Array.isArray(logs)) out.logs = logs.map((entry) => ({
-    ...redactLogEntry(entry, secrets), name: redactKnownValues(entry?.name, secrets),
-  }));
+  if (Array.isArray(logs)) out.logs = logs.map((entry) => redactLogEntry(entry, secrets));
   return out;
 }
 

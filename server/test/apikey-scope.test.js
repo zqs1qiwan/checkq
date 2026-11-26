@@ -251,6 +251,26 @@ const cancel = await fetch(`${base}/api/runs/orphan-run/cancel`, { method: 'POST
 ok(cancel.status === 403 && store.getRun('orphan-run').status === 'running', '绑定密钥无法取消没有所属任务的运行');
 const fullHistory = await fetch(`${base}/api/runs?flowId=${orphanFlowId}`, { headers: { 'x-api-key': templateReader.key } });
 ok(fullHistory.status === 200 && (await fullHistory.json())[0]?.id === 'orphan-run', '全范围只读密钥仍可查没有所属任务的运行');
+const runFixture = 'run-event-private-fixture';
+const eventFlow = store.createFlow({
+  name: `任务 ${runFixture}`, vars: { cookie: runFixture }, log: { record: 'all' },
+  nodes: [{ id: 'log', type: 'log', name: `步骤 ${runFixture}`, config: { text: '执行完成' } }],
+});
+const eventKey = await mkKey({ name: '实时运行绑定', scopes: ['run'], flowIds: [eventFlow.id] });
+for (const stream of [false, true]) {
+  const response = await fetch(`${base}/api/flows/${eventFlow.id}/run`, {
+    method: 'POST', headers: { 'x-api-key': eventKey.key, 'content-type': 'application/json' },
+    body: JSON.stringify({ stream }),
+  });
+  const body = await response.text();
+  const parseEvents = () => Object.fromEntries([...body.matchAll(/event: (\w+)\r?\ndata: (.+)/g)]
+    .map(([, event, data]) => [event, JSON.parse(data)]));
+  const events = stream ? parseEvents() : { done: JSON.parse(body) };
+  ok(response.status === 200 && events.done?.status === 'success' && events.done.flowName === '任务 ***'
+    && events.done.logs[0].name === '步骤 ***' && !body.includes(runFixture), `运行回包遮蔽任务和步骤名称（stream=${stream}）`);
+  if (stream) ok(events.start?.flowName === '任务 ***' && events.log?.name === '步骤 ***', 'SSE 开始与步骤事件均遮蔽凭据');
+}
+ok(store.getFlow(eventFlow.id).name === `任务 ${runFixture}`, '运行投影保留原始任务定义');
 await app.close();
 scheduler.stop?.();
 console.log(`\n${pass} passed, ${fail} failed`);

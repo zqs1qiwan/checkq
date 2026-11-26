@@ -19,7 +19,7 @@ import { generateSecret, verifyTotp, generateRecoveryCodes, hashRecoveryCode, ve
 import { buildOpenApi } from './openapi.js';
 import { ipAllowed, isPrivateIp, normalizeIp } from './iprange.js';
 import { Engine, redactVars } from './engine.js';
-import { collectSecrets, hasAiInputCredentials, maskStoredRun, redactRunForExport, redactText } from './redact.js';
+import { collectSecrets, hasAiInputCredentials, maskStoredRun, redactKnownValues, redactLogEntry, redactRunForExport, redactText } from './redact.js';
 import { collectDefinitionSecrets, hasDefinitionCredentials, maskSecrets } from './secret.js';
 import { validateFlow, validateHttpOrigins } from './model.js';
 import { importHar } from './har-import.js';
@@ -2074,6 +2074,9 @@ export function buildServer({ dataDir, port }) {
     }
     const claimed = body.dedupe === true;
     try {
+      const maskCredentials = !keyHasScope(req, 'secrets');
+      const secrets = maskCredentials ? collectDefinitionSecrets(f) : [];
+      const visibleRun = (run) => maskCredentials ? maskStoredRun(run, secrets) : run;
       // SSE 模式（PRD §4.7.3 实时推送）：边执行边推送日志，结束事件携带完整 run
       if (stream) {
         reply.raw.writeHead(200, {
@@ -2088,10 +2091,10 @@ export function buildServer({ dataDir, port }) {
           debugStopId,
           debug: body.debug === true,
           timeoutMs: body.timeoutMs,
-          onStart: (r) => push('start', { flowId: f.id, flowName: f.name, runId: r.id, queued: false, startedAt: r.startedAt }),
-          onLog: (log) => push('log', log),
+          onStart: (r) => push('start', { flowId: f.id, flowName: redactKnownValues(f.name, secrets), runId: r.id, queued: false, startedAt: r.startedAt }),
+          onLog: (log) => push('log', maskCredentials ? redactLogEntry(log, secrets) : log),
         });
-        push('done', run);
+        push('done', visibleRun(run));
         reply.raw.end();
         return reply;
       }
@@ -2099,7 +2102,7 @@ export function buildServer({ dataDir, port }) {
       const run = await runner.runFlow(f, debugStopId ? 'debug' : 'manual', {
         debugStopId, debug: body.debug === true, timeoutMs: body.timeoutMs,
       });
-      return run; // 完整 run 对象（含 logs + diagnosis）
+      return visibleRun(run);
     } finally {
       if (claimed) runner.releaseManual(f.id);
     }
