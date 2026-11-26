@@ -163,8 +163,13 @@ export default function ConfigPanel({ node, onUpdate, onConfigUpdate, onDelete, 
           </button>
 
           <details className="adv-block">
-            <summary>高级选项（后端 / 编码 / 代理 / 重试）</summary>
+            <summary>高级选项</summary>
             <div className="adv-body">
+              <div className="field">
+                <label htmlFor="http-allowed-origin" title="只向指定协议、主机和端口发送此节点的请求。留空表示未绑定。">允许请求源（可选）</label>
+                <input id="http-allowed-origin" className="mono" placeholder="https://example.com"
+                  value={config.allowedOrigin ?? ''} onChange={(e) => onConfigUpdate({ allowedOrigin: e.target.value })} />
+              </div>
               <div className="field">
                 <label>执行后端</label>
                 <select value={config.backend || 'fetch'} onChange={(e) => onConfigUpdate({ backend: e.target.value })}>

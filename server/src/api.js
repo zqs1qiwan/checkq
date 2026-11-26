@@ -21,7 +21,7 @@ import { ipAllowed, isPrivateIp, normalizeIp } from './iprange.js';
 import { Engine, redactVars } from './engine.js';
 import { collectSecrets, hasAiInputCredentials, redactRunForExport } from './redact.js';
 import { hasDefinitionCredentials, maskSecrets } from './secret.js';
-import { validateFlow } from './model.js';
+import { validateFlow, validateHttpOrigins } from './model.js';
 import { importHar } from './har-import.js';
 import { parseCurl } from './curl-import.js';
 import { Scheduler } from './scheduler.js';
@@ -88,9 +88,11 @@ export function buildServer({ dataDir, port }) {
   const visibleDefinition = (req, definition) => (keyHasScope(req, 'secrets') ? definition : maskSecrets(definition));
   const keyScopeDenied = (reply, message = '该 API Key 的任务范围不包含此任务') => reply.code(403).send({ error: message });
   const modifiesExecution = (patch) => ['nodes', 'edges', 'vars', 'varNames', 'notify', 'log', 'tplId'].some((field) => Object.hasOwn(patch, field));
-  const templateUsesCredentials = (template) => hasDefinitionCredentials(template)
-    || store.flows.some((flow) => flow.tplId === template.id && hasDefinitionCredentials(flow));
-  const rejectCredentialEdit = (reply) => keyScopeDenied(reply, '此配置涉及任务凭据，请在 CheckQ 内修改执行配置');
+  const hasOriginBinding = (definition) => (definition.nodes || []).some((node) => node.type === 'http' && node.config?.allowedOrigin);
+  const hasProtectedExecution = (definition) => hasOriginBinding(definition) || hasDefinitionCredentials(definition);
+  const templateHasProtectedExecution = (template) => hasProtectedExecution(template)
+    || store.flows.some((flow) => flow.tplId === template.id && hasProtectedExecution(flow));
+  const rejectCredentialEdit = (reply) => keyScopeDenied(reply, '此配置涉及任务凭据或允许请求源，请在 CheckQ 内修改执行配置');
   const loginLocked = (ip) => {
     const rec = loginFails.get(ip);
     if (!rec) return false;
@@ -1877,9 +1879,11 @@ export function buildServer({ dataDir, port }) {
     const template = store.getTemplate(req.params.id);
     if (!template) return reply.code(404).send({ error: 'not found' });
     const patch = req.body || {};
-    if (!keyHasScope(req, 'secrets') && modifiesExecution(patch) && templateUsesCredentials(template)) {
+    if (!keyHasScope(req, 'secrets') && modifiesExecution(patch) && templateHasProtectedExecution(template)) {
       return rejectCredentialEdit(reply);
     }
+    const errors = validateHttpOrigins(patch.nodes);
+    if (errors.length) return reply.code(400).send({ error: errors.join('; ') });
     return visibleDefinition(req, store.updateTemplate(template.id, patch));
   });
 
@@ -2034,8 +2038,8 @@ export function buildServer({ dataDir, port }) {
     }
     if (!keyHasScope(req, 'secrets') && modifiesExecution(patch)) {
       const targetTemplate = patch.tplId && store.getTemplate(patch.tplId);
-      if (hasDefinitionCredentials(f0) || (f0.tplId && hasDefinitionCredentials(store.getFlowRaw(f0.id)))
-          || (targetTemplate && hasDefinitionCredentials(targetTemplate))) {
+      if (hasProtectedExecution(f0) || (f0.tplId && hasProtectedExecution(store.getFlowRaw(f0.id)))
+          || (targetTemplate && hasProtectedExecution(targetTemplate))) {
         return rejectCredentialEdit(reply);
       }
     }
@@ -2618,7 +2622,7 @@ export function buildServer({ dataDir, port }) {
     const name = existing && mode === 'copy' ? `${resolved.template.name}（副本）` : resolved.template.name;
     let tpl;
     if (existing && mode === 'overwrite') {
-      if (!keyHasScope(req, 'secrets') && templateUsesCredentials(existing)) return rejectCredentialEdit(reply);
+      if (!keyHasScope(req, 'secrets') && templateHasProtectedExecution(existing)) return rejectCredentialEdit(reply);
       tpl = store.updateTemplate(existing.id, { ...resolved.template, name, market });
     } else {
       tpl = store.createTemplate({ ...resolved.template, name, market }, 'market');

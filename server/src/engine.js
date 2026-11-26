@@ -15,6 +15,7 @@ import { ProxyAgent } from 'undici';
 import { fileURLToPath } from 'node:url';
 import { collectSecrets, redactLogEntry, redactText } from './redact.js';
 import { isSensitiveName } from './sensitive-name.js';
+import { parseAllowedOrigin } from './model.js';
 
 const MAX_STEPS = 500;
 const HTTP_TIMEOUT = 30000;
@@ -402,7 +403,18 @@ export class Engine {
   /** HTTP 节点执行体（由 execNode 的重试循环调用）。返回 {ok, errorKind, message} */
   async execHttp(node, c, state, stepLog, missing, attempt) {
     const vars = state.vars;
-    const url = renderTemplate(c.url, vars, missing);
+    let url = renderTemplate(c.url, vars, missing);
+    const hasAllowedOrigin = c.allowedOrigin !== undefined && c.allowedOrigin !== '';
+    if (hasAllowedOrigin) {
+      const allowed = parseAllowedOrigin(c.allowedOrigin);
+      if (!allowed) return { ok: false, errorKind: 'configuration', message: '允许请求源配置无效' };
+      let target;
+      try { target = new URL(url); } catch { /* 下方统一处理无效目标 */ }
+      if (!target || !['http:', 'https:'].includes(target.protocol) || target.origin !== allowed) {
+        return { ok: false, errorKind: 'configuration', message: '已阻止请求：实际地址与允许请求源不一致' };
+      }
+      url = target.href;
+    }
     const method = (c.method || 'GET').toUpperCase();
     const headers = {};
     for (const h of c.headers || []) {
@@ -457,7 +469,7 @@ export class Engine {
       const hasRequestData = body != null || Object.keys(headers).length > 0 || initialUrl.search
         || initialUrl.username || initialUrl.password || c.url !== url
         || [...collectSecrets(vars)].some((value) => url.includes(value));
-      const protectRedirect = redirect === 'follow' && hasRequestData;
+      const protectRedirect = redirect === 'follow' && (hasAllowedOrigin || hasRequestData);
       const redirectMode = protectRedirect ? 'manual' : redirect;
       const viaCurl = (c.backend || 'fetch') === 'curl';
       const dispatcher = !viaCurl && proxyUrl ? getProxyAgent(proxyUrl) : undefined;
@@ -912,7 +924,7 @@ async function httpViaCurl(url, method, headers, body, timeoutMs, follow, proxyU
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'checkq-'));
   const hdrFile = path.join(tmp, 'h.txt');
   const bodyFile = path.join(tmp, 'b.txt');
-  const args = ['-q', '-sS', '--max-time', String(Math.ceil(timeoutMs / 1000)), '--max-filesize', String(maxBytes), '-X', method, '-D', hdrFile, '-o', bodyFile];
+  const args = ['-q', '--globoff', '-sS', '--max-time', String(Math.ceil(timeoutMs / 1000)), '--max-filesize', String(maxBytes), '-X', method, '-D', hdrFile, '-o', bodyFile];
   if (follow) args.push('-L');
   if (proxyUrl) args.push('--proxy', proxyUrl);
   args.push(url);

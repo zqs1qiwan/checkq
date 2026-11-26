@@ -75,10 +75,30 @@ export const STEP_TYPES = {
   },
 };
 
+export function parseAllowedOrigin(value) {
+  if (typeof value !== 'string') return null;
+  const input = value.trim();
+  if (!/^https?:\/\/[^/?#\\\s{}@]+\/?$/i.test(input)) return null;
+  try {
+    const url = new URL(input);
+    return url.origin;
+  } catch {
+    return null;
+  }
+}
+
+export function validateHttpOrigins(nodes) {
+  if (!Array.isArray(nodes)) return [];
+  return nodes.filter(({ type, config }) => type === 'http' && config?.allowedOrigin !== undefined
+    && config.allowedOrigin !== '' && !parseAllowedOrigin(config.allowedOrigin))
+    .map((node) => `HTTP 节点 ${node.id} 的允许请求源必须是 HTTP(S) 协议、主机和可选端口`);
+}
+
 export function validateFlow(flow, { allowEmptyDraft = true } = {}) {
   const errors = [];
   if (!flow.name || !flow.name.trim()) errors.push('流程名不能为空');
   const nodes = flow.nodes || [];
+  errors.push(...validateHttpOrigins(nodes));
   if (!nodes.length && !allowEmptyDraft) errors.push('流程至少需要一个步骤');
   const byId = new Map(nodes.map((n) => [n.id, n]));
   for (const e of flow.edges || []) {

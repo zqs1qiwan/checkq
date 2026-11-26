@@ -245,7 +245,7 @@ data: { "id":"run-xxx", "status":"success", "durationMs":..., "summary":"...", "
 
 | type | config 关键字段 |
 |---|---|
-| http | method, url, headers[{name,value,enabled}], body, timeout(秒), backend(fetch\|curl), charset, proxy{url}, retry{times,backoffMs,retryOn}, asserts[], maxRespBytes（默认 2MB，最小 64KB，上限 8MB；超限立即中断）。`redirect` 默认为 `follow`。带请求头、请求体、URL 查询参数、运行时替换的 URL 或已识别凭据时，仅允许同源的自动跳转（同协议、主机、端口）。`manual` 返回原始 3xx 供流程处理。 |
+| http | method, url, headers[{name,value,enabled}], body, timeout(秒), backend(fetch\|curl), charset, proxy{url}, retry{times,backoffMs,retryOn}, asserts[], maxRespBytes（默认 2MB，最小 64KB，上限 8MB；超限立即中断）。`allowedOrigin` 可选，只接受 HTTP(S) 协议、主机和可选端口。启用后会在发出请求前校验变量渲染后的 URL，自动跳转也须同源。`redirect` 默认为 `follow`。带请求头、请求体、URL 查询参数、运行时替换的 URL 或已识别凭据时，仅允许同源的自动跳转（同协议、主机、端口）。`manual` 返回原始 3xx 供流程处理。 |
 | condition | expr (jexl) |
 | set | name, value |
 | extract | mode(json\|header\|setCookie), path, name, optional |

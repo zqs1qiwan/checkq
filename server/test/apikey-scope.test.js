@@ -179,6 +179,15 @@ const cleanFlow = store.createFlow({ name: '无凭据草稿', nodes: cleanNodes,
 const newNodes = [{ ...cleanNodes[0], config: { ...cleanNodes[0].config, url: 'https://new.example.test/' } }];
 r = await asKey(globalEditor.key, 'PUT', `/api/flows/${cleanFlow.id}`, { nodes: newNodes });
 ok(r.statusCode === 200, '无凭据草稿允许编辑请求目标');
+const boundNodes = newNodes.map((node) => ({ ...node, config: { ...node.config, allowedOrigin: 'https://new.example.test' } }));
+r = await app.inject({ method: 'PUT', url: `/api/flows/${cleanFlow.id}`, cookies: ck, payload: { nodes: boundNodes } });
+ok(r.statusCode === 200 && r.json().nodes[0].config.allowedOrigin === 'https://new.example.test', '本地会话可以设置允许请求源');
+r = await asKey(globalEditor.key, 'PUT', `/api/flows/${cleanFlow.id}`, { nodes: newNodes });
+ok(r.statusCode === 403 && store.getFlow(cleanFlow.id).nodes[0].config.allowedOrigin === 'https://new.example.test', '无凭据权限的密钥不能移除已有的允许请求源');
+r = await app.inject({ method: 'PUT', url: `/api/templates/${cleanTemplate.id}`, cookies: ck, payload: {
+  nodes: boundNodes.map((node) => ({ ...node, config: { ...node.config, allowedOrigin: 'https://new.example.test/path' } })),
+} });
+ok(r.statusCode === 400, '模板保存拒绝带路径的允许请求源');
 const derived = store.instantiateTemplate(cleanTemplate.id, { vars: { password: 'local-fixture-password' } });
 r = await asKey(globalEditor.key, 'PUT', `/api/templates/${cleanTemplate.id}`, { nodes: newNodes });
 ok(r.statusCode === 403 && store.getFlow(derived.id).nodes[0].config.url === 'https://example.test', '模板更新也检查派生任务的凭据');

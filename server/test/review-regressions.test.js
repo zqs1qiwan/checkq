@@ -155,6 +155,18 @@ test('HTTP redirects keep requests with data on the original origin in both back
     assert.equal(hits.length, before, backend);
     assert.equal((await run('/cross')).ok, true, backend);
     assert.equal(hits.length, before + 1, backend);
+    const allowedOrigin = `http://127.0.0.1:${source.address().port}`;
+    const blockedTarget = `http://127.0.0.1:${other.address().port}/direct`;
+    const pinned = (target, origin) => new Engine({ vars: { target }, nodes: [{ id: 'n', type: 'http', config: {
+      backend, url: '{{target}}', allowedOrigin: origin,
+    } }], edges: [] }).run();
+    const blocked = await pinned(blockedTarget, allowedOrigin);
+    assert.equal(blocked.ok, false, backend);
+    assert.match(blocked.finalMessage, /实际地址与允许请求源不一致/);
+    assert.match((await pinned(blockedTarget, `${allowedOrigin}/path`)).finalMessage, /允许请求源配置无效/);
+    assert.match((await pinned(`${allowedOrigin}/cross`, allowedOrigin)).finalMessage, /跨源重定向/);
+    assert.equal(hits.length, before + 1, backend);
+    assert.equal((await pinned(`${allowedOrigin}/same`, `${allowedOrigin}/`)).ok, true, backend);
   }
 });
 
