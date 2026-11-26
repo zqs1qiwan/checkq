@@ -112,6 +112,52 @@ test('HTTP response body is stopped at the byte limit instead of being read whol
   assert.match(result.finalMessage, /响应体超过上限 65536 字节/);
 });
 
+test('HTTP redirects keep requests with data on the original origin in both backends', async (t) => {
+  const hits = [];
+  const other = http.createServer((req, res) => {
+    hits.push(req.url);
+    res.end('ok');
+  });
+  await new Promise((resolve) => other.listen(0, '127.0.0.1', resolve));
+  t.after(() => { other.closeAllConnections(); other.close(); });
+  const sameOrigin = [];
+  const source = http.createServer((req, res) => {
+    const path = new URL(req.url, 'http://localhost').pathname;
+    if (path === '/same' || path === '/see-other') {
+      res.writeHead(path === '/same' ? 307 : 303, { location: '/final' }).end();
+    } else if (path === '/final') {
+      sameOrigin.push({ header: req.headers['x-fixture'], method: req.method, type: req.headers['content-type'] });
+      res.end('ok');
+    } else {
+      res.writeHead(307, { location: `http://127.0.0.1:${other.address().port}/target` }).end();
+    }
+  });
+  await new Promise((resolve) => source.listen(0, '127.0.0.1', resolve));
+  t.after(() => { source.closeAllConnections(); source.close(); });
+  for (const backend of ['fetch', 'curl']) {
+    const run = (suffix, config = {}) => new Engine({ nodes: [{ id: 'n', type: 'http', config: {
+      backend, url: `http://127.0.0.1:${source.address().port}${suffix}`, ...config,
+    } }], edges: [] }).run();
+    const withHeaders = { headers: [{ name: 'X-Fixture', value: 'fixture-value' }] };
+    const before = hits.length;
+    for (const [suffix, options] of [['/cross', withHeaders], ['/cross?proof=fixture'], ['/cross', { method: 'POST', body: 'fixture-body' }]]) {
+      const blocked = await run(suffix, options);
+      assert.equal(blocked.ok, false, backend);
+      assert.match(blocked.finalMessage, /跨源重定向/);
+    }
+    assert.equal(hits.length, before, backend);
+    assert.equal((await run('/same', withHeaders)).ok, true, backend);
+    assert.equal(sameOrigin.at(-1).header, 'fixture-value');
+    const post = { method: 'POST', body: 'fixture-body', headers: [{ name: 'Content-Type', value: 'text/plain' }] };
+    assert.equal((await run('/see-other', post)).ok, true, backend);
+    assert.deepEqual(sameOrigin.at(-1), { header: undefined, method: 'GET', type: undefined });
+    assert.equal((await run('/cross', { ...withHeaders, redirect: 'manual', asserts: [{ from: 'status', res: ['^307$'] }] })).ok, true, backend);
+    assert.equal(hits.length, before, backend);
+    assert.equal((await run('/cross')).ok, true, backend);
+    assert.equal(hits.length, before + 1, backend);
+  }
+});
+
 test('MCP reports the package version and filters tasks using its search argument', async (t) => {
   const server = http.createServer((_req, res) => {
     res.setHeader('content-type', 'application/json');

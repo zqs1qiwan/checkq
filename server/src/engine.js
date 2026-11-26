@@ -443,30 +443,62 @@ export class Engine {
     const signal = state.signal;
     throwIfAborted(signal);
     let status, statusText, text, respHeaders, setCookies;
+    let responseUrl = url;
     const maxBytes = Math.min(
       MAX_RESP_BYTES_CAP,
       Math.max(MIN_RESP_BYTES, Number(c.maxRespBytes) || MAX_RESP_BYTES),
     );
     try {
-      if ((c.backend || 'fetch') === 'curl') {
-        // c.timeout 单位是秒（与 fetch 路径一致），httpViaCurl 内部按毫秒处理
-        ({ status, statusText, headers: respHeaders, text, setCookies } = await httpViaCurl(
-          url, method, headers, body, c.timeout ? Math.max(1000, Number(c.timeout) * 1000) : HTTP_TIMEOUT, (c.redirect || 'follow') !== 'manual', proxyUrl, maxBytes, signal));
-      } else {
-        const dispatcher = proxyUrl ? getProxyAgent(proxyUrl) : undefined;
-        // config.timeout 单位是秒（ConfigPanel「超时 (秒)」/ curl --max-time），fetch 需换算成毫秒
-        const timeoutMs = c.timeout ? Math.max(1000, Number(c.timeout) * 1000) : HTTP_TIMEOUT;
-        const timeoutSignal = AbortSignal.timeout(timeoutMs);
-        const resp = await fetch(url, {
-          method,
-          headers,
-          body,
-          redirect: c.redirect || 'follow',
-          signal: signal ? AbortSignal.any([timeoutSignal, signal]) : timeoutSignal,
-          dispatcher,
-        });
-        status = resp.status;
-        statusText = resp.statusText || '';
+      const redirect = c.redirect || 'follow';
+      const timeoutMs = c.timeout ? Math.max(1000, Number(c.timeout) * 1000) : HTTP_TIMEOUT;
+      const timeoutSignal = AbortSignal.timeout(timeoutMs);
+      const requestSignal = signal ? AbortSignal.any([timeoutSignal, signal]) : timeoutSignal;
+      const initialUrl = new URL(url);
+      const hasRequestData = body != null || Object.keys(headers).length > 0 || initialUrl.search
+        || initialUrl.username || initialUrl.password || c.url !== url
+        || [...collectSecrets(vars)].some((value) => url.includes(value));
+      const protectRedirect = redirect === 'follow' && hasRequestData;
+      const redirectMode = protectRedirect ? 'manual' : redirect;
+      const viaCurl = (c.backend || 'fetch') === 'curl';
+      const dispatcher = !viaCurl && proxyUrl ? getProxyAgent(proxyUrl) : undefined;
+      const deadline = Date.now() + timeoutMs;
+      let requestMethod = method;
+      let requestBody = body;
+      let requestHeaders = headers;
+      for (let redirects = 0; ; redirects++) {
+        let resp;
+        if (viaCurl) {
+          ({ status, statusText, headers: respHeaders, text, setCookies } = await httpViaCurl(
+            responseUrl, requestMethod, requestHeaders, requestBody, Math.max(1, deadline - Date.now()), redirectMode === 'follow', proxyUrl, maxBytes, requestSignal));
+        } else {
+          resp = await fetch(responseUrl, { method: requestMethod, headers: requestHeaders, body: requestBody, redirect: redirectMode, signal: requestSignal, dispatcher });
+          status = resp.status;
+          statusText = resp.statusText || '';
+          respHeaders = Object.fromEntries(resp.headers.entries());
+          setCookies = resp.headers.getSetCookie ? resp.headers.getSetCookie() : [];
+        }
+        const location = respHeaders.location;
+        if (location && [301, 302, 303, 307, 308].includes(status) && (protectRedirect || redirectMode === 'error')) {
+          await resp?.body?.cancel();
+          if (redirectMode === 'error') throw new Error('节点配置禁止 HTTP 重定向');
+          const next = new URL(location, responseUrl);
+          if (next.origin !== initialUrl.origin || next.username || next.password) {
+            throw new Error('已阻止携带请求数据的跨源重定向');
+          }
+          if (redirects >= 20) throw new Error('HTTP 重定向次数超过上限');
+          if ((status === 303 && requestMethod !== 'HEAD') || ((status === 301 || status === 302) && requestMethod === 'POST')) {
+            requestMethod = 'GET';
+            requestBody = null;
+            requestHeaders = { ...requestHeaders };
+            for (const header of ['content-length', 'content-type', 'content-encoding', 'content-language', 'content-location', 'transfer-encoding']) {
+              delete requestHeaders[header];
+            }
+          }
+          responseUrl = next.href;
+          continue;
+        }
+        if (!resp) break;
+        responseUrl = resp.url || responseUrl;
         // charset（4.2）：默认按响应 content-type；强制 c.charset 覆盖
         const ctype = resp.headers.get('content-type') || '';
         let encoding = (ctype.match(/charset=([\w-]+)/i) || [])[1] || 'utf-8';
@@ -481,8 +513,7 @@ export class Engine {
                 return buf.toString('utf8'); // 不认识的编码回退 utf-8
               }
             })();
-        respHeaders = Object.fromEntries(resp.headers.entries());
-        setCookies = resp.headers.getSetCookie ? resp.headers.getSetCookie() : [];
+        break;
       }
     } catch (err) {
       if (signal?.aborted) throw cancelError();
@@ -498,7 +529,7 @@ export class Engine {
     } catch {}
 
     // 响应 Set-Cookie 入罐（后续同域请求自动携带）
-    if (useJar && state.cookieJar) state.cookieJar.setFrom(url, setCookies);
+    if (useJar && state.cookieJar) state.cookieJar.setFrom(responseUrl, setCookies);
 
     const duration = Date.now() - t0;
     state.last = { status, statusText, headers: respHeaders, text, json, ms: duration, setCookies: setCookies || [] };
@@ -881,7 +912,7 @@ async function httpViaCurl(url, method, headers, body, timeoutMs, follow, proxyU
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'checkq-'));
   const hdrFile = path.join(tmp, 'h.txt');
   const bodyFile = path.join(tmp, 'b.txt');
-  const args = ['-sS', '--max-time', String(Math.ceil(timeoutMs / 1000)), '--max-filesize', String(maxBytes), '-X', method, '-D', hdrFile, '-o', bodyFile];
+  const args = ['-q', '-sS', '--max-time', String(Math.ceil(timeoutMs / 1000)), '--max-filesize', String(maxBytes), '-X', method, '-D', hdrFile, '-o', bodyFile];
   if (follow) args.push('-L');
   if (proxyUrl) args.push('--proxy', proxyUrl);
   args.push(url);
