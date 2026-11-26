@@ -170,6 +170,41 @@ test('上游签发的凭据提取到普通变量后仍会脱敏', async (t) => {
   }
 });
 
+test('通知节点发送脱敏正文，业务请求仍使用完整凭据', async (t) => {
+  const fixture = 'notification-private-fixture-' + 'x'.repeat(120);
+  const businessRequests = [];
+  const notifications = [];
+  const server = http.createServer(async (req, res) => {
+    if (req.url === '/business') {
+      businessRequests.push(req.headers['x-api-key']);
+    } else {
+      let text = '';
+      for await (const chunk of req) text += chunk;
+      notifications.push({ url: req.url, text });
+    }
+    res.end('ok');
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  const streamed = [];
+  const result = await new Engine({
+    vars: { copy: fixture },
+    log: { record: 'all' },
+    nodes: [
+      { id: 'business', type: 'http', config: { url: `${origin}/business`, headers: [{ name: 'x-api-key', value: '{{copy}}' }] } },
+      { id: 'notify', type: 'notify', config: { webhookUrl: `${origin}/notify?token=channel-fixture`, text: '已完成 {{copy}}' } },
+    ],
+    edges: [{ source: 'business', target: 'notify' }],
+  }).run({ logSink: (entry) => streamed.push(entry) });
+  assert.equal(result.ok, true);
+  assert.deepEqual(businessRequests, [fixture]);
+  assert.deepEqual(notifications, [{ url: '/notify?token=channel-fixture', text: '已完成 ***' }]);
+  for (const logs of [result.logs, streamed]) {
+    assert.equal(logs.find((entry) => entry.stepId === 'notify').message, '已推送: 已完成 ***');
+  }
+});
+
 test('引擎运行日志与 SSE 推送都不含请求/响应凭据', async (t) => {
   const seen = [];
   const server = http.createServer((req, res) => {

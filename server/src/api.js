@@ -19,7 +19,7 @@ import { generateSecret, verifyTotp, generateRecoveryCodes, hashRecoveryCode, ve
 import { buildOpenApi } from './openapi.js';
 import { ipAllowed, isPrivateIp, normalizeIp } from './iprange.js';
 import { Engine, redactVars } from './engine.js';
-import { collectSecrets, hasAiInputCredentials, redactRunForExport } from './redact.js';
+import { collectSecrets, hasAiInputCredentials, redactRunForExport, redactText } from './redact.js';
 import { hasDefinitionCredentials, maskSecrets } from './secret.js';
 import { validateFlow, validateHttpOrigins } from './model.js';
 import { importHar } from './har-import.js';
@@ -639,12 +639,13 @@ export function buildServer({ dataDir, port }) {
 
   function renderNotifyTemplate(n, flow, run) {
     const tpl = (n.template || '[CheckQ] {{flow.name}} {{status}}\n{{message}}');
-    return tpl
+    const text = tpl
       .replace(/\{\{\s*flow\.name\s*\}\}/g, flow.name || '')
       .replace(/\{\{\s*status\s*\}\}/g, run.status === 'success' ? '成功 ✅' : '失败 ❌')
       .replace(/\{\{\s*message\s*\}\}/g, run.finalMessage || (run.logs?.at(-1)?.message || ''))
       .replace(/\{\{\s*duration\s*\}\}/g, `${((run.durationMs || 0) / 1000).toFixed(1)}s`)
       .replace(/\{\{\s*time\s*\}\}/g, new Date(run.startedAt || Date.now()).toLocaleString('zh-CN'));
+    return redactText(text, collectSecrets(flow.vars));
   }
 
   // Cookie 一键回填（统一浏览器登录的备用路径）：把 document.cookie POST 到这里写入任务变量。

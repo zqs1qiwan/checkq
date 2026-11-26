@@ -89,6 +89,19 @@ check('ntfy topic + Title header', ntfy && ntfy.url.endsWith('/checkq-test') && 
 const inbox = server.store.listNotifications(5);
 check('inbox 站内通知落库', inbox.total === 1 && inbox.items[0].content.includes('notify-test'), JSON.stringify(inbox));
 
+const fixture = 'flow-notification-private-fixture';
+const protectedFlow = await app.inject({
+  method: 'POST', url: '/api/flows', headers: { cookie },
+  payload: { name: 'notify-redaction', vars: { token: fixture }, nodes: [], notify: {
+    template: `{{flow.name}} ${fixture}`,
+    channels: [{ type: 'inbox' }],
+  } },
+});
+const protectedNotice = await app.inject({ method: 'POST', url: `/api/flows/${protectedFlow.json().id}/notify-test`, headers: { cookie } });
+check('通知模板遮蔽已知任务凭据', protectedNotice.statusCode === 200
+  && server.store.listNotifications(5).items.some((item) => item.content === 'notify-redaction ***')
+  && !protectedNotice.body.includes(fixture));
+
 // 失败渠道要回 502
 calls.length = 0;
 const bad = await app.inject({

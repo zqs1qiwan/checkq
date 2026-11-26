@@ -895,7 +895,7 @@ export class Engine {
 
       case 'notify': {
         const c = node.config || {};
-        const text = renderTemplate(String(c.text ?? ''), vars, missing);
+        const rendered = renderTemplate(String(c.text ?? ''), vars, missing);
         const targets = [];
         if (c.webhookUrl) targets.push({ type: 'webhook', url: renderTemplate(c.webhookUrl, vars, missing) });
         if (c.tgToken && c.tgChat) targets.push({ type: 'telegram', token: c.tgToken, chat: c.tgChat });
@@ -904,6 +904,11 @@ export class Engine {
           stepLog.message = '未配置通知渠道，跳过';
           return { handle: 'next' };
         }
+        for (const target of targets) {
+          if (target.url) trackHttpUrlCredentials(state.credentials, target.url);
+          if (target.token) trackHttpCredentials(state.credentials, { token: target.token });
+        }
+        const text = redactText(rendered, state.currentSecrets());
         const results = await sendToChannels(targets, text, { flowName: '通知节点' });
         const errors = results.filter((r) => !r.ok).map((r) => `${r.type}: ${r.error}`);
         const sent = results.some((r) => r.ok);
