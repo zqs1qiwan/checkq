@@ -24,15 +24,16 @@ test('URL 路径和片段遮蔽已知凭据的 URL 编码形式', () => {
 });
 
 test('body 脱敏：JSON 与表单敏感字段整体打码', () => {
-  const json = redactBody('{"username":"u","password":"p@ss-value","nested":{"token":"tok-value"}}', 'application/json');
+  const json = redactBody('{"username":"u","name":"可显示","password":"p@ss-value","nested":{"token":"tok-value"}}', 'application/json');
   const parsed = JSON.parse(json);
-  assert.equal(parsed.username, 'u');
+  assert.equal(parsed.username, '***');
+  assert.equal(parsed.name, '可显示');
   assert.equal(parsed.password, '***');
   assert.equal(parsed.nested.token, '***');
 
   const form = redactBody('username=u&token=tok-value&next=%2Fhome', 'application/x-www-form-urlencoded');
   assert.ok(!form.includes('tok-value'));
-  assert.ok(form.includes('username=u'));
+  assert.equal(new URLSearchParams(form).get('username'), '***');
   assert.ok(form.includes('next=%2Fhome'));
 });
 

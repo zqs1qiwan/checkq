@@ -109,12 +109,14 @@ await ok('redactVars 敏感名整体打码, 非敏感名保留', async () => {
   const r = redactVars({
     cookie: 'sess=abcdef1234567890; other=1',
     token: 'tok_very_long_secret_value',
-    username: 'plainuser',
+    username: 'local-account-fixture',
+    displayName: '普通名称',
     note: '普通内容',
   });
   assert.strictEqual(r.cookie, '***');
   assert.strictEqual(r.token, '***');
-  assert.strictEqual(r.username, 'plainuser');
+  assert.strictEqual(r.username, '***');
+  assert.strictEqual(r.displayName, '普通名称');
   assert.strictEqual(r.note, '普通内容');
 });
 

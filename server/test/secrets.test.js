@@ -32,11 +32,12 @@ const H = { cookie, 'content-type': 'application/json' };
 
 const COOKIE_VAL = 'gld:sess=abc123def456ghi789jkl012mno345pqr; gld:sess.sig=SIGNATUREVALUE';
 const TG_TOKEN = '123456789:TEST_FAKE_TOKEN_FOR_ENCRYPTION_TEST';
+const LOGIN_NAME = 'local-account-fixture';
 
 const created = await app.inject({
   method: 'POST', url: '/api/flows', headers: H,
   payload: {
-    name: '凭据测试', nodes: [], vars: { cookie: COOKIE_VAL, ua: 'Mozilla/5.0', site: 'example.com' },
+    name: '凭据测试', nodes: [], vars: { cookie: COOKIE_VAL, login_user: LOGIN_NAME, ua: 'Mozilla/5.0', site: 'example.com' },
     notify: { onSuccess: true, channels: [{ type: 'telegram', token: TG_TOKEN, chat: '<chat-id>' }] },
   },
 });
@@ -45,6 +46,18 @@ assert.strictEqual(created.statusCode, 200, created.body);
 await check('磁盘上不出现明文 cookie', async () => {
   const raw = fs.readFileSync(dir + '/flows.json', 'utf8');
   return !raw.includes('gld:sess=abc123def456ghi789jkl012mno345pqr') && raw.includes('enc:v1:');
+});
+
+await check('登录用户名变量加密落盘并遮蔽受限回包', async () => {
+  const raw = fs.readFileSync(dir + '/flows.json', 'utf8');
+  const row = JSON.parse(raw).find((f) => f.id === created.json().id);
+  const key = await app.inject({ method: 'POST', url: '/api/system/apikeys', headers: H, payload: { name: 'username-mask', scopes: ['read'] } });
+  assert.equal(key.statusCode, 200);
+  const base = await app.listen({ host: '127.0.0.1', port: 0 });
+  const r = await fetch(`${base}/api/flows/${row.id}`, { headers: { 'x-api-key': key.json().apiKey } });
+  const view = await r.json();
+  return row.vars.login_user.startsWith('enc:v1:') && !raw.includes(LOGIN_NAME)
+    && r.status === 200 && view.vars.login_user === '' && view.vars.site === 'example.com';
 });
 
 await check('磁盘上不出现明文 Telegram token', async () => {
@@ -67,7 +80,7 @@ await check('重新读取（模拟重启）后仍是明文（密钥一致）', a
   const { Store } = await import('../src/store.js');
   const s2 = new Store(dir);
   const f = s2.getFlow(created.json().id);
-  return f.vars.cookie === COOKIE_VAL && f.notify.channels[0].token === TG_TOKEN;
+  return f.vars.cookie === COOKIE_VAL && f.vars.login_user === LOGIN_NAME && f.notify.channels[0].token === TG_TOKEN;
 });
 
 await check('密钥文件存在且权限 600', async () => {
@@ -82,7 +95,7 @@ await check('备份默认脱敏（cookie / token 为空或 ***）', async () => 
   const r = await app.inject({ method: 'GET', url: '/api/system/backup', headers: H });
   const j = r.json();
   const f = j.flows.find((x) => x.id === created.json().id);
-  return j.masked === true && f.vars.cookie === '' && f.notify.channels[0].token === '***';
+  return j.masked === true && f.vars.cookie === '' && f.vars.login_user === '' && f.notify.channels[0].token === '***';
 });
 
 await check('完整备份需要正确密码', async () => {

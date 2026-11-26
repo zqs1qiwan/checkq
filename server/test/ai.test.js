@@ -278,6 +278,7 @@ await check('任务描述包含凭据时在本地拒绝，模型不接到请求'
       '签到 Cookie: session=raw-first; theme=raw-second',
       'Authorization: Basic Zml4dHVyZTpwYXNz',
       '请求参数 {"password":"fixture-password"}',
+      '请求参数 {"username":"fixture-login"}',
       '登录 密码：fixture-password',
       '签到 https://user:fixture-password@example.com/check',
       '签到 https://example.com/check?%74oken=fixture-token',
