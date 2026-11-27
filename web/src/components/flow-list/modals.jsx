@@ -146,8 +146,9 @@ function CsvImportModal({ tpl, onClose, onDone }) {
     setBusy(true); setErr(''); setResult(null);
     try {
       const r = await api.instantiateCsv(tpl.id, csv);
-      setResult(r);
-      if (r.created > 0) onDone(r.created);
+      const count = Array.isArray(r.created) ? r.created.length : (Number(r.created) || 0);
+      setResult({ ...r, createdCount: count });
+      if (count > 0) onDone(count);
     } catch (e) {
       setErr(e.message);
     } finally {
@@ -194,7 +195,7 @@ function CsvImportModal({ tpl, onClose, onDone }) {
         {err && <p style={{ color: 'var(--fail)', fontSize: 12 }}>{err}</p>}
         {result && (
           <p style={{ color: 'var(--ok)', fontSize: 12 }}>
-            已创建 {result.created} 个任务{result.errors?.length ? `，${result.errors.length} 行失败` : ''}
+            已创建 {result.createdCount ?? 0} 个任务{result.errors?.length ? `，${result.errors.length} 行失败` : ''}
           </p>
         )}
     </Modal>
@@ -354,7 +355,7 @@ function TemplateEditorModal({ tpl, onDone }) {
         vars: varsObj,
         varNames: Object.keys(varsObj),
       });
-      setToast(`模板「${nm}」已保存`, 'ok');
+      setToast({ kind: 'ok', text: `模板「${nm}」已保存` });
       // 提示级别默认只显示错误：弹窗内再给一次「已保存」反馈，然后自动关闭
       setSaved(true);
       window.setTimeout(onDone, 600);
@@ -490,7 +491,7 @@ function GroupAssignModal({ ids, groups = [], onClose, onDone }) {
     setBusy(true); setErr('');
     try {
       const r = await api.batch(ids, 'set-group', { group: group.trim() });
-      setToast(`已设置 ${r.ok || 0}/${r.total || ids.length} 个任务的分组`, 'ok');
+      setToast({ kind: 'ok', text: `已设置 ${r.ok || 0}/${r.total || ids.length} 个任务的分组` });
       onDone?.(group.trim());
     } catch (e) { setErr(e.message); } finally { setBusy(false); }
   };

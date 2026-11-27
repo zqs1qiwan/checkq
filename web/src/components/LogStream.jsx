@@ -94,6 +94,7 @@ export default function LogStream({ flowId, flowName, onClose, onToast, onFix })
   const [error, setError] = useState('');
   const [reload, setReload] = useState(0);
   const [exportingRun, setExportingRun] = useState(null);
+  const [cancellingRun, setCancellingRun] = useState(null);
   const exportRequest = useRef(null);
   const boxRef = useRef(null);
   const olderRequest = useRef(null);
@@ -296,6 +297,20 @@ export default function LogStream({ flowId, flowName, onClose, onToast, onFix })
                 <span className="logstream-count">{g.visibleItems.length} 条</span>
                 {g.summary && <span className="logstream-summary">摘要：{g.summary}</span>}
                 <span className="spacer" />
+                {(g.status === 'running' || g.status === 'queued') && (
+                  <button
+                    className="small danger"
+                    disabled={cancellingRun === g.runId}
+                    onClick={async () => {
+                      setCancellingRun(g.runId);
+                      try { await api.cancelRun(g.runId); setReload((n) => n + 1); }
+                      catch (e) { setError(e.message || '取消失败'); }
+                      finally { setCancellingRun(null); }
+                    }}
+                  >
+                    {cancellingRun === g.runId ? '取消中…' : '取消运行'}
+                  </button>
+                )}
                 <button className="small icon-text" aria-expanded={debugRun === g.runId} onClick={() => setDebugRun((id) => id === g.runId ? null : g.runId)} title="查看这次运行的每步细节">
                   <IconBug size={13} /> {debugRun === g.runId ? '收起调试' : '调试'}
                 </button>

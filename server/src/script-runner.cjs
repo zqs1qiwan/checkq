@@ -40,9 +40,9 @@ function run(payload) {
   ].join('\n');
   vm.runInContext(setup, ctx, { timeout: 1000 });
 
-  let out;
+  let serializedOut = '';
   try {
-    out = vm.runInContext(`(() => {\n"use strict";\n${code}\n})()`, ctx, { timeout });
+    serializedOut = vm.runInContext(`(() => {\n"use strict";\nconst __r = (() => {\n${code}\n})();\nif (!__r || typeof __r !== 'object' || Array.isArray(__r)) return '';\nreturn JSON.stringify(__r);\n})()`, ctx, { timeout });
   } catch (err) {
     const msg = err && err.code === 'ERR_SCRIPT_EXECUTION_TIMEOUT'
       ? `脚本执行超时（>${timeout}ms）`
@@ -51,19 +51,19 @@ function run(payload) {
   }
 
   const result = {};
-  if (out && typeof out === 'object' && !Array.isArray(out)) {
-    for (const [k, v] of Object.entries(out)) {
-      if (v === undefined || typeof v === 'function' || typeof v === 'symbol') continue;
-      try {
-        result[k] = JSON.parse(JSON.stringify(v));
-      } catch {
-        result[k] = String(v);
+  if (serializedOut) {
+    let parsed;
+    try { parsed = JSON.parse(serializedOut); } catch { return fail('脚本返回值无法序列化'); }
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      for (const [k, v] of Object.entries(parsed)) {
+        if (!k || k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
+        result[k] = v;
       }
     }
   }
   const text = JSON.stringify({ ok: true, out: result });
   if (Buffer.byteLength(text, 'utf8') > MAX_RESULT) return fail('脚本返回值超过 256KB 上限');
-  process.stdout.write(text);
+  process.stdout.write(text, () => process.exit(0));
 }
 
 let input = '';

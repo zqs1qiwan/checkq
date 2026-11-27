@@ -22,6 +22,18 @@ const HTTP_TIMEOUT = 30000;
 const MAX_RESP_BYTES = 2 * 1024 * 1024; // 执行阶段响应体硬上限，超限直接失败（与日志截断是两件事）
 const MIN_RESP_BYTES = 64 * 1024;
 const MAX_RESP_BYTES_CAP = 8 * 1024 * 1024;
+const BAD_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+function decodeBodyBuffer(buf, contentType = '', charset = 'auto') {
+  let encoding = (String(contentType).match(/charset=([\w-]+)/i) || [])[1] || 'utf-8';
+  if (charset && charset !== 'auto') encoding = charset;
+  if (/utf-?8/i.test(encoding)) return buf.toString('utf8');
+  try {
+    return new TextDecoder(encoding).decode(buf);
+  } catch {
+    return buf.toString('utf8'); // 不认识的编码回退 utf-8
+  }
+}
 
 function cancelError() {
   const e = new Error('运行已取消');
@@ -81,13 +93,23 @@ async function readBodyWithLimit(resp, limit) {
   return Buffer.concat(chunks, total);
 }
 
-const proxyAgents = new Map(); // proxyUrl -> ProxyAgent（复用连接池）
+const MAX_PROXY_AGENTS = 64;
+const proxyAgents = new Map(); // proxyUrl -> ProxyAgent（LRU 复用连接池）
 function getProxyAgent(proxyUrl) {
   let a = proxyAgents.get(proxyUrl);
-  if (!a) {
-    a = new ProxyAgent(proxyUrl);
+  if (a) {
+    proxyAgents.delete(proxyUrl);
     proxyAgents.set(proxyUrl, a);
+    return a;
   }
+  if (proxyAgents.size >= MAX_PROXY_AGENTS) {
+    const oldestKey = proxyAgents.keys().next().value;
+    const oldest = proxyAgents.get(oldestKey);
+    proxyAgents.delete(oldestKey);
+    try { oldest?.close?.(); } catch {}
+  }
+  a = new ProxyAgent(proxyUrl);
+  proxyAgents.set(proxyUrl, a);
   return a;
 }
 
@@ -226,6 +248,7 @@ export class Engine {
       : Math.min(100000, Math.max(0, Number(rawLimit) || 0));
     const keywords = Array.isArray(logCfg?.keywords) ? logCfg.keywords.filter((k) => k && k.regex) : [];
     const keywordResults = []; // {name, values[]} 汇总
+    state._rt = { shouldDisplay, keywords, keywordResults, debugStopId, stopped: false, stopName: '' };
 
     const entry = this.findEntryNode();
     if (!entry) {
@@ -246,7 +269,7 @@ export class Engine {
     let failed = false;
     let finalMessage = '';
 
-    while (node && stepCount < MAX_STEPS) {
+    while (node && stepCount < MAX_STEPS && logs.length < MAX_STEPS) {
       if (signal?.aborted) {
         failed = true;
         finalMessage = '运行已取消';
@@ -282,38 +305,15 @@ export class Engine {
 
         // 关键字规则提取（PRD §4.7.4）：对每步 HTTP 响应尝试 keywords
         if (keywords.length && stepLog.type === 'http' && state.last) {
-          for (const kw of keywords) {
-            if (kw.stepId && kw.stepId !== node.id) continue;
-            try {
-              const source = kw.from === 'headers'
-                ? JSON.stringify(state.last.headers || {})
-                : kw.from === 'status'
-                  ? String(state.last.status ?? '')
-                  : String(state.last.text ?? '');
-              const re = new RegExp(kw.regex, 'g');
-              const values = [];
-              let m;
-              while ((m = re.exec(source)) !== null) {
-                values.push(m.length > 1 ? m[1] : m[0]);
-                if (values.length >= 20) break; // 防失控
-                if (m.index === re.lastIndex) re.lastIndex++;
-              }
-              if (values.length) {
-                stepLog.keywords = stepLog.keywords || [];
-                stepLog.keywords.push({ name: kw.name, values });
-                const agg = keywordResults.find((r) => r.name === kw.name);
-                if (agg) agg.values.push(...values);
-                else keywordResults.push({ name: kw.name, values });
-              }
-            } catch { /* 非法正则：跳过（编辑器已即时校验） */ }
-          }
+          this.extractKeywords(keywords, keywordResults, node.id, stepLog, state);
         }
 
         // level 三档：运行结束后统一裁剪（在 run 末尾处理，此处保留完整数据供提取）
 
         // 调试模式：到达指定节点（含）即停
-        if (debugStopId && node.id === debugStopId) {
-          finalMessage = finalMessage || `调试运行：已执行到「${stepLog.name}」，共 ${stepCount} 步`;
+        if ((debugStopId && node.id === debugStopId) || state._rt.stopped) {
+          const hitName = state._rt.stopped ? state._rt.stopName : stepLog.name;
+          finalMessage = finalMessage || `调试运行：已执行到「${hitName}」，共 ${logs.length} 步`;
           break;
         }
         if (!outcome) {
@@ -347,7 +347,7 @@ export class Engine {
       }
     }
 
-    if (stepCount >= MAX_STEPS) {
+    if (stepCount >= MAX_STEPS || logs.length >= MAX_STEPS) {
       failed = true;
       finalMessage = `流程超过 ${MAX_STEPS} 步，疑似成环`;
     }
@@ -407,6 +407,34 @@ export class Engine {
     return noIn.sort((a, b) => a.x - b.x)[0];
   }
 
+  extractKeywords(keywords, keywordResults, nodeId, stepLog, state) {
+    for (const kw of keywords) {
+      if (kw.stepId && kw.stepId !== nodeId) continue;
+      try {
+        const source = kw.from === 'headers'
+          ? JSON.stringify(state.last.headers || {})
+          : kw.from === 'status'
+            ? String(state.last.status ?? '')
+            : String(state.last.text ?? '');
+        const re = new RegExp(kw.regex, 'g');
+        const values = [];
+        let m;
+        while ((m = re.exec(source)) !== null) {
+          values.push(m.length > 1 ? m[1] : m[0]);
+          if (values.length >= 20) break; // 防失控
+          if (m.index === re.lastIndex) re.lastIndex++;
+        }
+        if (values.length) {
+          stepLog.keywords = stepLog.keywords || [];
+          stepLog.keywords.push({ name: kw.name, values });
+          const agg = keywordResults.find((r) => r.name === kw.name);
+          if (agg) agg.values.push(...values);
+          else keywordResults.push({ name: kw.name, values });
+        }
+      } catch { /* 非法正则：跳过 */ }
+    }
+  }
+
   /** HTTP 节点执行体（由 execNode 的重试循环调用）。返回 {ok, errorKind, message} */
   async execHttp(node, c, state, stepLog, missing, attempt) {
     const vars = state.vars;
@@ -445,8 +473,7 @@ export class Engine {
     trackHttpCredentials(state.credentials, headers);
     let body = null;
     if (c.body && method !== 'GET' && method !== 'HEAD') {
-      const b = renderTemplate(c.body, vars, missing);
-      body = typeof b === 'string' ? b.trim() : b;
+      body = renderTemplate(c.body, vars, missing);
     }
     // 代理（4.2）：值支持 {{proxyVar}}，运行时渲染
     let proxyUrl = '';
@@ -477,6 +504,9 @@ export class Engine {
       const timeoutSignal = AbortSignal.timeout(timeoutMs);
       const requestSignal = signal ? AbortSignal.any([timeoutSignal, signal]) : timeoutSignal;
       const initialUrl = new URL(url);
+      if (!['http:', 'https:'].includes(initialUrl.protocol)) {
+        return { ok: false, errorKind: 'configuration', message: `不支持的 URL 协议: ${initialUrl.protocol}` };
+      }
       const hasRequestData = body != null || Object.keys(headers).length > 0 || initialUrl.search
         || initialUrl.username || initialUrl.password || c.url !== url
         || [...collectSecrets(vars)].some((value) => url.includes(value));
@@ -492,7 +522,7 @@ export class Engine {
         let resp;
         if (viaCurl) {
           ({ status, statusText, headers: respHeaders, text, setCookies } = await httpViaCurl(
-            responseUrl, requestMethod, requestHeaders, requestBody, Math.max(1, deadline - Date.now()), redirectMode === 'follow', proxyUrl, maxBytes, requestSignal));
+            responseUrl, requestMethod, requestHeaders, requestBody, Math.max(1, deadline - Date.now()), redirectMode === 'follow', proxyUrl, maxBytes, requestSignal, c.charset));
         } else {
           resp = await fetch(responseUrl, { method: requestMethod, headers: requestHeaders, body: requestBody, redirect: redirectMode, signal: requestSignal, dispatcher });
           status = resp.status;
@@ -506,7 +536,7 @@ export class Engine {
           await resp?.body?.cancel();
           if (redirectMode === 'error') throw new Error('节点配置禁止 HTTP 重定向');
           const next = new URL(location, responseUrl);
-          if (next.origin !== initialUrl.origin || next.username || next.password) {
+          if (!['http:', 'https:'].includes(next.protocol) || next.origin !== initialUrl.origin || next.username || next.password) {
             throw new Error('已阻止携带请求数据的跨源重定向');
           }
           if (redirects >= 20) throw new Error('HTTP 重定向次数超过上限');
@@ -524,20 +554,9 @@ export class Engine {
         }
         if (!resp) break;
         responseUrl = resp.url || responseUrl;
-        // charset（4.2）：默认按响应 content-type；强制 c.charset 覆盖
         const ctype = resp.headers.get('content-type') || '';
-        let encoding = (ctype.match(/charset=([\w-]+)/i) || [])[1] || 'utf-8';
-        if (c.charset && c.charset !== 'auto') encoding = c.charset;
         const buf = await readBodyWithLimit(resp, maxBytes);
-        text = /utf-?8/i.test(encoding)
-          ? buf.toString('utf8')
-          : (() => {
-              try {
-                return new TextDecoder(encoding).decode(buf);
-              } catch {
-                return buf.toString('utf8'); // 不认识的编码回退 utf-8
-              }
-            })();
+        text = decodeBodyBuffer(buf, ctype, c.charset);
         break;
       }
     } catch (err) {
@@ -612,6 +631,7 @@ export class Engine {
 
   /** 写入原值供后续步骤使用，日志预览先脱敏再截断。 */
   setVariable(state, stepLog, name, value, showEllipsis = false) {
+    if (!name || BAD_KEYS.has(String(name))) return;
     state.vars[name] = value;
     const secrets = state.currentSecrets();
     const preview = isSensitiveName(name) ? '***' : redactText(value, secrets);
@@ -687,7 +707,11 @@ export class Engine {
           const pathStr = String(c.path || '').trim();
           let cur = state.last && state.last.json;
           for (const key of pathStr ? pathStr.split('.') : []) {
-            cur = cur == null ? undefined : cur[key];
+            if (BAD_KEYS.has(key) || cur == null || typeof cur !== 'object' || !Object.prototype.hasOwnProperty.call(cur, key)) {
+              cur = undefined;
+              break;
+            }
+            cur = cur[key];
           }
           if (cur === undefined || cur === null) {
             stepLog.message = `JSON 路径未命中: ${pathStr || '(空)'}`;
@@ -731,7 +755,7 @@ export class Engine {
           return { handle: 'next' };
         }
         // 默认正则模式（原有）
-        const src = resolvePath(state, c.from, missing);
+        const src = resolvePath({ ...vars, last: state.last, steps: state.steps }, c.from, missing);
         const text = src === undefined || src === null ? '' : typeof src === 'object' ? JSON.stringify(src) : String(src);
         let m = null;
         try {
@@ -803,7 +827,10 @@ export class Engine {
         }
         const out = result.out;
         if (out && typeof out === 'object' && !Array.isArray(out)) {
-          for (const [k, v] of Object.entries(out)) vars[k] = typeof v === 'object' ? JSON.stringify(v) : String(v);
+          for (const [k, v] of Object.entries(out)) {
+            if (!k || BAD_KEYS.has(k)) continue;
+            vars[k] = typeof v === 'object' ? JSON.stringify(v) : String(v);
+          }
           stepLog.message = `脚本返回 ${Object.keys(out).length} 个变量：${Object.keys(out).join(', ')}`;
         } else {
           stepLog.message = '脚本完成（无返回值）';
@@ -839,12 +866,18 @@ export class Engine {
         }
         const itemVar = String(c.itemVar || 'item').trim() || 'item';
         const indexVar = String(c.indexVar || 'index').trim() || 'index';
+        if (BAD_KEYS.has(itemVar) || BAD_KEYS.has(indexVar)) {
+          stepLog.ok = false;
+          stepLog.message = '非法的循环变量名';
+          return null;
+        }
         const bodyTargetId = this.nextNodeId(node.id, 'each');
         if (!bodyTargetId) {
           stepLog.ok = false;
           stepLog.message = 'foreach 未连线循环体（each 出口）';
           return null;
         }
+        const rt = state._rt || {};
         const maxIter = Math.min(50, arr.length);
         let doneCount = 0;
         for (let i = 0; i < maxIter; i++) {
@@ -854,6 +887,11 @@ export class Engine {
           let cursor = this.nodeById.get(bodyTargetId);
           let guard = 0;
           while (cursor && guard < 100) {
+            if (logs.length >= MAX_STEPS) {
+              stepLog.ok = false;
+              stepLog.message = `流程超过 ${MAX_STEPS} 步，疑似成环`;
+              return null;
+            }
             guard++;
             throwIfAborted(state.signal);
             const started = Date.now();
@@ -867,22 +905,38 @@ export class Engine {
               bodyLog.message = `步骤异常: ${err.message}`;
               bodyLog.ms = Date.now() - started;
               logs.push(bodyLog);
-              if (logSink) logSink(bodyLog);
+              if (logSink && (!rt.shouldDisplay || rt.shouldDisplay(bodyLog))) logSink(bodyLog);
               stepLog.ok = false;
               stepLog.message = `遍历第 ${i + 1} 轮失败: ${bodyLog.message}`;
               return null;
             }
             bodyLog.ms = Date.now() - started;
             logs.push(bodyLog);
-            if (logSink) logSink(bodyLog);
+            if (rt.keywords?.length && bodyLog.type === 'http' && state.last) {
+              this.extractKeywords(rt.keywords, rt.keywordResults, cursor.id, bodyLog, state);
+            }
+            if (logSink && (!rt.shouldDisplay || rt.shouldDisplay(bodyLog))) logSink(bodyLog);
             if (state.signal?.aborted) throw cancelError();
+            if (rt.debugStopId && cursor.id === rt.debugStopId) {
+              rt.stopped = true;
+              rt.stopName = bodyLog.name;
+              stepLog.message = `调试运行：在遍历第 ${i + 1} 轮命中「${bodyLog.name}」`;
+              return { handle: 'next' };
+            }
             if (!outcome) {
               stepLog.ok = false;
               stepLog.message = `遍历第 ${i + 1} 轮失败: ${bodyLog.message}`;
               return null;
             }
             const nxt = this.nextNodeId(cursor.id, outcome.handle);
-            if (!nxt) break;
+            if (!nxt) {
+              if (outcome.handle === 'failed' && !bodyLog.ok) {
+                stepLog.ok = false;
+                stepLog.message = `遍历第 ${i + 1} 轮失败: ${bodyLog.message}`;
+                return null;
+              }
+              break;
+            }
             // 循环体到达 next 的后继时停止本轮（避免与主流程 nxt 重叠执行）
             if (this.nextNodeId(node.id, 'next') === nxt) break;
             cursor = this.nodeById.get(nxt);
@@ -936,12 +990,12 @@ export class Engine {
  * 支持 proxyUrl（http/https/socks5h → --proxy）。
  * 返回与 fetch 路径同构: { status, statusText, headers, text, setCookies }
  */
-async function httpViaCurl(url, method, headers, body, timeoutMs, follow, proxyUrl, maxBytes = MAX_RESP_BYTES, signal) {
+async function httpViaCurl(url, method, headers, body, timeoutMs, follow, proxyUrl, maxBytes = MAX_RESP_BYTES, signal, charset = 'auto') {
   throwIfAborted(signal);
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'checkq-'));
   const hdrFile = path.join(tmp, 'h.txt');
   const bodyFile = path.join(tmp, 'b.txt');
-  const args = ['-q', '--globoff', '-sS', '--max-time', String(Math.ceil(timeoutMs / 1000)), '--max-filesize', String(maxBytes), '-X', method, '-D', hdrFile, '-o', bodyFile];
+  const args = ['-q', '--globoff', '-sS', '--proto', '=http,https', '--proto-redir', '=http,https', '--max-time', String(Math.ceil(timeoutMs / 1000)), '--max-filesize', String(maxBytes), '-X', method, '-D', hdrFile, '-o', bodyFile];
   if (follow) args.push('-L');
   if (proxyUrl) args.push('--proxy', proxyUrl);
   args.push(url);
@@ -977,7 +1031,7 @@ async function httpViaCurl(url, method, headers, body, timeoutMs, follow, proxyU
     const hdrRaw = fs.readFileSync(hdrFile, 'utf8');
     const bodyStat = fs.statSync(bodyFile);
     if (bodyStat.size > maxBytes) throw new ResponseLimitError(maxBytes);
-    const text = fs.readFileSync(bodyFile, 'utf8');
+    const bodyBuf = fs.readFileSync(bodyFile);
     const blocks = hdrRaw.split(/\r?\n\r?\n/).filter((b) => b.trim());
     const lines = (blocks[blocks.length - 1] || '').split(/\r?\n/);
     const m = (lines[0] || '').match(/^HTTP\/[\d.]+\s+(\d+)/);
@@ -992,6 +1046,7 @@ async function httpViaCurl(url, method, headers, body, timeoutMs, follow, proxyU
         else respHeaders[k] = v;
       }
     }
+    const text = decodeBodyBuffer(bodyBuf, respHeaders['content-type'] || '', charset);
     return { status: m ? Number(m[1]) : 0, statusText: '', headers: respHeaders, text, setCookies };
   } finally {
     try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}

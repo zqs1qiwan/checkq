@@ -28,7 +28,7 @@
 <link rel="apple-touch-icon" href="./assets/brand/apple-touch-icon.png" />
 <link rel="stylesheet" href="./assets/style.css" />
 <link rel="sitemap" type="application/xml" href="https://zqs1qiwan.github.io/checkq/sitemap.xml" />
-<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebSite","@id":"https://zqs1qiwan.github.io/checkq/#website","url":"https://zqs1qiwan.github.io/checkq/","name":"CheckQ 文档","inLanguage":"zh-CN","description":"CheckQ 是开源的可视化 HTTP 自动化流程引擎：积木式流程、调度与失败重试、日志与通知、模板联动、REST API 与 MCP。","publisher":{"@type":"Organization","name":"CheckQ","url":"https://github.com/zqs1qiwan/checkq","logo":{"@type":"ImageObject","url":"https://zqs1qiwan.github.io/checkq/assets/brand/checkq-mark.svg","width":120,"height":120}}},{"@type":"TechArticle","@id":"https://zqs1qiwan.github.io/checkq/reference-agent.html#article","headline":"Agent 接入指南","name":"Agent 接入指南","description":"把 CheckQ 交给外部 Agent：如何生成受限 API Key、MCP 与 REST 两种接入方式对比、权限边界与安全建议。","url":"https://zqs1qiwan.github.io/checkq/reference-agent.html","mainEntityOfPage":"https://zqs1qiwan.github.io/checkq/reference-agent.html","inLanguage":"zh-CN","dateModified":"2026-11-26","isPartOf":{"@id":"https://zqs1qiwan.github.io/checkq/#website"},"image":"https://zqs1qiwan.github.io/checkq/assets/social-preview.png","publisher":{"@type":"Organization","name":"CheckQ","url":"https://github.com/zqs1qiwan/checkq"}}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebSite","@id":"https://zqs1qiwan.github.io/checkq/#website","url":"https://zqs1qiwan.github.io/checkq/","name":"CheckQ 文档","inLanguage":"zh-CN","description":"CheckQ 是开源的可视化 HTTP 自动化流程引擎：积木式流程、调度与失败重试、日志与通知、模板联动、REST API 与 MCP。","publisher":{"@type":"Organization","name":"CheckQ","url":"https://github.com/zqs1qiwan/checkq","logo":{"@type":"ImageObject","url":"https://zqs1qiwan.github.io/checkq/assets/brand/checkq-mark.svg","width":120,"height":120}}},{"@type":"TechArticle","@id":"https://zqs1qiwan.github.io/checkq/reference-agent.html#article","headline":"Agent 接入指南","name":"Agent 接入指南","description":"把 CheckQ 交给外部 Agent：如何生成受限 API Key、MCP 与 REST 两种接入方式对比、权限边界与安全建议。","url":"https://zqs1qiwan.github.io/checkq/reference-agent.html","mainEntityOfPage":"https://zqs1qiwan.github.io/checkq/reference-agent.html","inLanguage":"zh-CN","dateModified":"2026-11-27","isPartOf":{"@id":"https://zqs1qiwan.github.io/checkq/#website"},"image":"https://zqs1qiwan.github.io/checkq/assets/social-preview.png","publisher":{"@type":"Organization","name":"CheckQ","url":"https://github.com/zqs1qiwan/checkq"}}]}</script>
 <script>(function(){try{var k='checkq-wiki-theme';var s=window.localStorage.getItem(k);var m=(s==='light'||s==='dark')?s:((window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches)?'light':'dark');document.documentElement.setAttribute('data-mode',m);}catch(e){}document.documentElement.classList.add('js');})();</script>
 <noscript><style>.copy-btn,.search{display:none !important}</style></noscript>
 </head>
@@ -41,7 +41,7 @@
   <a class="brand" href="./index.html">
     <img class="brand-mark" src="./assets/brand/checkq-mark.svg" width="26" height="26" alt="" />
     <span class="brand-word">Check<em>Q</em></span>
-    <span class="brand-ver">v0.6.5</span>
+    <span class="brand-ver">v0.6.6</span>
   </a>
   <span class="topbar-title">文档</span>
   <div class="topbar-links">
@@ -98,7 +98,7 @@
 <a class="toc-l3" href="#24-基础-api不想用-mcp-时">2.4 基础 API（不想用 MCP 时）</a>
 <a class="toc-l3" href="#25-key-的回收日期">2.5 Key 的回收日期</a>
 <a class="toc-l3" href="#26-rest-接入">2.6 REST 接入</a>
-<a class="toc-l2" href="#3-agent-能做什么mcp-工具清单20-个">3. Agent 能做什么（MCP 工具清单，20 个）</a>
+<a class="toc-l2" href="#3-agent-能做什么mcp-工具清单22-个">3. Agent 能做什么（MCP 工具清单，22 个）</a>
 <a class="toc-l2" href="#4-外部-agent-的典型工作流">4. 外部 Agent 的典型工作流</a>
 <a class="toc-l2" href="#5-rest-端点速查给写脚本的人">5. REST 端点速查（给写脚本的人）</a>
 <a class="toc-l2" href="#6-安全边界给-agent-的提示词里可以带上">6. 安全边界（给 Agent 的提示词里可以带上）</a>
@@ -107,13 +107,13 @@
 </details>
     <article class="doc">
 <h1 id="外部-agent-接入-checkq操作签到任务">外部 Agent 接入 CheckQ（操作签到任务）<a class="h-anchor" href="#外部-agent-接入-checkq操作签到任务" aria-label="本节永久链接">#</a></h1>
-<p class="doc-meta"><span>v0.6.5</span><span>更新于 2026-11-26</span><a class="edit-link" href="https://github.com/zqs1qiwan/checkq/edit/main/docs/AGENT-ACCESS.md" target="_blank" rel="noopener noreferrer">在 GitHub 编辑此页 ↗</a></p>
+<p class="doc-meta"><span>v0.6.6</span><span>更新于 2026-11-27</span><a class="edit-link" href="https://github.com/zqs1qiwan/checkq/edit/main/docs/AGENT-ACCESS.md" target="_blank" rel="noopener noreferrer">在 GitHub 编辑此页 ↗</a></p>
 <blockquote><p>结论先说：<strong>两种方式都支持，推荐 MCP（工具化、语义清楚）；只用 REST 也完全够。</strong>
 你要交给对方的<strong>只有两样东西</strong>：① CheckQ 基址（示例 <code>http://checkq.local:18888</code>）② 一把 <strong>API Key</strong>（不要给账号密码！）。
 端口口径：服务端默认监听 <code>8888</code>；示例里的 <code>18888</code> 是 <code>docker-compose.yml</code> 为本地测试方便设的宿主映射，生产直连请用 <code>8888</code>。</p></blockquote>
 <hr />
 <h2 id="1-两种接入方式对比">1. 两种接入方式对比<a class="h-anchor" href="#1-两种接入方式对比" aria-label="本节永久链接">#</a></h2>
-<div class="table-wrap"><table><thead><tr><th></th><th><strong>MCP（stdio）</strong></th><th><strong>REST API</strong></th></tr></thead><tbody><tr><td>适合</td><td>Claude Desktop / Cursor / OpenCode 等支持 MCP 的 Agent</td><td>任意能发 HTTP 的脚本 / Agent 框架</td></tr><tr><td>交接物</td><td>基址 + API Key（2 个环境变量）</td><td>基址 + API Key（1 个请求头）</td></tr><tr><td>语义</td><td>现成工具（跑签到/换 cookie/看日志…）</td><td>需自己拼 REST 路径</td></tr><tr><td>依赖</td><td>Node 18+（本仓库 <code>mcp/checkq-mcp.cjs</code>，零依赖）</td><td>无</td></tr><tr><td>建议</td><td><strong>首选</strong></td><td>需要精细控制时用</td></tr></tbody></table></div>
+<div class="table-wrap"><table><thead><tr><th></th><th><strong>MCP（stdio / HTTP <code>/api/mcp</code>）</strong></th><th><strong>REST API</strong></th></tr></thead><tbody><tr><td>适合</td><td>Claude Desktop / Cursor / OpenCode 等支持 MCP 的 Agent</td><td>任意能发 HTTP 的脚本 / Agent 框架</td></tr><tr><td>交接物</td><td>基址 + API Key（本地 <code>checkq-mcp.cjs</code> 或直接连 <code>/api/mcp</code>）</td><td>基址 + API Key（1 个请求头）</td></tr><tr><td>语义</td><td>现成工具（跑签到/换 cookie/看日志…）</td><td>需自己拼 REST 路径</td></tr><tr><td>依赖</td><td>Node 18+（本仓库 <code>mcp/checkq-mcp.cjs</code>，零依赖）</td><td>无</td></tr><tr><td>建议</td><td><strong>首选</strong></td><td>需要精细控制时用</td></tr></tbody></table></div>
 <hr />
 <h2 id="2-给-agent-什么推荐姿势">2. 给 Agent 什么（推荐姿势）<a class="h-anchor" href="#2-给-agent-什么推荐姿势" aria-label="本节永久链接">#</a></h2>
 <h3 id="21-先在面板里生成一把受限key">2.1 先在面板里生成一把「受限」Key<a class="h-anchor" href="#21-先在面板里生成一把受限key" aria-label="本节永久链接">#</a></h3>
@@ -149,8 +149,8 @@
 <p>所有请求带一个头即可：</p>
 <div class="code-block"><div class="code-head"><span class="code-lang">bash</span><button class="copy-btn" type="button" data-copy hidden>复制</button></div><pre class="code" tabindex="0"><code class="language-bash">curl -H &quot;x-api-key: cq_xxxx&quot; http://checkq.local:18888/api/flows</code></pre></div>
 <hr />
-<h2 id="3-agent-能做什么mcp-工具清单20-个">3. Agent 能做什么（MCP 工具清单，20 个）<a class="h-anchor" href="#3-agent-能做什么mcp-工具清单20-个" aria-label="本节永久链接">#</a></h2>
-<div class="table-wrap"><table><thead><tr><th>工具</th><th>作用</th><th>需要权限</th></tr></thead><tbody><tr><td><code>health</code></td><td>连通性/版本自检</td><td>只读</td></tr><tr><td><code>whoami</code></td><td>当前身份与权限自检</td><td>只读</td></tr><tr><td><code>stats</code></td><td>任务数/今日运行/成功率/下次调度</td><td>只读</td></tr><tr><td><code>notifications_list</code></td><td>站内通知（含未读）</td><td>只读</td></tr><tr><td><code>flows_list</code></td><td>列出所有任务（含 cron/enabled/nextRunAt/上次结果）</td><td>只读</td></tr><tr><td><code>flow_get</code></td><td>任务完整定义（nodes/vars/log/notify）</td><td>只读</td></tr><tr><td><code>flow_logs</code></td><td><strong>连续日志流</strong>（多次运行的人话日志，最像 qinglong 面板）</td><td>只读</td></tr><tr><td><code>runs_list</code> / <code>run_get</code></td><td>历史运行记录 / 某次运行详情</td><td>只读</td></tr><tr><td><code>templates_list</code> / <code>template_get</code></td><td>模板列表 / 模板详情（变量名与默认值）</td><td>只读</td></tr><tr><td><strong><code>flow_run</code></strong></td><td><strong>立即跑一次签到</strong>，返回状态+摘要+人话日志</td><td>可运行</td></tr><tr><td><code>flow_update_vars</code></td><td><strong>换 cookie / token / ua</strong>（其余字段保留）</td><td>可修改</td></tr><tr><td><code>flow_update</code></td><td>改 name/cron/timezone/jitter/enabled/note</td><td>可修改</td></tr><tr><td><code>flow_toggle</code></td><td>启用/停用定时调度</td><td>可修改</td></tr><tr><td><code>flow_create</code></td><td>新建任务（可从模板克隆）</td><td>可修改</td></tr><tr><td><code>flow_delete</code></td><td>删除任务（不可恢复，建议只给 trusted Agent）</td><td>可修改（高风险）</td></tr><tr><td><code>flow_notify_test</code></td><td>向已配置渠道发测试通知</td><td>可修改</td></tr><tr><td><code>template_instantiate</code></td><td>从模板创建任务</td><td>可修改</td></tr><tr><td><code>import_curl</code></td><td>把 cURL 命令解析为 http 节点配置（不落库）</td><td>只读</td></tr></tbody></table></div>
+<h2 id="3-agent-能做什么mcp-工具清单22-个">3. Agent 能做什么（MCP 工具清单，22 个）<a class="h-anchor" href="#3-agent-能做什么mcp-工具清单22-个" aria-label="本节永久链接">#</a></h2>
+<div class="table-wrap"><table><thead><tr><th>工具</th><th>作用</th><th>需要权限</th></tr></thead><tbody><tr><td><code>health</code></td><td>连通性/版本自检</td><td>只读</td></tr><tr><td><code>whoami</code></td><td>当前身份与权限自检</td><td>只读</td></tr><tr><td><code>stats</code></td><td>任务数/今日运行/成功率/下次调度</td><td>只读</td></tr><tr><td><code>notifications_list</code></td><td>站内通知（含未读）</td><td>只读</td></tr><tr><td><code>flows_list</code></td><td>列出所有任务（含 cron/enabled/nextRunAt/上次结果）</td><td>只读</td></tr><tr><td><code>flow_get</code></td><td>任务完整定义（nodes/vars/log/notify）</td><td>只读</td></tr><tr><td><code>flow_validate</code></td><td>静态校验流程定义（不落库）</td><td>只读</td></tr><tr><td><code>flow_logs</code></td><td><strong>连续日志流</strong>（多次运行的人话日志，最像 qinglong 面板）</td><td>只读</td></tr><tr><td><code>runs_list</code> / <code>run_get</code></td><td>历史运行记录 / 某次运行详情</td><td>只读</td></tr><tr><td><code>templates_list</code> / <code>template_get</code></td><td>模板列表 / 模板详情（变量名与默认值）</td><td>只读</td></tr><tr><td><strong><code>flow_run</code></strong></td><td><strong>立即跑一次签到</strong>（支持 <code>wait=false</code> 异步与 <code>debug</code>），返回状态+摘要+人话日志</td><td>可运行</td></tr><tr><td><code>run_cancel</code></td><td>取消排队中或运行中的一次运行</td><td>可运行</td></tr><tr><td><code>flow_update_vars</code></td><td><strong>安全合并变量</strong>（换 cookie / token / ua，传 <code>null</code> 删除，不回显密钥）</td><td>可修改</td></tr><tr><td><code>flow_update</code></td><td>改 name/cron/timezone/jitter/enabled/note/group</td><td>可修改</td></tr><tr><td><code>flow_toggle</code></td><td>启用/停用定时调度</td><td>可修改</td></tr><tr><td><code>flow_create</code></td><td>新建任务（可从模板克隆）</td><td>可修改</td></tr><tr><td><code>flow_delete</code></td><td>删除任务（不可恢复，建议只给 trusted Agent）</td><td>可修改（高风险）</td></tr><tr><td><code>flow_notify_test</code></td><td>向已配置渠道发测试通知</td><td>可修改</td></tr><tr><td><code>template_instantiate</code></td><td>从模板创建任务</td><td>可修改</td></tr><tr><td><code>import_curl</code></td><td>把 cURL 命令解析为 http 节点配置（不落库）</td><td>只读</td></tr></tbody></table></div>
 <blockquote><p><strong>刻意不提供</strong>：删除模板、修改账号密码、导出含凭据的完整备份 —— 避免 Agent 误删或越权。<code>flow_delete</code> 虽已提供，但建议只在受控场景发放 <code>可修改</code> 作用域。</p></blockquote>
 <hr />
 <h2 id="4-外部-agent-的典型工作流">4. 外部 Agent 的典型工作流<a class="h-anchor" href="#4-外部-agent-的典型工作流" aria-label="本节永久链接">#</a></h2>
@@ -205,7 +205,7 @@
         </div>
       </div>
       <div class="foot-meta">
-        <p>v0.6.5 · 生成于 2026-11-26 15:24 UTC · 由 <code>tools/build-wiki.cjs</code> 从 <code>docs/</code> 与内置页面生成</p>
+        <p>v0.6.6 · 生成于 2026-11-27 14:39 UTC · 由 <code>tools/build-wiki.cjs</code> 从 <code>docs/</code> 与内置页面生成</p>
         <p><a class="to-top" href="#top">↑ 返回顶部</a></p>
       </div>
     </footer>
@@ -220,7 +220,7 @@
 <a class="toc-l3" href="#24-基础-api不想用-mcp-时">2.4 基础 API（不想用 MCP 时）</a>
 <a class="toc-l3" href="#25-key-的回收日期">2.5 Key 的回收日期</a>
 <a class="toc-l3" href="#26-rest-接入">2.6 REST 接入</a>
-<a class="toc-l2" href="#3-agent-能做什么mcp-工具清单20-个">3. Agent 能做什么（MCP 工具清单，20 个）</a>
+<a class="toc-l2" href="#3-agent-能做什么mcp-工具清单22-个">3. Agent 能做什么（MCP 工具清单，22 个）</a>
 <a class="toc-l2" href="#4-外部-agent-的典型工作流">4. 外部 Agent 的典型工作流</a>
 <a class="toc-l2" href="#5-rest-端点速查给写脚本的人">5. REST 端点速查（给写脚本的人）</a>
 <a class="toc-l2" href="#6-安全边界给-agent-的提示词里可以带上">6. 安全边界（给 Agent 的提示词里可以带上）</a>

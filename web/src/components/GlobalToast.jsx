@@ -8,11 +8,8 @@ export default function GlobalToast() {
   useEffect(() => {
     const sync = () => setItems([...toastQueue()]);
     window.addEventListener('checkq-toast', sync);
-    const timer = setInterval(sync, 500);
-    return () => {
-      window.removeEventListener('checkq-toast', sync);
-      clearInterval(timer);
-    };
+    sync();
+    return () => window.removeEventListener('checkq-toast', sync);
   }, []);
 
   if (!items.length) return null;

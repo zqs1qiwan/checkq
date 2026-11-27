@@ -49,14 +49,14 @@ export default function VarsQuickModal({ flow, onClose, onDone, onToast }) {
       width={560}
       footer={
         <>
-          <button onClick={onClose}>取消</button>
-          <button className="primary" disabled={busy} onClick={run}>{busy ? '运行中…' : '保存并运行'}</button>
+          <button onClick={onClose} disabled={busy}>取消</button>
+          <button className="primary" disabled={busy || !vars} onClick={run}>{busy ? '运行中…' : '保存并运行'}</button>
         </>
       }
     >
-      {!keys.length && <p className="empty-line">这条流程还没有变量，直接运行即可</p>}
+      {!vars ? <p className="empty-line">正在加载参数…</p> : !keys.length && <p className="empty-line">这条流程还没有变量，直接运行即可</p>}
       <div className="vars-quick">
-        {keys.map((k) => {
+        {(vars ? keys : []).map((k) => {
           const sensitive = isSensitiveName(k);
           return (
             <div className="field" key={k}>

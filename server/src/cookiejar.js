@@ -10,6 +10,9 @@
  * - Path 前缀匹配；Secure 只回发给 https；
  * - Max-Age / Expires 到期即失效，空值或删除标记立即移除。
  */
+const isIpHost = (h) => /^(\d+\.){3}\d+$/.test(h) || h.includes(':');
+const MAX_JAR_COOKIES = 1000;
+
 export class CookieJar {
   constructor() {
     this.store = new Map(); // key -> { name, value, domain, path, hostOnly, secure, expires }
@@ -39,29 +42,35 @@ export class CookieJar {
       let path = '/';
       let secure = false;
       let expires = null;
+      let maxAgeSet = false;
       for (const a of attrs) {
         const raw = a.trim();
         const m = raw.match(/^domain=(.+)$/i);
         if (m) {
-          const d = m[1].replace(/^\./, '').toLowerCase();
-          // 只接受当前主机本身或它的父域；拒绝 `com` / `co.uk` 这类公共后缀式范围
-          if (d && (host === d || host.endsWith(`.${d}`)) && (d.includes('.') || d === 'localhost')) {
+          const d = m[1].replace(/^\.+/, '').toLowerCase();
+          // 只接受当前主机本身或它的父域；拒绝 IP 与 `com` / `co.uk` 这类公共后缀式范围
+          if (!isIpHost(host) && d && (host === d || host.endsWith(`.${d}`)) && (d.includes('.') || d === 'localhost')) {
             domain = d;
             hostOnly = false;
           }
           continue;
         }
         const p = raw.match(/^path=(.+)$/i);
-        if (p) { path = p[1].trim() || '/'; continue; }
+        if (p) {
+          const pv = p[1].trim();
+          path = pv.startsWith('/') ? pv : '/';
+          continue;
+        }
         if (/^secure$/i.test(raw)) { secure = true; continue; }
         const ma = raw.match(/^max-age=(-?\d+)$/i);
         if (ma) {
           const sec = Number(ma[1]);
           expires = sec <= 0 ? now - 1 : now + sec * 1000;
+          maxAgeSet = true;
           continue;
         }
         const ex = raw.match(/^expires=(.+)$/i);
-        if (ex) {
+        if (ex && !maxAgeSet) {
           const ts = Date.parse(ex[1]);
           if (Number.isFinite(ts)) expires = ts;
         }
@@ -71,6 +80,9 @@ export class CookieJar {
       if (value === '' || /^(deleted|null)$/i.test(value) || (expires !== null && expires <= now)) {
         this.store.delete(key);
         continue;
+      }
+      if (!this.store.has(key) && this.store.size >= MAX_JAR_COOKIES) {
+        this.store.delete(this.store.keys().next().value);
       }
       this.store.set(key, { name, value, domain, path, hostOnly, secure, expires });
       n++;

@@ -101,8 +101,18 @@ export function validateFlow(flow, { allowEmptyDraft = true } = {}) {
   errors.push(...validateHttpOrigins(nodes));
   if (!nodes.length && !allowEmptyDraft) errors.push('流程至少需要一个步骤');
   const byId = new Map(nodes.map((n) => [n.id, n]));
+  for (const n of nodes) {
+    if (!n?.type || !STEP_TYPES[n.type]) errors.push(`节点 ${n?.id || '?'} 类型不支持: ${n?.type || '(空)'}`);
+  }
   for (const e of flow.edges || []) {
-    if (!byId.has(e.source) || !byId.has(e.target)) errors.push(`连线 ${e.id} 引用了不存在的节点`);
+    if (!byId.has(e.source) || !byId.has(e.target)) {
+      errors.push(`连线 ${e.id} 引用了不存在的节点`);
+      continue;
+    }
+    const src = byId.get(e.source);
+    if (e.sourceHandle && src && STEP_TYPES[src.type] && !STEP_TYPES[src.type].outputs.includes(e.sourceHandle)) {
+      errors.push(`连线 ${e.id} 使用了无效出口 ${e.sourceHandle}`);
+    }
   }
   // 循环体回边的终点除外允许（foreach 回路）：`foreach` 节点允许被回边指向
   const starts = nodes.filter((n) => !(flow.edges || []).some((e) => e.target === n.id && byId.get(e.source)?.type !== 'foreach' || e.target === n.id && e.source === n.id));

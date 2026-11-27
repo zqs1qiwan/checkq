@@ -29,8 +29,12 @@ function purge() {
   for (const [k, v] of hits) if (t - v.start > DEMO_RATE.windowMs) hits.delete(k);
 }
 
+import { isTrustedProxyPeer } from './iprange.js';
+
 function ipOf(req) {
-  return String((req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.ip || 'local');
+  const peer = req.raw?.socket?.remoteAddress || req.ip || 'local';
+  const xff = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  return (isTrustedProxyPeer(peer) && xff) ? xff : peer;
 }
 
 /** 限速：60 次/分钟/IP（演示端点不是攻击面，但也不该被拿来打） */
@@ -158,7 +162,7 @@ export function buildDemoFlow(origin) {
         id: 'demo-1', type: 'http', name: '打开演练站点', x: 0, y: 0,
         config: {
           method: 'GET', url: `${base}/api/demo/profile`, headers: [], body: '', timeout: 10,
-          jar: true, asserts: [{ expr: 'last.status', expect: 200 }],
+          cookieJar: true, asserts: [{ expr: 'last.status', expect: 200 }],
         },
       },
       {

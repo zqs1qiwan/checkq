@@ -30,15 +30,14 @@ export function shouldShow(kind) {
   return true;
 }
 
-/** 触发一条全局提示（level 不满足时静默丢弃） */
-export function toast(text, kind = 'info') {
+/** 触发一条全局提示（level 不满足时静默丢弃；opts.force 可强制显示） */
+export function toast(text, kind = 'info', opts = {}) {
   if (!text) return;
-  if (!shouldShow(kind)) return;
+  if (!opts?.force && !shouldShow(kind)) return;
   const item = { id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, text: String(text), kind };
   queue.push(item);
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('checkq-toast', { detail: item }));
-    // 自动消失：否则提示条会一直挂在页面上，只能手动点掉
     window.setTimeout(() => dismissToast(item.id), 5000);
   }
 }
@@ -49,7 +48,12 @@ export function toastQueue() {
 
 export function dismissToast(id) {
   const i = queue.findIndex((t) => t.id === id);
-  if (i >= 0) queue.splice(i, 1);
+  if (i >= 0) {
+    queue.splice(i, 1);
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('checkq-toast'));
+    }
+  }
 }
 
 // 供 UI 冒烟测试触发一条提示（不改变服务端设置、不产生任何数据）

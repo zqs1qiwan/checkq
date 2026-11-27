@@ -12,6 +12,7 @@
 | 基址 | `http://<host>:8888`（服务端默认）；本地测试用 `docker-compose.yml` 时宿主映射为 `18888:8888`，示例 URL 里的 `checkq.local:18888` 即指该映射 |
 | 接口索引 | `GET /api`（免登录，返回认证方式与端点清单） |
 | 机器可读描述 | `GET /api/openapi.json`（OpenAPI 3.1，Agent 可自动生成客户端） |
+| HTTP MCP | `POST /api/mcp`（Streamable HTTP JSON-RPC 2.0，22 个工具，复用 API Key 作用域） |
 | 认证 | ① `x-api-key: <key>`（推荐）② 会话 Cookie `qsid` |
 | Key 生成 | 设置 → API Key（可命名、选作用域、设回收日期；明文只显示一次） |
 | 作用域 | `read` 查看 / `run` 运行任务 / `write` 改配置 / `secrets` 读明文凭据；权限不足返回 403。旧 Key 未声明作用域时默认 `read/run/write`，**不含 `secrets`** |
@@ -117,8 +118,10 @@ X-API-Key: <key>
 | POST | /api/flows | 创建（body = Flow 对象；空 nodes 允许，仅草稿；显式 `enabled:true` 且给了 cron 时按请求启用） |
 | GET | /api/flows/:id | 详情（含 nodes/edges/vars/log/notify/template/structure；派生任务返回的是模板当前流程） |
 | PUT | /api/flows/:id | 更新（部分字段合并）。派生任务改了脚本内容 → 自动转为独立任务，返回体 `detached` = 模板名 |
+| PATCH | /api/flows/:id/vars | 只写合并更新任务变量（`{ vars }`，传 `null` 删除键）；不触碰节点且不回显敏感明文，无需 `secrets` 作用域 |
+| POST | /api/flows/validate | `{ name?, nodes, edges, allowEmptyDraft? }` 静态校验流程结构与允许请求源（不落库），返回 `{ ok, errors }` |
 | DELETE | /api/flows/:id | 删除 |
-| POST | /api/flows/:id/run | `{ stream?: bool, debugStopId?, debug?, dedupe?, timeoutMs? }` 运行；stream=true → SSE（start/log/done，`start` 带 `runId`）。`dedupe:true` 时若该任务已有一次运行在跑，直接返回 `{ ok:true, deduped:true, queued:true, message:"已在运行，本次未重复提交" }`（HTTP 200，不走 SSE）。运行一开始就写入 `queued` 记录，排队与执行中都能在运行历史里看到。失败按 `flow.retry` 自动退避重试，跑满次数才最终失败；调度触发时若上一次运行/重试尚未结束则跳过这一拍。调度触发（`cron`/`schedule`）跑满仍失败 → 自动停用该任务调度（`enabled:false` + `pausedAt/pausedReason`），该次 `run.paused=true` 且结论带「（已自动停用调度）」。整体超时默认 30 分钟，可用 `timeoutMs` 或 `CHECKQ_RUN_TIMEOUT_MS` 调整。 |
+| POST | /api/flows/:id/run | `{ wait?: bool, stream?: bool, debugStopId?, debug?, dedupe?, timeoutMs? }` 运行；`wait:false` 立即返回 HTTP 202 `{ ok:true, id, runId, flowId, status:'queued' }`；stream=true → SSE。`dedupe:true` 时若该任务已有一次运行在跑，直接返回 `{ ok:true, deduped:true, queued:true, message:"已在运行，本次未重复提交" }`（HTTP 200）。调度触发跑满仍失败 → 自动停用该任务调度；若诊断为凭据失效或风控，跳过自动恢复探测。整体超时默认 30 分钟，可用 `timeoutMs` 或 `CHECKQ_RUN_TIMEOUT_MS` 调整。 |
 | POST | /api/flows/:id/clone | 克隆为「·副本 N」，enabled:false |
 | POST | /api/flows/:id/curl | 生成等价 curl 命令（变量代入） |
 | POST | /api/flows/batch | `{ action: run\|enable\|disable\|delete\|set-group, ids: [], group?, wait? }`。`set-group` 的空分组表示移出分组。`run` 默认等待最终结果。传 `wait: false` 时按提交结果返回，至少一项提交成功则为 HTTP 202。`ok` 和 `failed` 统计提交成功和失败的项数，接收项附 `runId` 和提交时的 `status: 'queued'`，可用 `GET /api/runs/:id` 查询当前状态与结果。 |
@@ -230,6 +233,7 @@ data: { "id":"run-xxx", "status":"success", "durationMs":..., "summary":"...", "
 | GET | /api/system/ip-blocklist | 全局 IP 黑名单（管理员） |
 | PUT | /api/system/ip-blocklist | 加入黑名单（body: { ip }，支持 CIDR） |
 | DELETE | /api/system/ip-blocklist/:ip | 移出黑名单 |
+| POST | /api/mcp | Streamable HTTP MCP JSON-RPC 2.0 端点（initialize / tools/list / tools/call，沿用 API Key / 会话权限） |
 
 ### 推送与备份
 | 方法 | 路径 | 说明 |

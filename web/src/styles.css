@@ -22,6 +22,10 @@
   --ok: #3fae7d;
   --fail: #d9635c;
   --warn: #c99a3f;
+  --panel-2: var(--panel2);
+  --fg: var(--text);
+  --edge: #3b4452;
+  --text-dim: #737e8d;
   --mono: ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, Consolas, monospace;
   /* 覆盖层 / 画布专属（xyflow 等 attr 需要解析色，画布两模式都可调） */
   --mask: rgba(4, 6, 8, .66);
@@ -97,6 +101,10 @@ html[data-mode='light'] {
   --ok: #1b7a52;
   --fail: #b23b36;
   --warn: #8a6116;
+  --panel-2: var(--panel2);
+  --fg: var(--text);
+  --edge: #c0c8d2;
+  --text-dim: #6e7781;
   --mask: rgba(18, 24, 28, .38);
   --shadow: 0 8px 24px rgba(20, 30, 38, .10);
   --hover-tint: rgba(20, 112, 122, .07);
@@ -895,9 +903,9 @@ dialog.modal:focus { outline: none; }
 .logstream-time { color: var(--muted); font-size: 12px; }
 .logstream-count { color: var(--muted); font-size: 11px; }
 .logstream-summary { color: var(--ok); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40%; }
-+.logstream-diag { font-family: var(--font, inherit); margin: 6px 0 8px; }
-+.logstream-diag .diag-card { margin: 0; }
-+.live-tag { color: var(--accent); font-weight: 600; }
+.logstream-diag { font-family: var(--font, inherit); margin: 6px 0 8px; }
+.logstream-diag .diag-card { margin: 0; }
+.live-tag { color: var(--accent); font-weight: 600; }
 .logstream-line { display: flex; gap: 8px; padding: 1px 2px; white-space: pre-wrap; word-break: break-word; }
 .logstream-line.bad { color: var(--fail); }
 .logstream-ts { color: var(--muted); flex: none; }
@@ -1055,7 +1063,7 @@ button.icon-text svg { flex: none; }
 .settings-panel .field-inline { gap: 12px; }
 .settings-msg { margin: 12px 0 0; font-size: var(--fs-sm); color: var(--ok); }
 .settings-msg.err { color: var(--fail); }
-.section-title { margin: 0; font-size: var(--fs-lg); font-weight: 600; }
+.settings-panel .section-title { margin: 0; font-size: var(--fs-lg); font-weight: 600; }
 .page-head-row { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--sp-4); margin-bottom: var(--sp-4); }
 
 /* ---- 权限徽章 / 选项片：小号方角标签，不用药丸 ---- */
@@ -1304,7 +1312,7 @@ button.icon-text svg { flex: none; }
   background: var(--panel); border: 1px solid var(--border);
   border-radius: var(--r-xs); padding: 1px 6px; cursor: pointer;
 }
-.loop-frame-toggle:hover { color: var(--fg); }
+.loop-frame-toggle:hover { color: var(--text); }
 .loop-frame.is-folded {
   background: color-mix(in srgb, var(--accent) 8%, transparent);
   border-style: dotted;
@@ -1345,7 +1353,7 @@ button.icon-text svg { flex: none; }
 .outline-issue { color: var(--fail); font-weight: 600; }
 .outline-add {
   flex: none; font: inherit; font-size: 10px; max-width: 76px;
-  background: var(--panel-2); color: var(--muted);
+  background: var(--panel2); color: var(--muted);
   border: 1px solid var(--border); border-radius: var(--r-xs); padding: 2px 2px;
 }
 .outline-empty { padding: 16px 12px; color: var(--muted); font-size: var(--fs-xs); }
@@ -1357,7 +1365,7 @@ button.icon-text svg { flex: none; }
 .struct-row {
   display: flex; align-items: center; gap: 8px;
   padding: 7px 8px; border: 1px solid var(--border); border-radius: var(--r-sm);
-  background: var(--panel-2);
+  background: var(--panel2);
 }
 .struct-row.error { border-color: color-mix(in srgb, var(--fail) 40%, var(--border)); }
 .struct-row.warn { border-color: color-mix(in srgb, var(--warn) 40%, var(--border)); }
@@ -1372,7 +1380,7 @@ button.icon-text svg { flex: none; }
   margin: 8px 0 12px; padding: 10px 12px;
   border: 1px solid color-mix(in srgb, var(--fail) 35%, var(--border));
   border-left: 3px solid var(--fail);
-  border-radius: var(--r-sm); background: var(--panel-2);
+  border-radius: var(--r-sm); background: var(--panel2);
 }
 .diag-head { display: flex; align-items: baseline; gap: 8px; }
 .diag-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--fail); flex: none; }
@@ -1389,7 +1397,7 @@ button.icon-text svg { flex: none; }
 
 /* --- 统计面板 ------------------------------------------------------ */
 .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(88px, 1fr)); gap: 8px; margin: 10px 0 4px; }
-.stat-cell { border: 1px solid var(--border); border-radius: var(--r-sm); padding: 10px; background: var(--panel-2); }
+.stat-cell { border: 1px solid var(--border); border-radius: var(--r-sm); padding: 10px; background: var(--panel2); }
 .stat-num { display: block; font-size: var(--fs-xl); font-variant-numeric: tabular-nums; }
 .stat-label { display: block; font-size: var(--fs-xs); color: var(--muted); margin-top: 2px; }
 .stat-line b { font-variant-numeric: tabular-nums; }
@@ -1408,7 +1416,7 @@ button.icon-text svg { flex: none; }
 .market-sub {
   display: inline-flex; align-items: center; gap: 4px;
   border: 1px solid var(--border); border-radius: var(--r-sm); padding: 2px 4px 2px 8px;
-  background: var(--panel-2); max-width: 260px;
+  background: var(--panel2); max-width: 260px;
 }
 .market-sub.on { border-color: var(--accent); }
 .market-sub .linkbtn { max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1422,7 +1430,7 @@ button.icon-text svg { flex: none; }
 .market-tags { display: flex; flex-wrap: wrap; gap: 4px; margin: 2px 0 6px; }
 .market-tag {
   font: inherit; font-size: 10px; color: var(--muted);
-  background: var(--panel-2); border: 1px solid var(--border);
+  background: var(--panel2); border: 1px solid var(--border);
   border-radius: var(--r-xs); padding: 1px 6px; cursor: pointer;
 }
 .market-tag:hover { color: var(--accent); border-color: var(--accent); }
@@ -1440,7 +1448,7 @@ button.icon-text svg { flex: none; }
 /* --- 任务行「运行 ▾」 --------------------------------------------- */
 .dd-run .dd-trigger {
   border: 1px solid var(--border); border-radius: var(--r-xs);
-  background: var(--panel-2); color: inherit; font-size: var(--fs-xs);
+  background: var(--panel2); color: inherit; font-size: var(--fs-xs);
   padding: 0 6px; height: var(--ctl-h-sm); display: inline-flex; align-items: center; gap: 3px;
   white-space: nowrap;
 }

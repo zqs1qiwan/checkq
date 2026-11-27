@@ -6,6 +6,19 @@
  */
 import net from 'node:net';
 
+function extractMappedIpv4(ip) {
+  const s = String(ip || '').trim();
+  const dot = s.match(/^(?:0+:){0,5}ffff:(\d+\.\d+\.\d+\.\d+)$/i) || s.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
+  if (dot) return dot[1];
+  const hex = s.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
+  if (hex) {
+    const hi = parseInt(hex[1], 16);
+    const lo = parseInt(hex[2], 16);
+    return `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
+  }
+  return null;
+}
+
 function toBigInt(ip) {
   const fam = net.isIP(ip);
   if (fam === 4) {
@@ -15,9 +28,9 @@ function toBigInt(ip) {
     return { big: v, bits: 32, fam: 4 };
   }
   if (fam === 6) {
-    // 去掉 ::ffff: 前缀 → 按 IPv4 处理
-    const mapped = ip.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
-    if (mapped) return toBigInt(mapped[1]);
+    // 去掉 ::ffff: 前缀（含点分和十六进制两种写法）→ 按 IPv4 处理
+    const mapped = extractMappedIpv4(ip);
+    if (mapped) return toBigInt(mapped);
     const parts = ip.split('::');
     const head = parts[0] ? parts[0].split(':') : [];
     const tail = parts.length > 1 && parts[1] ? parts[1].split(':') : [];
@@ -79,8 +92,17 @@ export function ipAllowed(ip, cidrList) {
 /** 规范化（用于展示） */
 export function normalizeIp(ip) {
   const s = String(ip || '').trim();
-  const mapped = s.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
-  return mapped ? mapped[1] : s;
+  return extractMappedIpv4(s) || s;
+}
+
+/**
+ * 默认可信的反代跳点：仅本机回环与常见容器桥接网段（172.16.0.0/12）。
+ * 若需信任局域网其它反代（如 192.168.x / 10.x），请显式配置 CHECKQ_TRUST_PROXY。
+ */
+export function isTrustedProxyPeer(ip) {
+  const s = normalizeIp(ip);
+  if (!net.isIP(s)) return false;
+  return ipAllowed(s, ['127.0.0.0/8', '::1/128', '172.16.0.0/12']);
 }
 
 /**

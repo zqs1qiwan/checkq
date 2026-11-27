@@ -63,18 +63,31 @@ export function encryptValue(key, plain) {
   return PREFIX + Buffer.concat([iv, tag, body]).toString('base64');
 }
 
+function decryptGcm(key, stored) {
+  const raw = Buffer.from(stored.slice(PREFIX.length), 'base64');
+  const iv = raw.subarray(0, IV_LEN);
+  const tag = raw.subarray(IV_LEN, IV_LEN + TAG_LEN);
+  const body = raw.subarray(IV_LEN + TAG_LEN);
+  const d = crypto.createDecipheriv('aes-256-gcm', key, iv);
+  d.setAuthTag(tag);
+  return Buffer.concat([d.update(body), d.final()]).toString('utf8');
+}
+
 export function decryptValue(key, stored) {
   if (!isEncrypted(stored)) return stored; // 旧明文，渐进迁移
   try {
-    const raw = Buffer.from(stored.slice(PREFIX.length), 'base64');
-    const iv = raw.subarray(0, IV_LEN);
-    const tag = raw.subarray(IV_LEN, IV_LEN + TAG_LEN);
-    const body = raw.subarray(IV_LEN + TAG_LEN);
-    const d = crypto.createDecipheriv('aes-256-gcm', key, iv);
-    d.setAuthTag(tag);
-    return Buffer.concat([d.update(body), d.final()]).toString('utf8');
+    return decryptGcm(key, stored);
   } catch {
     return ''; // 密钥变更/密文损坏：返回空而不是密文，避免泄露
+  }
+}
+
+function decryptValueStrict(key, stored, label = '凭据') {
+  if (!isEncrypted(stored)) return stored;
+  try {
+    return decryptGcm(key, stored);
+  } catch (err) {
+    throw new Error(`无法解密${label}。请检查 CHECKQ_SECRET 或数据目录中的 .secret 是否与当前数据匹配。`, { cause: err });
   }
 }
 
@@ -112,7 +125,7 @@ export function decryptChannels(key, channels) {
   return channels.map((c) => {
     const cc = { ...c };
     for (const [k, v] of Object.entries(cc)) {
-      if (isEncrypted(v)) cc[k] = decryptValue(key, v);
+      if (isEncrypted(v)) cc[k] = decryptValueStrict(key, v, '通知渠道凭据');
     }
     return cc;
   });
@@ -148,12 +161,15 @@ export function encryptMeta(key, meta) {
 export function decryptMeta(key, meta) {
   if (!meta || typeof meta !== 'object') return meta;
   const out = { ...meta };
-  if (isEncrypted(out.apiKey)) out.apiKey = decryptValue(key, out.apiKey);
+  if (isEncrypted(out.apiKey)) out.apiKey = decryptValueStrict(key, out.apiKey, '系统 API Key');
   if (out.ai && typeof out.ai === 'object' && isEncrypted(out.ai.apiKey)) {
-    out.ai = { ...out.ai, apiKey: decryptValue(key, out.ai.apiKey) };
+    out.ai = { ...out.ai, apiKey: decryptValueStrict(key, out.ai.apiKey, 'AI 助手密钥') };
   }
   return out;
 }
+
+const encNodesCache = new WeakMap();
+const decNodesCache = new WeakMap();
 
 /** 加密一个 flow/template 的敏感部分（返回新对象，不改原对象） */
 export function encryptSecrets(key, obj) {
@@ -171,11 +187,18 @@ export function encryptSecrets(key, obj) {
     out.notify = { ...out.notify, channels: encryptChannels(key, out.notify.channels) };
   }
   if (Array.isArray(out.nodes)) {
-    out.nodes = out.nodes.map((node) => {
-      if (!ENCRYPTED_NODE_TYPES.has(node?.type) || !node.config || typeof node.config !== 'object') return node;
-      if (!hasDefinitionCredentials({ nodes: [node] })) return node;
-      return { ...node, config: encryptValue(key, JSON.stringify(node.config)) };
-    });
+    const hit = encNodesCache.get(out.nodes);
+    if (hit && Buffer.isBuffer(key) && hit.key.equals(key)) {
+      out.nodes = hit.nodes;
+    } else {
+      const encrypted = out.nodes.map((node) => {
+        if (!ENCRYPTED_NODE_TYPES.has(node?.type) || !node.config || typeof node.config !== 'object') return node;
+        if (!hasDefinitionCredentials({ nodes: [node] })) return node;
+        return { ...node, config: encryptValue(key, JSON.stringify(node.config)) };
+      });
+      if (Buffer.isBuffer(key)) encNodesCache.set(out.nodes, { key: Buffer.from(key), nodes: encrypted });
+      out.nodes = encrypted;
+    }
   }
   return out;
 }
@@ -187,7 +210,7 @@ export function decryptSecrets(key, obj) {
   if (out.vars && typeof out.vars === 'object') {
     const vars = {};
     for (const [k, v] of Object.entries(out.vars)) {
-      vars[k] = isEncrypted(v) ? decryptValue(key, v) : v;
+      vars[k] = isEncrypted(v) ? decryptValueStrict(key, v, `变量 ${k}`) : v;
     }
     out.vars = vars;
   }
@@ -195,15 +218,22 @@ export function decryptSecrets(key, obj) {
     out.notify = { ...out.notify, channels: decryptChannels(key, out.notify.channels) };
   }
   if (Array.isArray(out.nodes)) {
-    out.nodes = out.nodes.map((node) => {
-      if (!ENCRYPTED_NODE_TYPES.has(node?.type) || !isEncrypted(node.config)) return node;
-      try {
-        const config = JSON.parse(decryptValue(key, node.config));
-        if (config && typeof config === 'object' && !Array.isArray(config)) return { ...node, config };
-      } catch { /* 无法还原时保留磁盘上的密文，避免启动后覆盖。 */ }
-      const label = node.type === 'http' ? 'HTTP' : '通知';
-      throw new Error(`无法解密 ${label} 节点配置。请检查 CHECKQ_SECRET 或数据目录中的 .secret 是否与当前数据匹配。`);
-    });
+    const hit = decNodesCache.get(out.nodes);
+    if (hit && Buffer.isBuffer(key) && hit.key.equals(key)) {
+      out.nodes = hit.nodes;
+    } else {
+      const decrypted = out.nodes.map((node) => {
+        if (!ENCRYPTED_NODE_TYPES.has(node?.type) || !isEncrypted(node.config)) return node;
+        try {
+          const config = JSON.parse(decryptValueStrict(key, node.config));
+          if (config && typeof config === 'object' && !Array.isArray(config)) return { ...node, config };
+        } catch { /* 无法还原时保留磁盘上的密文，避免启动后覆盖。 */ }
+        const label = node.type === 'http' ? 'HTTP' : '通知';
+        throw new Error(`无法解密 ${label} 节点配置。请检查 CHECKQ_SECRET 或数据目录中的 .secret 是否与当前数据匹配。`);
+      });
+      if (Buffer.isBuffer(key)) decNodesCache.set(out.nodes, { key: Buffer.from(key), nodes: decrypted });
+      out.nodes = decrypted;
+    }
   }
   return out;
 }

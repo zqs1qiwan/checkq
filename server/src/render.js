@@ -7,6 +7,13 @@
 import crypto from 'node:crypto';
 import jexl from 'jexl';
 
+const BAD_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+function safeProp(cur, key) {
+  if (cur == null || BAD_KEYS.has(key)) return undefined;
+  const obj = typeof cur === 'object' ? cur : Object(cur);
+  return Object.prototype.hasOwnProperty.call(obj, key) ? cur[key] : undefined;
+}
+
 /** 渲染模板字符串。missing 收集未定义变量名。 */
 export function renderTemplate(tpl, vars, missing) {
   if (typeof tpl !== 'string') return tpl;
@@ -90,7 +97,7 @@ export function resolvePath(vars, path, missing) {
       if (missing && p) missing.add(p);
       return undefined;
     }
-    cur = cur[key];
+    cur = safeProp(cur, key);
   }
   if (cur === undefined && missing) missing.add(p);
   for (const f of filters) {
@@ -199,14 +206,14 @@ export function evalTemplateExpr(src, vars, missing) {
           while (true) { skipWs(); if (s[i] === ',') { i++; args.push(parseExpr()); } else break; }
         }
         skipWs(); if (s[i] === ')') i++;
-        const fn = EXPR_FUNCS[ident];
+        const fn = Object.hasOwn(EXPR_FUNCS, ident) ? EXPR_FUNCS[ident] : null;
         if (!fn) throw new Error(`不支持的函数: ${ident}`);
         val = fn(...args);
       } else {
         let cur = vars;
         for (const k of ident.split('.')) {
           if (cur == null) { if (missing) missing.add(ident); cur = undefined; break; }
-          cur = cur[k];
+          cur = safeProp(cur, k);
         }
         if (cur === undefined && missing) missing.add(ident);
         val = cur;
@@ -266,7 +273,9 @@ const EXPR_FUNCS = {
 /** 单个过滤器应用。arg 为 `name:arg` 语法中的参数部分 */
 function applyFilter(cur, name, arg) {
   if (name === 'urlencode') return arg ? encodeWith(String(cur ?? ''), arg) : encodeURIComponent(String(cur ?? ''));
-  if (name === 'urldecode') return decodeURIComponent(String(cur ?? ''));
+  if (name === 'urldecode') {
+    try { return decodeURIComponent(String(cur ?? '')); } catch { return String(cur ?? ''); }
+  }
   if (name === 'json') return JSON.stringify(cur);
   if (name === 'base64') return Buffer.from(String(cur ?? '')).toString('base64');
   if (name === 'base64decode') return Buffer.from(String(cur ?? ''), 'base64').toString('utf8');

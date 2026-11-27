@@ -30,7 +30,7 @@ function CookieHelpModal({ flow, onClose, onSaved }) {
       const r = await api.browserLoginCapture(flow.id, tabId);
       setCookie(`已抓到 ${r.length} 字符，已写入 {{${r.varName}}}`);
       setDone(true);
-      onSaved({ cookie: '' }); // 已由服务端写入
+      onSaved(null); // 服务端已直接写入最新变量，刷新即可
       setTimeout(onClose, 800);
     } catch (e) { setErr(e.message); }
   };

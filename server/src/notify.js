@@ -50,8 +50,12 @@ export async function sendChannel(ch, text, ctx = {}, deps = {}) {
   const title = ctx.title || ch?.title;
   try {
     if (type === 'webhook') {
+      let isJson = false;
+      if (/^\s*[\[{]/.test(text)) {
+        try { JSON.parse(text); isJson = true; } catch {}
+      }
       const res = await fetchNotification(ch.url, {
-        method: 'POST', headers: { 'content-type': 'application/json' },
+        method: 'POST', headers: { 'content-type': isJson ? 'application/json' : 'text/plain; charset=utf-8' },
         body: text,
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -154,10 +158,12 @@ export async function sendToChannels(channels, text, ctx = {}, deps = {}) {
  * ch: { host, port, secure, user, pass, from, to }
  */
 export function smtpSend(ch, subject, text) {
-  const host = String(ch.host || '').trim();
+  const stripCrlf = (v) => String(v || '').replace(/[\r\n]+/g, ' ').trim();
+  const host = stripCrlf(ch.host);
   const port = Number(ch.port) || 465;
-  const from = String(ch.from || ch.user || '').trim();
-  const to = String(ch.to || '').trim();
+  const from = stripCrlf(ch.from || ch.user);
+  const to = stripCrlf(ch.to);
+  const cleanSubject = stripCrlf(subject);
   if (!host || !from || !to) return Promise.reject(new Error('缺少 host/from/to'));
   const implicitTLS = ch.secure === true || (ch.secure !== false && port === 465);
 
@@ -176,7 +182,11 @@ export function smtpSend(ch, subject, text) {
     const attach = (s) => {
       s.setEncoding('utf8');
       s.setTimeout(20000, () => fail(new Error('SMTP 超时')));
-      s.on('data', (d) => { buf += d; pump(); });
+      s.on('data', (d) => {
+        buf += d;
+        if (buf.length > 65536) return fail(new Error('SMTP 响应过长'));
+        pump();
+      });
       s.on('error', fail);
     };
     const pump = () => {
@@ -192,11 +202,16 @@ export function smtpSend(ch, subject, text) {
       }
     };
     const read = () => new Promise((res, rej) => {
-      waiters.push((e, v) => (e ? rej(e) : res(v)));
-      setTimeout(() => {
-        const i = waiters.indexOf(waiters[waiters.length - 1]);
-        if (i === -1 && !settled) rej(new Error('SMTP 响应超时'));
+      let fn;
+      const timer = setTimeout(() => {
+        const i = waiters.indexOf(fn);
+        if (i !== -1) {
+          waiters.splice(i, 1);
+          if (!settled) rej(new Error('SMTP 响应超时'));
+        }
       }, 20000);
+      fn = (e, v) => { clearTimeout(timer); e ? rej(e) : res(v); };
+      waiters.push(fn);
     });
     const cmd = async (line) => { socket.write(line + '\r\n'); return read(); };
     const expect = (resp, code, what) => {
@@ -213,6 +228,8 @@ export function smtpSend(ch, subject, text) {
         expect(await cmd('STARTTLS'), 220, 'STARTTLS');
         const plain = socket;
         plain.removeAllListeners('data');
+        plain.removeAllListeners('error');
+        plain.setTimeout(0);
         socket = tls.connect({ socket: plain, servername: host });
         attach(socket);
         ehlo = await cmd('EHLO checkq.local');
@@ -229,7 +246,7 @@ export function smtpSend(ch, subject, text) {
       const msg = [
         `From: <${from}>`,
         `To: <${to}>`,
-        `Subject: =?UTF-8?B?${Buffer.from(subject, 'utf8').toString('base64')}?=`,
+        `Subject: =?UTF-8?B?${Buffer.from(cleanSubject, 'utf8').toString('base64')}?=`,
         `Date: ${new Date().toUTCString()}`,
         'MIME-Version: 1.0',
         'Content-Type: text/plain; charset=UTF-8',

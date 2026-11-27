@@ -10,16 +10,16 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT" /></a>
   <img src="https://img.shields.io/github/package-json/v/zqs1qiwan/checkq?label=version" alt="version" />
   <img src="https://img.shields.io/badge/node-22-339933.svg" alt="Node 22" />
-  <img src="https://img.shields.io/badge/MCP-20%20tools-6f42c1.svg" alt="MCP 20 tools" />
+  <img src="https://img.shields.io/badge/MCP-22%20tools-6f42c1.svg" alt="MCP 22 tools" />
   <img src="https://img.shields.io/badge/OpenAPI-3.1-85ea2d.svg" alt="OpenAPI 3.1" />
 </p>
 
 CheckQ 把签到、打卡、查询、监控、上报这类重复 HTTP 操作做成可视化流程：拖拽积木搭建，导入 HAR 自动生成，定时执行，失败能看到原因。Docker 单容器部署，数据落在本地 `/data`。不内置浏览器渲染、验证码识别、多语言运行时与集群能力；需要时请用外部服务（例如Scrapling等）。
 
-**支持AI Agent托管**：MCP（20 个工具）+ REST（OpenAPI 3.1）+ 作用域 API Key。Claude / Cursor / Opencode / Deepseek Harness /等其他 Agent 可以直接建任务、改流程、运行、读日志、修断言；内置 AI 助手还能把一句描述变成可编辑草稿。人只负责确认结果和开启调度及错误时干预指挥。
+**支持AI Agent托管**：MCP（22 个工具，stdio + HTTP `/api/mcp`）+ REST（OpenAPI 3.1）+ 作用域 API Key。Claude / Cursor / Opencode / Deepseek Harness /等其他 Agent 可以直接建任务、校验/改流程、运行、取消、读日志、修断言；内置 AI 助手还能把一句描述变成可编辑草稿。人只负责确认结果和开启调度及错误时干预指挥。
 
 - 文档站：<https://zqs1qiwan.github.io/checkq/>
-- 当前版本：`0.6.5`，变更见 [docs/CHANGELOG.md](docs/CHANGELOG.md)
+- 当前版本：`0.6.6`，变更见 [docs/CHANGELOG.md](docs/CHANGELOG.md)
 - 许可证：MIT，见 [LICENSE](LICENSE)
 
 ## 目录
@@ -40,7 +40,7 @@ CheckQ 把签到、打卡、查询、监控、上报这类重复 HTTP 操作做�
 
 ### AI / Agent 接入
 
-- **MCP server** — `mcp/checkq-mcp.cjs` 零依赖 stdio 服务，20 个工具覆盖任务、模板、运行、连续日志、通知测试与身份自检；Claude Desktop / Cursor / OpenCode 等支持 MCP 的 Agent 可直接操作 CheckQ
+- **MCP server** — `mcp/checkq-mcp.cjs` 零依赖 stdio 服务 + `POST /api/mcp` HTTP 端点，22 个工具覆盖任务、静态校验、模板、运行与取消、连续日志、通知测试与身份自检；Claude Desktop / Cursor / OpenCode 等支持 MCP 的 Agent 可直接操作 CheckQ
 - **REST + OpenAPI 3.1** — `GET /api/openapi.json` 机器可读，任何能发 HTTP 的 Agent / 脚本 / CI 都能接入
 - **作用域 API Key** — `read` / `run` / `write` / `secrets` 四档，可限定任务或分组；给 Agent 的 Key 不必给账号密码
 - **内置 AI 助手** — 自带 OpenAI 兼容端点（DeepSeek / OpenAI / Ollama），一句话生成可编辑流程草稿；支持连接测试、超时与最大 tokens 配置
@@ -87,7 +87,7 @@ CheckQ 把签到、打卡、查询、监控、上报这类重复 HTTP 操作做�
 
 - Docker 单容器，零数据库依赖；数据落在 `/data`（`flows.json`、`runs.json`、`templates.json`、`meta.json`、`notifications.json`、`channels.json`，以及权限 600 的 `.secret` 密钥文件）
 - 多阶段构建：前端产物打进服务端镜像，一个容器同时提供 API 与面板
-- 官方镜像：`docker pull zqs1qiwan/checkq:0.6.5`（Docker Hub；`latest` 跟随最新稳定版）
+- 官方镜像：`docker pull zqs1qiwan/checkq:0.6.6`（Docker Hub；`latest` 跟随最新稳定版）
 
 ## AI / Agent 接入
 
@@ -159,14 +159,14 @@ Agent 会调用 `flow_create` / `flow_update` / `flow_run` / `flow_logs` / `run_
 不用克隆源码，直接拉官方镜像：
 
 ```bash
-docker pull zqs1qiwan/checkq:0.6.5
+docker pull zqs1qiwan/checkq:0.6.6
 
 docker run -d --name checkq --restart unless-stopped \
   -p 18888:8888 \
   -v "$PWD/data:/data" \
   -e TZ=Asia/Shanghai \
   -e ADMIN_PASSWORD='换成你自己的强密码' \
-  zqs1qiwan/checkq:0.6.5
+  zqs1qiwan/checkq:0.6.6
 ```
 
 打开 `http://localhost:18888`。`latest` 跟随最新稳定版；升级时先备份 `data/`，再 `docker pull` 并重建容器。
@@ -257,7 +257,7 @@ npm run dev
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | 运行时架构、模块地图、不变量、扩展指南与验收命令 |
 | [MAINTENANCE.md](docs/MAINTENANCE.md) | 维护者手册：门禁、发版、社区健康、安全与文档站 |
 | [API.md](docs/API.md) | REST API、鉴权、API Key 作用域与调用示例 |
-| [MCP.md](docs/MCP.md) | stdio MCP server 接入与 20 个工具清单 |
+| [MCP.md](docs/MCP.md) | stdio 与 HTTP MCP 接入及 22 个工具清单 |
 | [AGENT-ACCESS.md](docs/AGENT-ACCESS.md) | 外部 Agent 接入：给什么、MCP/REST 对比、作用域与安全边界 |
 | [AI-ASSIST.md](docs/AI-ASSIST.md) | 内置 AI 助手、一句话生成草稿与模型接入 |
 | [SECURITY.md](docs/SECURITY.md) | 账号、会话、凭据加密、加固项、已知风险与运维手册 |

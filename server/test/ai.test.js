@@ -45,6 +45,14 @@ const mock = http.createServer((req, res) => {
       return res.end();
     }
     if (model === 'err-echo') return send(400, { error: { message: `upstream-private-marker ${raw}` } });
+    if (model === 'success-echo') {
+      const key = req.headers.authorization.slice('Bearer '.length);
+      const usage = { prompt_tokens: 5, completion_tokens: 1, total_tokens: 6, echoed: key };
+      const content = body.max_tokens === 16
+        ? 'x'.repeat(110) + key
+        : JSON.stringify({ name: '草稿', nodes: [{ id: 'n', type: 'http', config: { url: `https://example.com/${encodeURIComponent(key)}` } }] });
+      return send(200, { choices: [{ message: { content } }], usage });
+    }
     if (model === 'bad-json') return send(200, 'this is not json', 'text/plain');
     if (model === 'gen-ok') {
       // 恶意 config：__proto__ / constructor 键必须被服务端过滤
@@ -356,6 +364,28 @@ await check('模型错误正文不进入 API 回包或审计记录', async () =>
   assert.match(r.json().error, /400/);
   const audit = JSON.stringify(server.store.listAudit(20));
   for (const text of [r.body, audit]) assert.doesNotMatch(text, /upstream-private-marker|fixture-private-description/);
+});
+
+await check('模型成功回包里的密钥不会出现在测试预览或草稿', async () => {
+  const key = 'fixture-model+key/value';
+  const original = server.store.meta.ai.apiKey;
+  try {
+    const saved = await app.inject({ method: 'PUT', url: '/api/system/ai', headers: A, payload: { baseUrl: MOCK, apiKey: key, model: 'success-echo' } });
+    status(saved, 200, '配置回显用模型');
+    const tested = await app.inject({ method: 'POST', url: '/api/ai/test', headers: A, payload: {} });
+    status(tested, 200, '连接测试成功');
+    assert.equal(tested.json().sample, 'x'.repeat(110) + '***');
+    assert.deepEqual(tested.json().usage, { prompt_tokens: 5, completion_tokens: 1, total_tokens: 6 });
+    const generated = await app.inject({ method: 'POST', url: '/api/ai/generate', headers: A, payload: { sentence: '访问 https://example.com 查询状态' } });
+    status(generated, 502, '拒绝含已知密钥的草稿');
+    assert.match(generated.json().error, /包含疑似凭据/);
+    for (const text of [tested.body, generated.body, JSON.stringify(server.store.listAudit(20))]) {
+      assert.ok(!text.includes(key) && !text.includes(encodeURIComponent(key)));
+    }
+  } finally {
+    server.store.meta.ai.apiKey = original;
+    server.store.flush();
+  }
 });
 
 await check('测试连接失败：404 提示检查 Base URL', async () => {

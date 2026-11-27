@@ -39,3 +39,5 @@ jobs:
         run: node tools/copy-audit.cjs
       - name: 项目一致性审计
         run: node tools/project-audit.cjs
+      - name: 诊断规则回放
+        run: node tools/diagnose-replay.cjs

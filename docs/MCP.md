@@ -17,8 +17,9 @@ node mcp/checkq-mcp.cjs
 | 变量 | 必填 | 说明 |
 |---|---|---|
 | CHECKQ_URL | ✅ | CheckQ 基址（无尾斜杠） |
-| CHECKQ_PASSWORD | 二选一 | 登录密码（服务端会换 cookie） |
-| CHECKQ_API_KEY | 二选一 | X-API-Key（推荐，免登录、免会话过期） |
+| CHECKQ_USERNAME | 可选 | 用户名（多账号密码登录时使用） |
+| CHECKQ_PASSWORD | 二选一 | 登录密码（服务端会换 cookie，401 自动重登） |
+| CHECKQ_API_KEY | 二选一 | X-API-Key（推荐，免登录、免会话过期；也可直接直连 `POST /api/mcp`） |
 
 ## 2.5 鉴权方式（给外部 Agent 用）
 
@@ -34,16 +35,18 @@ node mcp/checkq-mcp.cjs
 | health | {} | 健康检查 |
 | flows_list | {} | 列出所有任务（含 cron/enabled/nextRunAt） |
 | flow_get | { id } | 读取任务完整定义（nodes/edges/vars/log） |
-| flow_run | { id } | 运行任务并返回逐步日志 + 摘要 |
-| flow_update_vars | { id, vars } | 更新任务变量，其余字段保留 |
+| flow_run | { id, wait?, debug? } | 运行任务（`wait=false` 异步排队）并返回日志 + 摘要 |
+| flow_validate | { name?, nodes, edges? } | 静态校验流程定义（节点/连线/允许请求源，不落库） |
+| flow_update_vars | { id, vars } | 安全合并任务变量（走 `PATCH /api/flows/:id/vars`，不回显明文） |
 | runs_list | { flowId, limit? } | 历史运行记录 |
 | run_get | { id } | 单次运行完整日志与变量快照 |
+| run_cancel | { id } | 取消排队或运行中的一次运行（需要 `run` 作用域） |
 | templates_list | {} | 模板列表 |
 | stats | {} | 运维健康统计 |
 | notifications_list | { limit? } | 站内通知列表（含未读数） |
 | whoami | {} | 当前身份与权限自检 |
-| flow_logs | { id, limit? } | 连续日志流（多次运行的人话日志） |
-| flow_update | { id, name?, cron?, timezone?, jitterMinutes?, enabled?, note? } | 改任务基础配置 |
+| flow_logs | { id, limit?, before? } | 连续日志流（多次运行的人话日志） |
+| flow_update | { id, name?, cron?, timezone?, jitterMinutes?, enabled?, note?, group? } | 改任务基础配置 |
 | flow_toggle | { id, enabled } | 启用/停用定时调度 |
 | flow_create | { name, cron?, vars?, templateId?, enabled? } | 新建任务（可从模板克隆） |
 | flow_delete | { id } | 删除任务（不可恢复；需要 write 作用域） |

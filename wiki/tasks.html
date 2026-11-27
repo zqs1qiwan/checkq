@@ -28,7 +28,7 @@
 <link rel="apple-touch-icon" href="./assets/brand/apple-touch-icon.png" />
 <link rel="stylesheet" href="./assets/style.css" />
 <link rel="sitemap" type="application/xml" href="https://zqs1qiwan.github.io/checkq/sitemap.xml" />
-<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebSite","@id":"https://zqs1qiwan.github.io/checkq/#website","url":"https://zqs1qiwan.github.io/checkq/","name":"CheckQ 文档","inLanguage":"zh-CN","description":"CheckQ 是开源的可视化 HTTP 自动化流程引擎：积木式流程、调度与失败重试、日志与通知、模板联动、REST API 与 MCP。","publisher":{"@type":"Organization","name":"CheckQ","url":"https://github.com/zqs1qiwan/checkq","logo":{"@type":"ImageObject","url":"https://zqs1qiwan.github.io/checkq/assets/brand/checkq-mark.svg","width":120,"height":120}}},{"@type":"TechArticle","@id":"https://zqs1qiwan.github.io/checkq/tasks.html#article","headline":"任务与流程","name":"任务与流程","description":"CheckQ 任务与流程：节点类型、流程变量与表达式、任务分组与折叠、独立 cron 调度与任务级退避重试、模板自动跟随、编辑器效率与点选生成逻辑。","url":"https://zqs1qiwan.github.io/checkq/tasks.html","mainEntityOfPage":"https://zqs1qiwan.github.io/checkq/tasks.html","inLanguage":"zh-CN","dateModified":"2026-11-26","isPartOf":{"@id":"https://zqs1qiwan.github.io/checkq/#website"},"image":"https://zqs1qiwan.github.io/checkq/assets/social-preview.png","publisher":{"@type":"Organization","name":"CheckQ","url":"https://github.com/zqs1qiwan/checkq"}}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebSite","@id":"https://zqs1qiwan.github.io/checkq/#website","url":"https://zqs1qiwan.github.io/checkq/","name":"CheckQ 文档","inLanguage":"zh-CN","description":"CheckQ 是开源的可视化 HTTP 自动化流程引擎：积木式流程、调度与失败重试、日志与通知、模板联动、REST API 与 MCP。","publisher":{"@type":"Organization","name":"CheckQ","url":"https://github.com/zqs1qiwan/checkq","logo":{"@type":"ImageObject","url":"https://zqs1qiwan.github.io/checkq/assets/brand/checkq-mark.svg","width":120,"height":120}}},{"@type":"TechArticle","@id":"https://zqs1qiwan.github.io/checkq/tasks.html#article","headline":"任务与流程","name":"任务与流程","description":"CheckQ 任务与流程：节点类型、流程变量与表达式、任务分组与折叠、独立 cron 调度与任务级退避重试、模板自动跟随、编辑器效率与点选生成逻辑。","url":"https://zqs1qiwan.github.io/checkq/tasks.html","mainEntityOfPage":"https://zqs1qiwan.github.io/checkq/tasks.html","inLanguage":"zh-CN","dateModified":"2026-11-27","isPartOf":{"@id":"https://zqs1qiwan.github.io/checkq/#website"},"image":"https://zqs1qiwan.github.io/checkq/assets/social-preview.png","publisher":{"@type":"Organization","name":"CheckQ","url":"https://github.com/zqs1qiwan/checkq"}}]}</script>
 <script>(function(){try{var k='checkq-wiki-theme';var s=window.localStorage.getItem(k);var m=(s==='light'||s==='dark')?s:((window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches)?'light':'dark');document.documentElement.setAttribute('data-mode',m);}catch(e){}document.documentElement.classList.add('js');})();</script>
 <noscript><style>.copy-btn,.search{display:none !important}</style></noscript>
 </head>
@@ -41,7 +41,7 @@
   <a class="brand" href="./index.html">
     <img class="brand-mark" src="./assets/brand/checkq-mark.svg" width="26" height="26" alt="" />
     <span class="brand-word">Check<em>Q</em></span>
-    <span class="brand-ver">v0.6.5</span>
+    <span class="brand-ver">v0.6.6</span>
   </a>
   <span class="topbar-title">文档</span>
   <div class="topbar-links">
@@ -101,7 +101,7 @@
 </details>
     <article class="doc">
 <h1 id="任务与流程">任务与流程<a class="h-anchor" href="#任务与流程" aria-label="本节永久链接">#</a></h1>
-<p class="doc-meta"><span>v0.6.5</span><span>更新于 2026-11-26</span><a class="edit-link" href="https://github.com/zqs1qiwan/checkq/edit/main/tools/build-wiki.cjs" target="_blank" rel="noopener noreferrer">在 GitHub 编辑此页 ↗</a></p>
+<p class="doc-meta"><span>v0.6.6</span><span>更新于 2026-11-27</span><a class="edit-link" href="https://github.com/zqs1qiwan/checkq/edit/main/tools/build-wiki.cjs" target="_blank" rel="noopener noreferrer">在 GitHub 编辑此页 ↗</a></p>
 <h2 id="节点类型">节点类型<a class="h-anchor" href="#节点类型" aria-label="本节永久链接">#</a></h2>
 <div class="table-wrap"><table><thead><tr><th>类型</th><th>用途</th></tr></thead><tbody><tr><td>HTTP 请求</td><td>方法 / URL / 头 / 体 / 断言 / 超时 / 后端(fetch·curl) / 编码 / 代理 / 重试</td></tr><tr><td>条件判断</td><td>jexl 表达式分流（真→true 出口，假→false 出口）</td></tr><tr><td>赋值</td><td>变量或表达式求值</td></tr><tr><td>提取</td><td>正则 / JSON 路径 / 响应头 / Set-Cookie</td></tr><tr><td>延迟 / 随机延迟</td><td>固定或区间等待（避开整点风控）</td></tr><tr><td>日志</td><td>输出人话日志（默认唯一可见的日志）</td></tr><tr><td>通知</td><td>流程内自定义推送</td></tr><tr><td>脚本</td><td>JS 沙箱（vars/last/steps 只读，1s 超时）</td></tr><tr><td>遍历</td><td>数组逐项循环（上限 50 轮）</td></tr></tbody></table></div>
 <h2 id="变量与表达式">变量与表达式<a class="h-anchor" href="#变量与表达式" aria-label="本节永久链接">#</a></h2>
@@ -149,7 +149,7 @@
         </div>
       </div>
       <div class="foot-meta">
-        <p>v0.6.5 · 生成于 2026-11-26 15:24 UTC · 由 <code>tools/build-wiki.cjs</code> 从 <code>docs/</code> 与内置页面生成</p>
+        <p>v0.6.6 · 生成于 2026-11-27 14:39 UTC · 由 <code>tools/build-wiki.cjs</code> 从 <code>docs/</code> 与内置页面生成</p>
         <p><a class="to-top" href="#top">↑ 返回顶部</a></p>
       </div>
     </footer>

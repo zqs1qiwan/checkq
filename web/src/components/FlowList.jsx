@@ -347,9 +347,10 @@ export default function FlowList({ me, onOpen, onEditTemplate, onLogout, onSetti
           width={200}
           ariaLabel="新建任务"
         >
-          <button onClick={() => setModal('new')} disabled={readOnly}>空白流程</button>
+          <button onClick={() => setModal('wizard')} disabled={readOnly}>快速组装</button>
+          <button onClick={createEmpty} disabled={readOnly}>空白流程</button>
           <button onClick={() => setViewTab('tpls')} disabled={readOnly}>从模板</button>
-          <button onClick={() => setModal('import')} disabled={importBusy || readOnly}>导入 HAR / JSON</button>
+          <button onClick={() => fileRef.current?.click()} disabled={importBusy || readOnly}>导入 HAR / JSON</button>
           <button onClick={() => setModal('curl')} disabled={importBusy || readOnly}>导入 cURL 命令</button>
         </Dropdown>
         <Dropdown
@@ -696,34 +697,8 @@ export default function FlowList({ me, onOpen, onEditTemplate, onLogout, onSetti
         <WizardModal onClose={() => setModal(null)} onCreated={(f) => { setModal(null); onOpen(f.id); setToast({ kind: 'ok', text: '流程已生成，去运行试试，再点「点选生成逻辑」补变量' }); }} />
       )}
 
-      {modal === 'new' && (
-        <Modal
-          title="新建空白任务"
-              onClose={() => setModal(null)}
-          footer={
-            <>
-              <button onClick={() => setModal(null)}>取消</button>
-              <button className="primary" onClick={createEmpty}>创建</button>
-            </>
-          }
-        />
-      )}
-
       {modal === 'curl' && (
         <CurlImportModal onClose={() => setModal(null)} onCreated={(f) => { setModal(null); onOpen(f.id); }} />
-      )}
-
-      {modal === 'import' && (
-        <Modal
-          title="导入"
-              onClose={() => setModal(null)}
-          footer={
-            <>
-              <button onClick={() => setModal(null)}>取消</button>
-              <button className="primary" onClick={() => fileRef.current?.click()}>选择文件</button>
-            </>
-          }
-        />
       )}
 
       {modal?.type === 'csv' && (

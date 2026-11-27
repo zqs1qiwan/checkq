@@ -28,7 +28,7 @@
 <link rel="apple-touch-icon" href="./assets/brand/apple-touch-icon.png" />
 <link rel="stylesheet" href="./assets/style.css" />
 <link rel="sitemap" type="application/xml" href="https://zqs1qiwan.github.io/checkq/sitemap.xml" />
-<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebSite","@id":"https://zqs1qiwan.github.io/checkq/#website","url":"https://zqs1qiwan.github.io/checkq/","name":"CheckQ 文档","inLanguage":"zh-CN","description":"CheckQ 是开源的可视化 HTTP 自动化流程引擎：积木式流程、调度与失败重试、日志与通知、模板联动、REST API 与 MCP。","publisher":{"@type":"Organization","name":"CheckQ","url":"https://github.com/zqs1qiwan/checkq","logo":{"@type":"ImageObject","url":"https://zqs1qiwan.github.io/checkq/assets/brand/checkq-mark.svg","width":120,"height":120}}},{"@type":"TechArticle","@id":"https://zqs1qiwan.github.io/checkq/deploy.html#article","headline":"部署与备份","name":"部署与备份","description":"CheckQ 部署与备份：单容器 Docker 部署、数据目录结构与落盘行为、脱敏备份与完整备份、恢复与迁移注意事项。","url":"https://zqs1qiwan.github.io/checkq/deploy.html","mainEntityOfPage":"https://zqs1qiwan.github.io/checkq/deploy.html","inLanguage":"zh-CN","dateModified":"2026-11-26","isPartOf":{"@id":"https://zqs1qiwan.github.io/checkq/#website"},"image":"https://zqs1qiwan.github.io/checkq/assets/social-preview.png","publisher":{"@type":"Organization","name":"CheckQ","url":"https://github.com/zqs1qiwan/checkq"}}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebSite","@id":"https://zqs1qiwan.github.io/checkq/#website","url":"https://zqs1qiwan.github.io/checkq/","name":"CheckQ 文档","inLanguage":"zh-CN","description":"CheckQ 是开源的可视化 HTTP 自动化流程引擎：积木式流程、调度与失败重试、日志与通知、模板联动、REST API 与 MCP。","publisher":{"@type":"Organization","name":"CheckQ","url":"https://github.com/zqs1qiwan/checkq","logo":{"@type":"ImageObject","url":"https://zqs1qiwan.github.io/checkq/assets/brand/checkq-mark.svg","width":120,"height":120}}},{"@type":"TechArticle","@id":"https://zqs1qiwan.github.io/checkq/deploy.html#article","headline":"部署与备份","name":"部署与备份","description":"CheckQ 部署与备份：单容器 Docker 部署、数据目录结构与落盘行为、脱敏备份与完整备份、恢复与迁移注意事项。","url":"https://zqs1qiwan.github.io/checkq/deploy.html","mainEntityOfPage":"https://zqs1qiwan.github.io/checkq/deploy.html","inLanguage":"zh-CN","dateModified":"2026-11-27","isPartOf":{"@id":"https://zqs1qiwan.github.io/checkq/#website"},"image":"https://zqs1qiwan.github.io/checkq/assets/social-preview.png","publisher":{"@type":"Organization","name":"CheckQ","url":"https://github.com/zqs1qiwan/checkq"}}]}</script>
 <script>(function(){try{var k='checkq-wiki-theme';var s=window.localStorage.getItem(k);var m=(s==='light'||s==='dark')?s:((window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches)?'light':'dark');document.documentElement.setAttribute('data-mode',m);}catch(e){}document.documentElement.classList.add('js');})();</script>
 <noscript><style>.copy-btn,.search{display:none !important}</style></noscript>
 </head>
@@ -41,7 +41,7 @@
   <a class="brand" href="./index.html">
     <img class="brand-mark" src="./assets/brand/checkq-mark.svg" width="26" height="26" alt="" />
     <span class="brand-word">Check<em>Q</em></span>
-    <span class="brand-ver">v0.6.5</span>
+    <span class="brand-ver">v0.6.6</span>
   </a>
   <span class="topbar-title">文档</span>
   <div class="topbar-links">
@@ -97,15 +97,15 @@
 </details>
     <article class="doc">
 <h1 id="部署与备份">部署与备份<a class="h-anchor" href="#部署与备份" aria-label="本节永久链接">#</a></h1>
-<p class="doc-meta"><span>v0.6.5</span><span>更新于 2026-11-26</span><a class="edit-link" href="https://github.com/zqs1qiwan/checkq/edit/main/tools/build-wiki.cjs" target="_blank" rel="noopener noreferrer">在 GitHub 编辑此页 ↗</a></p>
+<p class="doc-meta"><span>v0.6.6</span><span>更新于 2026-11-27</span><a class="edit-link" href="https://github.com/zqs1qiwan/checkq/edit/main/tools/build-wiki.cjs" target="_blank" rel="noopener noreferrer">在 GitHub 编辑此页 ↗</a></p>
 <h2 id="部署">部署<a class="h-anchor" href="#部署" aria-label="本节永久链接">#</a></h2>
 <p>单容器（Docker），数据落在 <code>data/</code>（flows / runs / templates / meta / notifications），JSON 存储 + 原子写 + 立即落盘。</p>
 <p>官方镜像来自 Docker Hub：</p>
-<div class="code-block"><div class="code-head"><span class="code-lang">bash</span><button class="copy-btn" type="button" data-copy hidden>复制</button></div><pre class="code" tabindex="0"><code class="language-bash">docker pull zqs1qiwan/checkq:0.6.5
+<div class="code-block"><div class="code-head"><span class="code-lang">bash</span><button class="copy-btn" type="button" data-copy hidden>复制</button></div><pre class="code" tabindex="0"><code class="language-bash">docker pull zqs1qiwan/checkq:0.6.6
 docker run -d --name checkq --restart unless-stopped -p 8888:8888 \
   -v /path/to/data:/data -e TZ=Asia/Shanghai \
   -e PORT=8888 -e DATA_DIR=/data \
-  zqs1qiwan/checkq:0.6.5</code></pre></div>
+  zqs1qiwan/checkq:0.6.6</code></pre></div>
 <p><code>latest</code> 跟随最新稳定版；升级前先备份 <code>data/</code>（含 <code>.secret</code>），再 <code>docker pull</code> 并重建容器。也可以从源码构建：<code>docker compose up -d --build</code>。</p>
 <p>端口可按需映射（例如 <code>-p 18888:8888</code>）；数据目录务必挂载到宿主机持久化。</p>
 <h2 id="数据目录">数据目录<a class="h-anchor" href="#数据目录" aria-label="本节永久链接">#</a></h2>
@@ -145,7 +145,7 @@ docker run -d --name checkq --restart unless-stopped -p 8888:8888 \
         </div>
       </div>
       <div class="foot-meta">
-        <p>v0.6.5 · 生成于 2026-11-26 15:24 UTC · 由 <code>tools/build-wiki.cjs</code> 从 <code>docs/</code> 与内置页面生成</p>
+        <p>v0.6.6 · 生成于 2026-11-27 14:39 UTC · 由 <code>tools/build-wiki.cjs</code> 从 <code>docs/</code> 与内置页面生成</p>
         <p><a class="to-top" href="#top">↑ 返回顶部</a></p>
       </div>
     </footer>

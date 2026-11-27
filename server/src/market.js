@@ -49,7 +49,19 @@ const isHttpUrl = (u) => {
 
 const isHex64 = (s) => typeof s === 'string' && /^[0-9a-f]{64}$/i.test(s);
 
-/** 拉 JSON（限体积 + 超时），失败给出人话原因 */
+import { isSensitiveName } from './sensitive-name.js';
+
+/** 比较 semver：min > cur 时返回 true */
+function semverGt(min, cur) {
+  const a = String(min || '').replace(/^v/i, '').split('.').map((x) => parseInt(x, 10) || 0);
+  const b = String(cur || '').replace(/^v/i, '').split('.').map((x) => parseInt(x, 10) || 0);
+  for (let i = 0; i < 3; i++) {
+    if ((a[i] || 0) !== (b[i] || 0)) return (a[i] || 0) > (b[i] || 0);
+  }
+  return false;
+}
+
+/** 拉 JSON（流式限体积 + 超时），失败给出人话原因 */
 export async function fetchJson(url, { maxBytes = MARKET_LIMITS.indexBytes, timeoutMs = MARKET_LIMITS.timeoutMs } = {}) {
   if (!isHttpUrl(url)) throw new Error('地址必须是 http/https');
   let res;
@@ -61,8 +73,30 @@ export async function fetchJson(url, { maxBytes = MARKET_LIMITS.indexBytes, time
   if (!res.ok) throw new Error(`拉取失败：HTTP ${res.status}`);
   const len = Number(res.headers.get('content-length') || 0);
   if (len > maxBytes) throw new Error(`内容过大（${len} 字节，上限 ${maxBytes}）`);
-  const text = await res.text();
-  if (text.length > maxBytes) throw new Error(`内容过大（上限 ${Math.round(maxBytes / 1024)} KB）`);
+  let text = '';
+  if (res.body && typeof res.body.getReader === 'function') {
+    const reader = res.body.getReader();
+    const chunks = [];
+    let total = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        total += value.byteLength;
+        if (total > maxBytes) {
+          try { await reader.cancel(); } catch {}
+          throw new Error(`内容过大（上限 ${Math.round(maxBytes / 1024)} KB）`);
+        }
+        chunks.push(Buffer.from(value));
+      }
+    } finally {
+      try { reader.releaseLock(); } catch {}
+    }
+    text = Buffer.concat(chunks, total).toString('utf8');
+  } else {
+    text = await res.text();
+    if (Buffer.byteLength(text, 'utf8') > maxBytes) throw new Error(`内容过大（上限 ${Math.round(maxBytes / 1024)} KB）`);
+  }
   try {
     return JSON.parse(text);
   } catch {
@@ -130,7 +164,7 @@ export function parseIndex(data, sourceUrl) {
       templateUrl: hasUrl ? e.templateUrl : null,
       inline: hasInline ? (Array.isArray(e.template?.nodes) ? e.template : { nodes: e.nodes_inline, edges: e.edges || [] }) : null,
       minApp: e.minApp || null,
-      needsUpdate: !!(e.minApp && appVersion && e.minApp > appVersion),
+      needsUpdate: !!(e.minApp && appVersion && semverGt(e.minApp, appVersion)),
       updatedAt: e.updatedAt || null,
       source: e.source || sourceUrl,
     });
@@ -138,9 +172,6 @@ export function parseIndex(data, sourceUrl) {
 
   return { ok: errors.length === 0, errors, name: data.name || '', updatedAt: data.updatedAt || null, entries };
 }
-
-/** 敏感变量名（与导出/加密口径一致） */
-const SENSITIVE_RE = /cookie|token|password|secret|key|session|auth/i;
 
 /**
  * 校验并清洗模板（不执行、不运行）。
@@ -167,7 +198,7 @@ export function checkTemplate(tpl) {
   const vars = { ...(tpl.vars || {}) };
   const varsCleared = [];
   for (const k of Object.keys(vars)) {
-    if (SENSITIVE_RE.test(k) && vars[k]) { vars[k] = ''; varsCleared.push(k); }
+    if (isSensitiveName(k) && vars[k]) { vars[k] = ''; varsCleared.push(k); }
   }
 
   return {

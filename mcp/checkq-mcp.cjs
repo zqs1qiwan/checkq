@@ -1,20 +1,17 @@
 #!/usr/bin/env node
 /**
- * CheckQ MCP Server (stdio)
- *
- * 把 CheckQ 的 REST API 暴露成 MCP tools，任何 Agent（Claude Desktop / Cursor / OpenCode ...）
- * 都能通过 stdio JSON-RPC 2.0 调用。零依赖，Node 18+。
+ * CheckQ MCP Server (stdio JSON-RPC 2.0, zero dependencies)
+ * 让 Claude Code / Codex / OpenClaw 等外部 Agent 通过 MCP 协议读取与调度 CheckQ。
  *
  * 环境变量：
- *   CHECKQ_URL       CheckQ 基址（必填）。服务端默认端口 8888；
- *                    http://checkq.local:18888 是 docker-compose.yml 为本地测试方便设的宿主映射
- *   CHECKQ_PASSWORD  登录密码（与 CHECKQ_API_KEY 二选一）
- *   CHECKQ_API_KEY   X-API-Key（推荐，免登录；从 CheckQ 设置页生成）
- *
- * 启动：node mcp/checkq-mcp.cjs
- * 协议：JSON-RPC 2.0 over stdio（newline-delimited）
+ *   CHECKQ_URL=http://192.168.2.1:18888
+ *   CHECKQ_API_KEY=cq_...           （推荐：按作用域限制，过期自动失效）
+ *   CHECKQ_USERNAME / CHECKQ_PASSWORD （备选：账号密码登录）
  */
+
+const readline = require('node:readline');
 const BASE = (process.env.CHECKQ_URL || '').replace(/\/+$/, '');
+const USERNAME = process.env.CHECKQ_USERNAME || '';
 const PASSWORD = process.env.CHECKQ_PASSWORD || '';
 const API_KEY = process.env.CHECKQ_API_KEY || '';
 const { version: VERSION } = require('../server/package.json');
@@ -25,54 +22,62 @@ if (!BASE) {
 }
 
 let cookie = null;
-async function authHeaders() {
+async function authHeaders(forceRefresh = false) {
   const h = { 'content-type': 'application/json' };
   if (API_KEY) { h['x-api-key'] = API_KEY; return h; }
+  if (forceRefresh) cookie = null;
   if (!cookie) {
-    const r = await fetch(BASE + '/api/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password: PASSWORD }) });
+    const payload = USERNAME ? { username: USERNAME, password: PASSWORD } : { password: PASSWORD };
+    const r = await fetch(BASE + '/api/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
     if (!r.ok) throw new Error('CheckQ 登录失败: HTTP ' + r.status);
-    cookie = (r.headers.getSetCookie ? r.headers.getSetCookie() : [r.headers.get('set-cookie')]).map((c) => c.split(';')[0]).join('; ');
+    cookie = (r.headers.getSetCookie ? r.headers.getSetCookie() : [r.headers.get('set-cookie')].filter(Boolean))
+      .map((c) => c.split(';')[0]).join('; ');
   }
-  h.cookie = cookie;
+  if (cookie) h.cookie = cookie;
   return h;
 }
-async function api(method, path, body) {
-  const h = await authHeaders();
-  // 无 body 的请求（GET/DELETE）不要带 application/json，否则 Fastify 会因空 JSON 体报 400
-  if (body === undefined) delete h['content-type'];
-  const r = await fetch(BASE + path, { method, headers: h, body: body === undefined ? undefined : JSON.stringify(body) });
+
+async function api(method, path, body, retried = false) {
+  const r = await fetch(BASE + path, {
+    method,
+    headers: await authHeaders(retried),
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (r.status === 401 && !API_KEY && !retried) {
+    return api(method, path, body, true);
+  }
   const text = await r.text();
-  let data; try { data = JSON.parse(text); } catch { data = text; }
-  if (!r.ok) throw new Error(`HTTP ${r.status}: ${typeof data === 'string' ? data.slice(0, 300) : JSON.stringify(data).slice(0, 300)}`);
+  let data;
+  try { data = JSON.parse(text); } catch { data = text; }
+  if (!r.ok) throw new Error((data && data.error) || ('HTTP ' + r.status));
   return data;
 }
 
 const TOOLS = [
-  // —— 基础 ——
-  { name: 'health', description: 'CheckQ 健康检查（版本、连通性）', inputSchema: { type: 'object', properties: {} } },
-  { name: 'whoami', description: '当前身份与权限（登录用户 / API Key 作用域），用于自检', inputSchema: { type: 'object', properties: {} } },
-  { name: 'stats', description: '运维健康统计（任务数/运行数/成功率/下次调度）', inputSchema: { type: 'object', properties: {} } },
-  { name: 'notifications_list', description: '站内通知列表（含未读数）', inputSchema: { type: 'object', properties: { limit: { type: 'number' } } } },
-  // —— 任务（签到）——
-  { name: 'flows_list', description: '列出所有任务（含 cron/enabled/nextRunAt/上次结果）', inputSchema: { type: 'object', properties: { search: { type: 'string' } } } },
-  { name: 'flow_get', description: '读取单个任务的完整定义（nodes/edges/vars/log/notify）', inputSchema: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } } },
-  { name: 'flow_run', description: '立即运行一个任务，返回状态、摘要与人话日志（不改动配置）', inputSchema: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } } },
-  { name: 'flow_logs', description: '读取某任务的连续日志流（多次运行的人话日志，最像 qinglong 面板）', inputSchema: { type: 'object', required: ['id'], properties: { id: { type: 'string' }, limit: { type: 'number' } } } },
-  { name: 'flow_update_vars', description: '更新任务变量（如 cookie / wbToken / ua），其余字段保留', inputSchema: { type: 'object', required: ['id', 'vars'], properties: { id: { type: 'string' }, vars: { type: 'object' } } } },
-  { name: 'flow_update', description: '更新任务基础配置（name/cron/timezone/jitterMinutes/enabled/note）', inputSchema: { type: 'object', required: ['id'], properties: { id: { type: 'string' }, name: { type: 'string' }, cron: { type: 'string' }, timezone: { type: 'string' }, jitterMinutes: { type: 'number' }, enabled: { type: 'boolean' }, note: { type: 'string' } } } },
-  { name: 'flow_toggle', description: '启用/停用某个任务的定时调度', inputSchema: { type: 'object', required: ['id', 'enabled'], properties: { id: { type: 'string' }, enabled: { type: 'boolean' } } } },
-  { name: 'flow_create', description: '新建一个任务（可从模板克隆；至少给 name）', inputSchema: { type: 'object', required: ['name'], properties: { name: { type: 'string' }, cron: { type: 'string' }, timezone: { type: 'string' }, vars: { type: 'object' }, templateId: { type: 'string' }, enabled: { type: 'boolean' } } } },
-  { name: 'flow_delete', description: '删除一个任务（不可恢复；需要 write 作用域）', inputSchema: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } } },
-  { name: 'flow_notify_test', description: '向某任务已配置的渠道发一条测试通知（验证 webhook/telegram 等）', inputSchema: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } } },
-  // —— 模板 ——
-  { name: 'templates_list', description: '列出所有模板（含变量名）', inputSchema: { type: 'object', properties: {} } },
-  { name: 'template_get', description: '读取模板详情（变量名与默认变量值，敏感项已脱敏）', inputSchema: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } } },
-  { name: 'template_instantiate', description: '从模板创建任务（变量各自覆盖，保留模板流程图）', inputSchema: { type: 'object', required: ['id'], properties: { id: { type: 'string' }, name: { type: 'string' }, vars: { type: 'object' }, note: { type: 'string' } } } },
-  // —— 导入 ——
-  { name: 'import_curl', description: '把 cURL 命令解析为 http 节点配置（不创建任务）', inputSchema: { type: 'object', required: ['command'], properties: { command: { type: 'string' } } } },
-  // —— 运行历史 ——
-  { name: 'runs_list', description: '列出某任务的历史运行记录', inputSchema: { type: 'object', required: ['flowId'], properties: { flowId: { type: 'string' }, limit: { type: 'number' } } } },
-  { name: 'run_get', description: '读取某次运行的完整日志与变量快照', inputSchema: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } } },
+  { name: 'health', description: 'CheckQ 健康检查（版本、连通性）', annotations: { readOnlyHint: true, idempotentHint: true }, inputSchema: { type: 'object', properties: {} } },
+  { name: 'whoami', description: '当前身份与权限（登录用户 / API Key 作用域），用于自检', annotations: { readOnlyHint: true, idempotentHint: true }, inputSchema: { type: 'object', properties: {} } },
+  { name: 'stats', description: '运维健康统计（任务数/运行数/成功率/下次调度）', annotations: { readOnlyHint: true, idempotentHint: true }, inputSchema: { type: 'object', properties: {} } },
+  { name: 'notifications_list', description: '站内通知列表（含未读数）', annotations: { readOnlyHint: true, idempotentHint: true }, inputSchema: { type: 'object', properties: { limit: { type: 'number' } } } },
+
+  { name: 'flows_list', description: '列出所有任务（含 cron/enabled/nextRunAt/上次结果）', annotations: { readOnlyHint: true, idempotentHint: true }, inputSchema: { type: 'object', properties: { search: { type: 'string' } } } },
+  { name: 'flow_get', description: '读取单个任务的完整定义（nodes/edges/vars/log/notify）', annotations: { readOnlyHint: true, idempotentHint: true }, inputSchema: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } } },
+  { name: 'flow_validate', description: '静态校验流程定义（节点类型/连线/允许请求源，不落库）', annotations: { readOnlyHint: true, idempotentHint: true }, inputSchema: { type: 'object', required: ['nodes'], properties: { name: { type: 'string' }, nodes: { type: 'array' }, edges: { type: 'array' }, allowEmptyDraft: { type: 'boolean' } } } },
+  { name: 'flow_run', description: '立即运行一个任务，支持 wait=false 异步触发与 debug 模式', annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false }, inputSchema: { type: 'object', required: ['id'], properties: { id: { type: 'string' }, wait: { type: 'boolean', default: true }, debug: { type: 'boolean', default: false } } } },
+  { name: 'flow_logs', description: '读取某任务的连续日志流（多次运行的人话日志，最像 qinglong 面板）', annotations: { readOnlyHint: true, idempotentHint: true }, inputSchema: { type: 'object', required: ['id'], properties: { id: { type: 'string' }, limit: { type: 'number' }, before: { type: 'string' } } } },
+  { name: 'flow_update_vars', description: '合并更新任务变量（如 cookie / wbToken / ua），其余字段保留', annotations: { readOnlyHint: false, idempotentHint: true }, inputSchema: { type: 'object', required: ['id', 'vars'], properties: { id: { type: 'string' }, vars: { type: 'object' } } } },
+  { name: 'flow_update', description: '更新任务基础配置（name/cron/timezone/jitterMinutes/enabled/note）', annotations: { readOnlyHint: false, idempotentHint: true }, inputSchema: { type: 'object', required: ['id'], properties: { id: { type: 'string' }, name: { type: 'string' }, cron: { type: 'string' }, timezone: { type: 'string' }, jitterMinutes: { type: 'number' }, enabled: { type: 'boolean' }, note: { type: 'string' }, group: { type: 'string' } } } },
+  { name: 'flow_toggle', description: '启用/停用某个任务的定时调度', annotations: { readOnlyHint: false, idempotentHint: true }, inputSchema: { type: 'object', required: ['id', 'enabled'], properties: { id: { type: 'string' }, enabled: { type: 'boolean' } } } },
+  { name: 'flow_create', description: '新建一个任务（可从模板克隆；至少给 name）', annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false }, inputSchema: { type: 'object', required: ['name'], properties: { name: { type: 'string' }, cron: { type: 'string' }, timezone: { type: 'string' }, group: { type: 'string' }, vars: { type: 'object' }, templateId: { type: 'string' }, nodes: { type: 'array' }, edges: { type: 'array' }, enabled: { type: 'boolean' } } } },
+  { name: 'flow_notify_test', description: '向该任务配置的通知渠道发一条测试消息', annotations: { readOnlyHint: false, idempotentHint: false }, inputSchema: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } } },
+  { name: 'flow_delete', description: '删除一个任务（不可恢复；需要 write 作用域）', annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true }, inputSchema: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } } },
+
+  { name: 'templates_list', description: '列出所有模板（含变量名）', annotations: { readOnlyHint: true, idempotentHint: true }, inputSchema: { type: 'object', properties: {} } },
+  { name: 'template_get', description: '读取模板详情（变量名与默认变量值，敏感项已脱敏）', annotations: { readOnlyHint: true, idempotentHint: true }, inputSchema: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } } },
+  { name: 'template_instantiate', description: '从模板创建任务（变量各自覆盖，保留模板流程图）', annotations: { readOnlyHint: false, idempotentHint: false }, inputSchema: { type: 'object', required: ['id'], properties: { id: { type: 'string' }, name: { type: 'string' }, vars: { type: 'object' }, note: { type: 'string' } } } },
+  { name: 'import_curl', description: '把 cURL 命令解析为 http 节点配置（不创建任务）', annotations: { readOnlyHint: true, idempotentHint: true }, inputSchema: { type: 'object', required: ['command'], properties: { command: { type: 'string' } } } },
+  { name: 'runs_list', description: '列出某任务的历史运行记录', annotations: { readOnlyHint: true, idempotentHint: true }, inputSchema: { type: 'object', required: ['flowId'], properties: { flowId: { type: 'string' }, limit: { type: 'number' } } } },
+  { name: 'run_get', description: '读取某次运行的完整日志与变量快照', annotations: { readOnlyHint: true, idempotentHint: true }, inputSchema: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } } },
+  { name: 'run_cancel', description: '取消排队中或运行中的任务运行（需要 run 作用域）', annotations: { readOnlyHint: false, idempotentHint: true }, inputSchema: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } } },
 ];
 
 async function callTool(name, args) {
@@ -80,118 +85,105 @@ async function callTool(name, args) {
   switch (name) {
     case 'health': return api('GET', '/api/health');
     case 'whoami': return api('GET', '/api/me');
-    case 'flow_logs': return api('GET', '/api/flows/' + encodeURIComponent(args.id) + '/logs?limit=' + (args.limit || 200));
+    case 'stats': return api('GET', '/api/system/stats');
+    case 'notifications_list': return api('GET', '/api/notifications?limit=' + encodeURIComponent(args.limit || 50));
+    case 'flows_list': {
+      const all = await api('GET', '/api/flows');
+      const s = String(args.search || '').trim().toLowerCase();
+      return s ? all.filter((f) => String(f.name || '').toLowerCase().includes(s) || String(f.group || '').toLowerCase().includes(s)) : all;
+    }
+    case 'flow_get': return api('GET', '/api/flows/' + encodeURIComponent(args.id));
+    case 'flow_validate': return api('POST', '/api/flows/validate', args);
+    case 'flow_run': return api('POST', '/api/flows/' + encodeURIComponent(args.id) + '/run', {
+      ...(args.wait === false ? { wait: false } : {}),
+      ...(args.debug === true ? { debug: true } : {}),
+    });
+    case 'flow_logs': {
+      const q = new URLSearchParams({ limit: String(args.limit || 200) });
+      if (args.before) q.set('before', String(args.before));
+      return api('GET', '/api/flows/' + encodeURIComponent(args.id) + '/logs?' + q.toString());
+    }
+    case 'flow_update_vars': return api('PATCH', '/api/flows/' + encodeURIComponent(args.id) + '/vars', { vars: args.vars || {} });
     case 'flow_update': {
       const patch = {};
-      for (const k of ['name', 'cron', 'timezone', 'jitterMinutes', 'enabled', 'note']) {
+      for (const k of ['name', 'cron', 'timezone', 'jitterMinutes', 'enabled', 'note', 'group']) {
         if (args[k] !== undefined) patch[k] = args[k];
       }
       return api('PUT', '/api/flows/' + encodeURIComponent(args.id), patch);
     }
-    case 'flow_toggle':
-      return api('PUT', '/api/flows/' + encodeURIComponent(args.id), { enabled: !!args.enabled });
+    case 'flow_toggle': return api('PUT', '/api/flows/' + encodeURIComponent(args.id), { enabled: !!args.enabled });
     case 'flow_create': {
       if (args.templateId) {
         const flow = await api('POST', '/api/templates/' + encodeURIComponent(args.templateId) + '/instantiate', {
           name: args.name,
           vars: args.vars || {},
         });
-        // instantiate 只收 name/vars/note：把 inputSchema 声明的调度参数补一次 PUT，避免静默忽略
         const patch = {};
-        if (args.cron !== undefined) patch.cron = args.cron;
-        if (args.timezone !== undefined) patch.timezone = args.timezone;
-        if (args.enabled !== undefined) patch.enabled = args.enabled;
-        if (!Object.keys(patch).length) return flow;
-        return api('PUT', '/api/flows/' + encodeURIComponent(flow.id), patch);
+        for (const k of ['cron', 'timezone', 'enabled', 'group']) {
+          if (args[k] !== undefined) patch[k] = args[k];
+        }
+        return Object.keys(patch).length ? api('PUT', '/api/flows/' + encodeURIComponent(flow.id), patch) : flow;
       }
       return api('POST', '/api/flows', {
         name: args.name,
         cron: args.cron || '',
         timezone: args.timezone || 'Asia/Shanghai',
+        group: args.group,
         enabled: args.enabled === true,
         vars: args.vars || {},
-        nodes: [{ id: 'n0', type: 'http', name: '请求', x: 80, y: 80, config: { method: 'GET', url: 'https://example.com', headers: [], body: '', asserts: [] } },
-                { id: 'n1', type: 'log', name: '日志', x: 320, y: 80, config: { text: '完成：{{last.status}}' } }],
-        edges: [{ id: 'e0', source: 'n0', sourceHandle: 'success', target: 'n1' }],
-        log: { level: 'all', record: 'log', debug: false },
+        nodes: args.nodes || [{ id: 'n0', type: 'log', name: '开始', x: 100, y: 120, config: { text: '开始执行' } }],
+        edges: args.edges || [],
       });
     }
     case 'flow_notify_test': return api('POST', '/api/flows/' + encodeURIComponent(args.id) + '/notify-test', {});
     case 'flow_delete': return api('DELETE', '/api/flows/' + encodeURIComponent(args.id));
-    case 'flows_list': {
-      const flows = await api('GET', '/api/flows');
-      const query = String(args.search || '').trim().toLowerCase();
-      return query ? flows.filter((f) => [f.name, f.note, f.group].some((v) => String(v || '').toLowerCase().includes(query))) : flows;
-    }
-    case 'flow_get': return api('GET', '/api/flows/' + args.id);
-    case 'flow_run': return api('POST', '/api/flows/' + args.id + '/run', {});
-    case 'flow_update_vars': {
-      const cur = await api('GET', '/api/flows/' + args.id);
-      return api('PUT', '/api/flows/' + args.id, { vars: { ...(cur.vars || {}), ...(args.vars || {}) } });
-    }
-    case 'runs_list': return api('GET', '/api/runs?flowId=' + encodeURIComponent(args.flowId) + '&limit=' + (args.limit || 30));
-    case 'run_get': return api('GET', '/api/runs/' + args.id);
     case 'templates_list': return api('GET', '/api/templates');
     case 'template_get': return api('GET', '/api/templates/' + encodeURIComponent(args.id));
     case 'template_instantiate': return api('POST', '/api/templates/' + encodeURIComponent(args.id) + '/instantiate', {
-      name: args.name, vars: args.vars || {}, note: args.note,
+      name: args.name, vars: args.vars, note: args.note,
     });
     case 'import_curl': return api('POST', '/api/import/curl', { command: args.command });
-    case 'stats': return api('GET', '/api/system/stats');
-    case 'notifications_list': return api('GET', '/api/notifications?limit=' + (args.limit || 50));
-    default: throw new Error('unknown tool: ' + name);
+    case 'runs_list': return api('GET', '/api/runs?flowId=' + encodeURIComponent(args.flowId || '') + '&limit=' + encodeURIComponent(args.limit || 30));
+    case 'run_get': return api('GET', '/api/runs/' + encodeURIComponent(args.id));
+    case 'run_cancel': return api('POST', '/api/runs/' + encodeURIComponent(args.id) + '/cancel', {});
+    default: throw new Error('未知工具: ' + name);
   }
 }
 
-function write(obj) { process.stdout.write(JSON.stringify(obj) + '\n'); }
-
-let buf = '';
-process.stdin.setEncoding('utf8');
-let pending = 0;
-process.stdin.on('data', (chunk) => { buf += chunk; pump(); });
-process.stdin.on('end', () => {
-  // 等待在途请求完成后再退出，避免 tools/call 被中途截断
-  const check = setInterval(() => { if (pending === 0) { clearInterval(check); setTimeout(() => process.exit(0), 200); } }, 50);
-});
-
-function pump() {
-  while (true) {
-    const nl = buf.indexOf('\n');
-    if (nl === -1) break;
-    const line = buf.slice(0, nl).trim();
-    buf = buf.slice(nl + 1);
-    if (!line) continue;
-    let msg;
-    try { msg = JSON.parse(line); } catch { continue; }
-    pending++;
-    handle(msg).finally(() => { pending--; }).catch(() => {});
-  }
-}
-
-async function handle(msg) {
-  if (msg.method === 'initialize') {
-    write({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'checkq-mcp', version: VERSION } } });
-    return;
-  }
-  if (msg.method === 'tools/list') {
-    write({ jsonrpc: '2.0', id: msg.id, result: { tools: TOOLS } });
-    return;
-  }
-  if (msg.method === 'tools/call') {
-    const { name, arguments: args } = msg.params || {};
-    try {
-      const data = await callTool(name, args);
-      write({ jsonrpc: '2.0', id: msg.id, result: { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] } });
-    } catch (e) {
-      write({ jsonrpc: '2.0', id: msg.id, result: { content: [{ type: 'text', text: 'ERROR: ' + (e.message || e) }], isError: true } });
+const send = (obj) => process.stdout.write(JSON.stringify(obj) + '\n');
+const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+rl.on('line', async (line) => {
+  if (!line.trim()) return;
+  let msg;
+  try { msg = JSON.parse(line); } catch { return; }
+  const hasId = Object.hasOwn(msg, 'id') && msg.id !== undefined && msg.id !== null;
+  try {
+    if (msg.method === 'initialize') {
+      if (hasId) {
+        return send({
+          jsonrpc: '2.0', id: msg.id,
+          result: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'checkq-mcp', version: VERSION } },
+        });
+      }
+      return;
     }
-    return;
+    if (msg.method === 'notifications/initialized') {
+      if (hasId) return send({ jsonrpc: '2.0', id: msg.id, result: {} });
+      return;
+    }
+    if (!hasId) return; // JSON-RPC notifications receive no response
+    if (msg.method === 'ping') return send({ jsonrpc: '2.0', id: msg.id, result: {} });
+    if (msg.method === 'tools/list') return send({ jsonrpc: '2.0', id: msg.id, result: { tools: TOOLS } });
+    if (msg.method === 'tools/call') {
+      try {
+        const res = await callTool(msg.params?.name, msg.params?.arguments);
+        return send({ jsonrpc: '2.0', id: msg.id, result: { content: [{ type: 'text', text: JSON.stringify(res, null, 2) }] } });
+      } catch (e) {
+        return send({ jsonrpc: '2.0', id: msg.id, result: { content: [{ type: 'text', text: e.message }], isError: true } });
+      }
+    }
+    send({ jsonrpc: '2.0', id: msg.id, error: { code: -32601, message: 'Method not found' } });
+  } catch (e) {
+    if (hasId) send({ jsonrpc: '2.0', id: msg.id, error: { code: -32000, message: e.message } });
   }
-  if (msg.method === 'notifications/initialized' || msg.method === 'ping') {
-    if (msg.id !== undefined) write({ jsonrpc: '2.0', id: msg.id, result: {} });
-    return;
-  }
-  if (msg.id !== undefined) write({ jsonrpc: '2.0', id: msg.id, error: { code: -32601, message: 'method not found: ' + msg.method } });
-}
-
-process.on('unhandledRejection', (e) => process.stderr.write(String(e) + '\n'));
+});

@@ -68,16 +68,24 @@ export function totpNow(secret, offset = 0) {
   return totpAt(secret, Math.floor((Date.now() / 1000 + offset) / 30));
 }
 
+/** 校验验证码（允许 ±window 个时间步）；若命中则返回步号（并可防同/旧步重放），失败返回 null */
+export function verifyTotpStep(secret, code, window = 1, lastUsedStep = null) {
+  const input = String(code || '').replace(/\s/g, '');
+  if (!/^\d{6}$/.test(input)) return null;
+  const nowStep = Math.floor(Date.now() / 1000 / 30);
+  for (let i = -window; i <= window; i++) {
+    const step = nowStep + i;
+    if (lastUsedStep !== null && step <= lastUsedStep) continue;
+    const expected = totpAt(secret, step);
+    if (expected.length === input.length
+      && crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(input))) return step;
+  }
+  return null;
+}
+
 /** 校验验证码（允许 ±window 个时间步，容网络/时钟漂移） */
 export function verifyTotp(secret, code, window = 1) {
-  const input = String(code || '').replace(/\s/g, '');
-  if (!/^\d{6}$/.test(input)) return false;
-  for (let i = -window; i <= window; i++) {
-    const expected = totpNow(secret, i * 30);
-    if (expected.length === input.length
-      && crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(input))) return true;
-  }
-  return false;
+  return verifyTotpStep(secret, code, window) !== null;
 }
 
 /** 生成一次性恢复码（10 个） */

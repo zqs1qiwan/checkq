@@ -33,3 +33,4 @@ docs/*.template.json
 docs/*.local.md
 tools/private-terms.local.txt
 *.local.json
+qa-verify/*.result.json

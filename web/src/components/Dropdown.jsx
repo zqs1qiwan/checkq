@@ -77,7 +77,7 @@ export default function Dropdown({
     };
     el.addEventListener('toggle', onToggle);
     return () => el.removeEventListener('toggle', onToggle);
-  }, [place, popId]);
+  }, [place, popId, portalTarget]);
 
   useLayoutEffect(() => {
     if (open) place();

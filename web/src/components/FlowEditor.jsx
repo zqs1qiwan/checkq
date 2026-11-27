@@ -3,6 +3,7 @@ import {
   ReactFlow, ReactFlowProvider, Background, Controls, MiniMap, addEdge,
   useNodesState, useEdgesState, MarkerType, useReactFlow,
 } from '@xyflow/react';
+import '@xyflow/react/dist/style.css';
 import { api } from '../api.js';
 import { STEP_TYPES, defaultConfig } from '../stepTypes.js';
 import { structureSignature, defaultHandle } from '../../../server/src/structure.js';
@@ -251,15 +252,18 @@ function FlowEditorInner({ flowId, kind = 'flow', onBack }) {
    * 任务模式保持原有行为（返回即返回）。
    */
   const handleBack = useCallback(async () => {
-    if (!isTemplate) { onBack(); return; }
+    if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; }
+    if (stateRef.current.dirty && !savePromiseRef.current) {
+      await save();
+    }
     if (savePromiseRef.current) {
       const ok = await savePromiseRef.current;
-      if (ok === false) { showToast('保存失败，已留在模板编辑器；请处理后重试', 'fail'); return; }
+      if (ok === false) { showToast('保存失败，请处理后重试', 'fail'); return; }
     }
     if (stateRef.current.dirty) {
       const leave = await confirmDialog({
-        title: '离开模板编辑器',
-        message: '还有未保存的修改，离开后这些修改会丢失。确定返回模板列表吗？',
+        title: isTemplate ? '离开模板编辑器' : '离开编辑器',
+        message: '还有未保存的修改，离开后这些修改会丢失。确定返回列表吗？',
         confirmText: '放弃修改并返回',
         cancelText: '继续编辑',
         danger: true,
@@ -272,7 +276,6 @@ function FlowEditorInner({ flowId, kind = 'flow', onBack }) {
 
   // 浏览器刷新/关闭页签也拦一下（只拦真正没保存的修改）
   useEffect(() => {
-    if (!isTemplate) return undefined;
     const onBeforeUnload = (e) => {
       if (!stateRef.current.dirty) return;
       e.preventDefault();
@@ -280,7 +283,7 @@ function FlowEditorInner({ flowId, kind = 'flow', onBack }) {
     };
     window.addEventListener('beforeunload', onBeforeUnload);
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
-  }, [isTemplate]);
+  }, []);
 
   const selectedNode = useMemo(
     () => nodes.find((n) => n.id === selectedId),
@@ -421,10 +424,11 @@ function FlowEditorInner({ flowId, kind = 'flow', onBack }) {
 
   useEffect(() => {
     const onKey = (e) => {
+      const mod = e.ctrlKey || e.metaKey;
+      if (mod && e.key.toLowerCase() === 's') { e.preventDefault(); save(); return; }
       const el = e.target;
       const typing = el && (/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) || el.isContentEditable);
       if (typing) return; // 输入框里的 Ctrl+Z/C/V 交给浏览器
-      const mod = e.ctrlKey || e.metaKey;
       if (mod && e.key.toLowerCase() === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
       else if (mod && (e.key.toLowerCase() === 'y' || (e.key.toLowerCase() === 'z' && e.shiftKey))) { e.preventDefault(); redo(); }
       else if (mod && e.key.toLowerCase() === 'c') { e.preventDefault(); copySelected(); }
@@ -432,7 +436,7 @@ function FlowEditorInner({ flowId, kind = 'flow', onBack }) {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [undo, redo, copySelected, pasteClipboard]);
+  }, [undo, redo, copySelected, pasteClipboard, save]);
 
   const testNotify = async () => {
     try {
@@ -575,7 +579,7 @@ function FlowEditorInner({ flowId, kind = 'flow', onBack }) {
     return (
       <div className="boot">
         加载{isTemplate ? '模板' : '流程'}失败：{loadErr}
-        <button className="small" onClick={isTemplate ? handleBack : onBack}>返回</button>
+        <button className="small" onClick={handleBack}>返回</button>
       </div>
     );
   }
@@ -585,7 +589,7 @@ function FlowEditorInner({ flowId, kind = 'flow', onBack }) {
   return (
     <>
       <div className="topbar editor-topbar">
-        <button className="small" onClick={isTemplate ? handleBack : onBack}>返回</button>
+        <button className="small" onClick={handleBack}>返回</button>
         {isTemplate ? (
           <div
             className="flow-title tpl-title"
@@ -722,6 +726,8 @@ function FlowEditorInner({ flowId, kind = 'flow', onBack }) {
             edges={displayEdges}
             onNodesChange={(chg) => { onNodesChange(chg); if (chg.some((c) => c.type === 'position' || c.type === 'remove')) markDirty(); }}
             onEdgesChange={(chg) => { onEdgesChange(chg); if (chg.some((c) => c.type === 'remove')) markDirty(); }}
+            onNodeDragStart={() => pushHistory()}
+            onNodeDragStop={() => markDirty()}
             onConnect={onConnect}
             nodeTypes={nodeTypes}
             multiSelectionKeyCode={['Meta', 'Control']}
@@ -805,8 +811,14 @@ function FlowEditorInner({ flowId, kind = 'flow', onBack }) {
         <CookieHelpModal
           flow={flow}
           onClose={() => setCookieOpen(false)}
-          onSaved={async ({ cookie }) => {
-            const nf = await api.updateFlow(flow.id, { vars: { ...(flow.vars || {}), cookie: cookie.trim() } });
+          onSaved={async (payload) => {
+            if (!payload) {
+              const nf = await api.flow(flow.id);
+              setFlow(nf);
+              showToast('cookie 已自动写入变量', 'ok');
+              return nf;
+            }
+            const nf = await api.updateFlow(flow.id, { vars: { ...(flow.vars || {}), cookie: String(payload.cookie || '').trim() } });
             setFlow(nf);
             showToast('cookie 已保存到变量', 'ok');
             return nf;

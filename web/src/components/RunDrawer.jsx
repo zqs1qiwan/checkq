@@ -23,6 +23,7 @@ export default function RunDrawer({ run, flowId, onClose, onPickResponse, onRepP
     return v >= 25 && v <= 92 ? v : 55;
   });
   const dragRef = useRef(null);
+  const heightRef = useRef(height);
   const bodyRef = useRef(null);
   const [harBusy, setHarBusy] = useState(false);
   const [cancelBusy, setCancelBusy] = useState(false);
@@ -31,16 +32,17 @@ export default function RunDrawer({ run, flowId, onClose, onPickResponse, onRepP
   // 拖拽调整日志坞高度（25% ~ 92%）
   const onDragStart = (e) => {
     e.preventDefault();
-    dragRef.current = { y: e.clientY, h: height };
+    dragRef.current = { y: e.clientY, h: heightRef.current };
     const move = (ev) => {
       if (!dragRef.current) return;
       const dy = dragRef.current.y - (ev.touches ? ev.touches[0].clientY : ev.clientY);
-      const next = Math.min(92, Math.max(25, dragRef.current.h + (dy / window.innerHeight) * 100));
-      setHeight(Math.round(next));
+      const next = Math.round(Math.min(92, Math.max(25, dragRef.current.h + (dy / window.innerHeight) * 100)));
+      heightRef.current = next;
+      setHeight(next);
     };
     const up = () => {
       if (dragRef.current) {
-        try { localStorage.setItem('checkq-drawer-h', String(height)); } catch { /* ignore */ }
+        try { localStorage.setItem('checkq-drawer-h', String(heightRef.current)); } catch { /* ignore */ }
       }
       dragRef.current = null;
       window.removeEventListener('mousemove', move);
@@ -66,9 +68,13 @@ export default function RunDrawer({ run, flowId, onClose, onPickResponse, onRepP
     setPickFor(null);
   }, [run?.id]);
 
-  // Esc 关闭日志坞
+  // Esc 关闭日志坞（弹窗打开时让弹窗优先处理 Esc）
   useEffect(() => {
-    const onKey = (e) => { if (e.key === 'Escape' && onClose) onClose(); };
+    const onKey = (e) => {
+      if (e.key !== 'Escape' || !onClose) return;
+      if (document.querySelector('dialog[open]')) return;
+      onClose();
+    };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);

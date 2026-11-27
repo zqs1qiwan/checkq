@@ -1,6 +1,7 @@
 import React from 'react';
 import { STEP_TYPES } from '../stepTypes.js';
 import { api } from '../api.js';
+import { toast } from '../toast.js';
 
 export default function ConfigPanel({ node, onUpdate, onConfigUpdate, onDelete, onDebugTo, flowId, flowVars, onCollapse }) {
   if (!node) {
@@ -51,9 +52,9 @@ export default function ConfigPanel({ node, onUpdate, onConfigUpdate, onDelete, 
                   try {
                     const { curl } = await api.curlFor(flowId, node.id, flowVars || {});
                     await navigator.clipboard.writeText(curl);
-                    alert('已复制到剪贴板：\n\n' + curl);
+                    toast('已复制 curl 命令', 'ok', { force: true });
                   } catch (e) {
-                    alert('生成失败: ' + e.message);
+                    toast(`生成失败: ${e.message}`, 'fail');
                   }
                 }}>复制为 curl</button>
             </div >
@@ -114,7 +115,6 @@ export default function ConfigPanel({ node, onUpdate, onConfigUpdate, onDelete, 
                 >
                   <option value="expr">表达式</option>
                   <option value="re">正则含</option>
-                  <option value="re" disabled={true} style={{ display: 'none' }}></option>
                 </select>
                 <button className="small danger" style={{ padding: '2px 7px' }}
                   onClick={() => onConfigUpdate({ asserts: config.asserts.filter((_, j) => j !== i) })}>×</button>
@@ -233,7 +233,7 @@ export default function ConfigPanel({ node, onUpdate, onConfigUpdate, onDelete, 
         <>{/* Set node */}
           <div className="field">
             <label>变量名</label>
-            <input value={config.name || ''} onChange={(e) => onUpdate({ name: e.target.value })} />
+            <input value={config.name || ''} onChange={(e) => onConfigUpdate({ name: e.target.value })} />
           </div >
           <div className="field">
             <label title="直接渲染模板 {{xxx}}；以 = 开头按表达式求值，例：=last.json.loginDevice == 'macOS' ? vars.ua_mac : vars.ua_win">值 <span style={{ color: 'var(--muted)' }}>（用 = 开头进行表达式求值）</span ></label>

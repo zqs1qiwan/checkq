@@ -282,7 +282,7 @@ const PAGES = [
   },
   {
     file: 'api.md', title: 'API 与 MCP', group: '参考', blurb: '给外部程序 / Agent 用的接口',
-    desc: 'CheckQ 开放接口：REST 认证与常用端点速查、OpenAPI 3.1 机器可读描述，以及零依赖 MCP 服务的 20 个工具与接入配置。',
+    desc: 'CheckQ 开放接口：REST 认证与常用端点速查、OpenAPI 3.1 机器可读描述，以及零依赖 MCP（stdio 与 HTTP /api/mcp）的 22 个工具与接入配置。',
   },
   {
     file: 'reference-api.md', title: 'API 参考', group: '参考', blurb: '全部端点', src: 'API.md',
@@ -290,7 +290,7 @@ const PAGES = [
   },
   {
     file: 'reference-mcp.md', title: 'MCP 工具', group: '参考', blurb: '工具清单与接入', src: 'MCP.md',
-    desc: 'CheckQ MCP 服务（stdio、零依赖）的 20 个工具清单、参数说明与客户端接入方式。',
+    desc: 'CheckQ MCP 服务（stdio 与 HTTP /api/mcp）的 22 个工具清单、参数说明与客户端接入方式。',
   },
   {
     file: 'reference-agent.md', title: 'Agent 接入指南', group: '参考', blurb: '给外部 Agent 什么', src: 'AGENT-ACCESS.md',
@@ -559,11 +559,11 @@ CSP / X-Frame-Options / nosniff / Referrer-Policy；写操作校验 Origin 同�
 官方镜像来自 Docker Hub：
 
 \`\`\`bash
-docker pull zqs1qiwan/checkq:0.6.5
+docker pull zqs1qiwan/checkq:0.6.6
 docker run -d --name checkq --restart unless-stopped -p 8888:8888 \\
   -v /path/to/data:/data -e TZ=Asia/Shanghai \\
   -e PORT=8888 -e DATA_DIR=/data \\
-  zqs1qiwan/checkq:0.6.5
+  zqs1qiwan/checkq:0.6.6
 \`\`\`
 
 \`latest\` 跟随最新稳定版；升级前先备份 \`data/\`（含 \`.secret\`），再 \`docker pull\` 并重建容器。也可以从源码构建：\`docker compose up -d --build\`。

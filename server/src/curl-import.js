@@ -21,7 +21,7 @@ export function parseCurl(command) {
   const addHeader = (name, value) => {
     if (!name) return;
     const lower = name.toLowerCase();
-    if (lower === 'cookie' && bodies.length === 0) {
+    if (lower === 'cookie') {
       headers.push({ name: 'cookie', value, enabled: true });
     } else if (lower === 'authorization') {
       authHeader = value;
@@ -87,10 +87,12 @@ export function parseCurl(command) {
         // multipart 表单：转为 body 键值对（简化处理，不做真实 multipart）
         bodies.push({ raw: next() || '', form: true });
         break;
-      case t.startsWith('-'):
-        // 不认识的参数：带值则跳过其值
-        if (next() === undefined) { /* 无值参数 */ }
+      case t.startsWith('-'): {
+        // 不认识的参数：仅当下一 token 不是参数也不是 URL 时视为它的参数值并跳过
+        const peek = tokens[i + 1];
+        if (peek !== undefined && !peek.startsWith('-') && !/^https?:\/\//i.test(peek)) i++;
         break;
+      }
       default:
         // 位置参数 = URL
         if (!url) url = t;
@@ -99,22 +101,22 @@ export function parseCurl(command) {
   }
 
   if (!url) throw new Error('未找到 URL');
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(url) && !/^https?:\/\//i.test(url)) {
+    throw new Error('只支持 http/https URL');
+  }
   if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
 
   // -X 未指定时: 有 body → POST
   if (!method) method = bodies.length ? 'POST' : 'GET';
   method = method.toUpperCase();
 
+  const encodePair = (raw) => {
+    const idx = raw.indexOf('=');
+    return idx >= 0 ? `${raw.slice(0, idx)}=${encodeURIComponent(raw.slice(idx + 1))}` : encodeURIComponent(raw);
+  };
   let body = '';
   if (bodies.length) {
-    if (bodies[0].form) {
-      // multipart 简化: 拼成文本提示
-      body = bodies.map((b) => b.raw).join('&');
-    } else if (bodies[0].urlencode) {
-      body = bodies.map((b) => b.raw).join('&');
-    } else {
-      body = bodies.map((b) => b.raw).join('&');
-    }
+    body = bodies.map((b) => (b.urlencode ? encodePair(b.raw) : b.raw)).join('&');
   }
 
   // 自动补 content-type（有 body 且未显式声明时）

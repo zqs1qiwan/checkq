@@ -12,3 +12,8 @@ server/public
 docs/agent-notes
 *.local.json
 tools/private-terms.local.txt
+qa-verify
+wiki
+.github
+server/test
+migration

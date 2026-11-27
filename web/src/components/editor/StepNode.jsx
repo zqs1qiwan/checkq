@@ -47,4 +47,4 @@ function StepNode({ id, data, selected }) {
   );
 }
 
-export default StepNode;
+export default React.memo(StepNode);

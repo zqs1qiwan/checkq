@@ -15,9 +15,9 @@ import { fileURLToPath } from 'node:url';
 
 import { Store, hashPwd, verifyPwd } from './store.js';
 import { checkPassword, checkUsername, ROLES, PASSWORD_MIN, hashApiKey, newApiKey } from './auth.js';
-import { generateSecret, verifyTotp, generateRecoveryCodes, hashRecoveryCode, verifyRecoveryCode, otpauthUri } from './totp.js';
+import { generateSecret, verifyTotpStep, generateRecoveryCodes, hashRecoveryCode, verifyRecoveryCode, otpauthUri } from './totp.js';
 import { buildOpenApi } from './openapi.js';
-import { ipAllowed, isPrivateIp, normalizeIp } from './iprange.js';
+import { ipAllowed, isTrustedProxyPeer, normalizeIp } from './iprange.js';
 import { Engine, redactVars } from './engine.js';
 import { collectSecrets, hasAiInputCredentials, maskStoredRun, redactKnownValues, redactLogEntry, redactRunForExport, redactText } from './redact.js';
 import { collectDefinitionSecrets, hasDefinitionCredentials, maskSecrets } from './secret.js';
@@ -37,6 +37,7 @@ import { computeMetrics, bumpEvents, EVENT_NAMES } from './metrics.js';
 import { sendToChannels as sendChannelsCore, SUMMARY_CHANNEL_TYPES } from './notify.js';
 import { createLimiter } from './concurrency.js';
 import { parseIndex, resolveEntry, previewOf, fetchJson, MARKET_LIMITS } from './market.js';
+import { MCP_TOOLS, executeMcpTool } from './mcp-tools.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -124,7 +125,7 @@ export function buildServer({ dataDir, port }) {
     if (raw === '1' || raw.toLowerCase() === 'true') return true;
     if (raw === '0' || raw.toLowerCase() === 'false') return false;
     if (raw) return ipAllowed(peer, raw.split(/[\s,;]+/));
-    return isPrivateIp(peer);
+    return isTrustedProxyPeer(peer);
   }
 
   function clientIp(req) {
@@ -335,9 +336,10 @@ export function buildServer({ dataDir, port }) {
               }
             } catch { /* 探测状态写入失败不影响本次运行记录 */ }
           } else if (!run.cancelled && shouldAutoPause(trigger, run)) {
-            // 连续失败自动停用（只针对调度触发）：把任务停掉，避免错误状态一直刷
+            // 连续失败自动停用（只针对调度触发）：凭据失效或风控时不自动恢复探测
+            const skipRecovery = run.diagnosis?.rule === 'credential' || run.diagnosis?.rule === 'risk-control';
             try {
-              if (applyAutoPause({ store, scheduler, flowId: flow.id, reason: run.finalMessage })) {
+              if (applyAutoPause({ store, scheduler, flowId: flow.id, reason: run.finalMessage, skipRecovery })) {
                 run.paused = true;
                 run.finalMessage = `${run.finalMessage || '执行失败'}（已自动停用调度）`;
               }
@@ -653,14 +655,8 @@ export function buildServer({ dataDir, port }) {
   // Cookie 一键回填（统一浏览器登录的备用路径）：把 document.cookie POST 到这里写入任务变量。
   // 注意：会话 cookie 是 SameSite=Strict，跨站书签脚本不会携带 qsid，且同源校验会拦跨站 Origin；
   // 因此该端点只在同域调用下可用。跨域场景请用「打开登录页 → 自动抓 Cookie」或手动粘贴。
-  app.options('/api/cookie-capture', async (req, reply) => {
-    reply.header('Access-Control-Allow-Origin', '*');
-    reply.header('Access-Control-Allow-Methods', 'POST,OPTIONS');
-    reply.header('Access-Control-Allow-Headers', 'content-type');
-    return reply.code(204).send();
-  });
+  app.options('/api/cookie-capture', async (req, reply) => reply.code(204).send());
   app.post('/api/cookie-capture', async (req, reply) => {
-    reply.header('Access-Control-Allow-Origin', '*');
     const { flowId, cookie, varName } = req.body || {};
     if (!flowId || !cookie) return reply.code(400).send({ error: '缺少 flowId/cookie' });
     const f = store.getFlow(flowId);
@@ -692,6 +688,7 @@ export function buildServer({ dataDir, port }) {
     const { flowId, url } = req.body || {};
     const f = flowId ? store.getFlow(flowId) : null;
     if (f && !keyAllowsFlow(req, f)) return keyScopeDenied(reply);
+    if (!f && !keyHasFullFlowScope(req)) return keyScopeDenied(reply);
     if (!url || !/^https?:\/\//i.test(String(url))) return reply.code(400).send({ error: '缺少合法 url' });
     const userId = `checkq-${f?.id || 'anon'}`;
     try {
@@ -747,6 +744,7 @@ export function buildServer({ dataDir, port }) {
   app.addHook('onRequest', async (req, reply) => {
     if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return;
     if (CSRF_SAFE.has(req.url.split('?')[0])) return;
+    if (req.headers['x-api-key'] && !req.cookies?.qsid) return;
     const origin = req.headers.origin;
     if (!origin) return; // 非浏览器客户端（脚本/MCP/测试）不拦
     let host = '';
@@ -786,16 +784,25 @@ export function buildServer({ dataDir, port }) {
         }
         // 作用域：read=查看 / run=运行任务 / write=增删改配置 / secrets=读取明文凭据
         const scopes = Array.isArray(key.scopes) ? key.scopes : ['read', 'run', 'write'];
-        const need = ['GET', 'HEAD'].includes(req.method) ? 'read'
-          : ((/^\/api\/flows\/[^/]+\/run$/.test(path) || /^\/api\/runs\/[^/]+\/cancel$/.test(path)) ? 'run' : 'write');
-        if (!scopes.includes(need)) {
+        const isRun = /^\/api\/flows\/[^/]+\/run$/.test(path) || /^\/api\/runs\/[^/]+\/cancel$/.test(path);
+        const scopeOk = path === '/api/mcp'
+          ? scopes.length > 0
+          : ['GET', 'HEAD'].includes(req.method)
+            ? scopes.includes('read')
+            : path === '/api/flows/validate'
+              ? (scopes.includes('read') || scopes.includes('write'))
+              : path === '/api/flows/batch'
+                ? (scopes.includes('run') || scopes.includes('write'))
+                : isRun ? scopes.includes('run') : scopes.includes('write');
+        if (!scopeOk) {
+          const need = ['GET', 'HEAD'].includes(req.method) ? 'read' : (isRun ? 'run' : 'write');
           return reply.code(403).send({ error: `API Key 权限不足：需要 ${need}，当前仅 ${scopes.join('/') || '无'}` });
         }
         req.apiKey = key;
         req.apiKeyScopes = scopes;
-        // 任务范围：路径里出现 flow id 时先拦（/api/flows/batch 由处理器逐个校验）
+        // 任务范围：路径里出现 flow id 时先拦（/api/flows/batch 与 validate 由处理器处理）
         const fm = path.match(/^\/api\/flows\/([^/]+)(?:\/|$)/);
-        if (fm && fm[1] !== 'batch') {
+        if (fm && fm[1] !== 'batch' && fm[1] !== 'validate') {
           const target = store.getFlowRaw(fm[1]);
           if (target && !keyAllowsFlow(req, target)) return keyScopeDenied(reply);
         }
@@ -856,16 +863,17 @@ export function buildServer({ dataDir, port }) {
       return reply.code(code2).send({ error: msg });
     };
 
+    if (user && user.lockedUntil && user.lockedUntil > Date.now()) {
+      const mins = Math.ceil((user.lockedUntil - Date.now()) / 60000);
+      return reply.code(429).send({ error: `账号已锁定，请 ${mins} 分钟后重试` });
+    }
+
     // 用户不存在也要走一次 scrypt，避免用户名枚举（时序一致）
     const dummy = '00:' + crypto.createHash('sha256').update('dummy').digest('hex');
     const okPwd = verifyPwd(password || '', user ? user.passwordHash : dummy);
     if (!user || user.disabled || !okPwd) {
       store.audit('login.fail', `用户名=${name}`, '');
       return fail('用户名或密码错误');
-    }
-    if (user.lockedUntil && user.lockedUntil > Date.now()) {
-      const mins = Math.ceil((user.lockedUntil - Date.now()) / 60000);
-      return reply.code(429).send({ error: `账号已锁定，请 ${mins} 分钟后重试` });
     }
 
     // 两步验证
@@ -874,8 +882,13 @@ export function buildServer({ dataDir, port }) {
         return reply.code(401).send({ error: '需要两步验证码', needTotp: true });
       }
       const input = String(code).trim();
-      let ok2fa = verifyTotp(user.totp.secret, input);
-      if (!ok2fa) {
+      const matchedStep = verifyTotpStep(user.totp.secret, input, 1, user.totp.lastLoginStep ?? null);
+      let ok2fa = false;
+      if (matchedStep !== null) {
+        user.totp.lastLoginStep = matchedStep;
+        store.flush();
+        ok2fa = true;
+      } else {
         // 恢复码（一次性）
         const idx = (user.recoveryCodes || []).findIndex((h) => verifyRecoveryCode(input, h));
         if (idx >= 0) {
@@ -994,17 +1007,82 @@ export function buildServer({ dataDir, port }) {
     openapi: '/api/openapi.json',
     docs: 'docs/AGENT-ACCESS.md · docs/API.md',
     agentGuide: '/api/openapi.json',
+    mcp: '/api/mcp',
     endpoints: {
-      flows: ['GET /api/flows', 'GET /api/flows/:id', 'PUT /api/flows/:id', 'POST /api/flows/:id/run', 'GET /api/flows/:id/logs', 'POST /api/flows/batch'],
-      runs: ['GET /api/runs?flowId=', 'GET /api/runs/:id', 'POST /api/runs/:id/cancel'],
+      flows: ['GET /api/flows', 'POST /api/flows', 'POST /api/flows/validate', 'GET /api/flows/:id', 'PUT /api/flows/:id', 'PATCH /api/flows/:id/vars', 'DELETE /api/flows/:id', 'POST /api/flows/:id/run', 'GET /api/flows/:id/logs', 'POST /api/flows/batch'],
+      runs: ['GET /api/runs?flowId=', 'GET /api/runs/:id', 'POST /api/runs/:id/cancel', 'GET /api/runs/:id/har'],
       templates: ['GET /api/templates', 'GET /api/templates/:id', 'POST /api/templates/:id/instantiate'],
-      meta: ['GET /api/health', 'GET /api/me', 'GET /api/system/stats', 'GET /api/system/push-targets', 'GET /api/notifications'],
-      keys: ['GET /api/system/apikeys', 'POST /api/system/apikeys', 'DELETE /api/system/apikeys/:id'],
+      meta: ['GET /api/health', 'GET /api/me', 'GET /api/system/stats', 'GET /api/system/push-targets', 'GET /api/notifications', 'POST /api/mcp'],
+      keys: ['GET /api/system/apikeys', 'POST /api/system/apikeys', 'PUT /api/system/apikeys/:id', 'DELETE /api/system/apikeys/:id'],
     },
   }));
 
   // OpenAPI 3.1（机器可读，供 Agent 自动生成客户端）
   app.get('/api/openapi.json', async () => buildOpenApi());
+
+  // Streamable HTTP MCP (JSON-RPC 2.0) —— 沿用当前请求的 API Key / 会话作用域与 IP ACL
+  app.post('/api/mcp', async (req, reply) => {
+    const msg = req.body;
+    if (!msg || typeof msg !== 'object' || Array.isArray(msg)) {
+      return reply.code(400).send({ jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Invalid Request' } });
+    }
+    const hasId = Object.hasOwn(msg, 'id') && msg.id !== undefined && msg.id !== null;
+    const id = msg.id ?? null;
+    try {
+      if (msg.method === 'initialize') {
+        if (!hasId) return reply.code(204).send();
+        return {
+          jsonrpc: '2.0',
+          id,
+          result: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'checkq-mcp', version: VERSION } },
+        };
+      }
+      if (msg.method === 'notifications/initialized') {
+        return hasId ? { jsonrpc: '2.0', id, result: {} } : reply.code(204).send();
+      }
+      if (!hasId) return reply.code(204).send();
+      if (msg.method === 'ping') return { jsonrpc: '2.0', id, result: {} };
+      if (msg.method === 'tools/list') return { jsonrpc: '2.0', id, result: { tools: MCP_TOOLS } };
+      if (msg.method === 'tools/call') {
+        const callApi = async (method, url, body) => {
+          const headers = {};
+          if (req.headers.cookie) headers.cookie = req.headers.cookie;
+          if (req.headers['x-api-key']) headers['x-api-key'] = req.headers['x-api-key'];
+          if (req.headers['x-forwarded-for']) headers['x-forwarded-for'] = req.headers['x-forwarded-for'];
+          if (body !== undefined) headers['content-type'] = 'application/json';
+          const res = await app.inject({
+            method,
+            url,
+            headers,
+            ...(body !== undefined ? { payload: body } : {}),
+          });
+          let data;
+          try { data = res.json(); } catch { data = res.body; }
+          if (res.statusCode >= 400) {
+            throw new Error((data && data.error) || `HTTP ${res.statusCode}`);
+          }
+          return data;
+        };
+        try {
+          const res = await executeMcpTool(msg.params?.name, msg.params?.arguments, callApi);
+          return {
+            jsonrpc: '2.0',
+            id,
+            result: { content: [{ type: 'text', text: JSON.stringify(res, null, 2) }] },
+          };
+        } catch (err) {
+          return {
+            jsonrpc: '2.0',
+            id,
+            result: { content: [{ type: 'text', text: err.message }], isError: true },
+          };
+        }
+      }
+      return { jsonrpc: '2.0', id, error: { code: -32601, message: 'Method not found' } };
+    } catch (err) {
+      return { jsonrpc: '2.0', id, error: { code: -32000, message: err.message } };
+    }
+  });
 
   // 首次启动：还没有任何账号时，引导创建管理员（用户名 + 密码）
   app.get('/api/system/bootstrap', async () => ({
@@ -1041,13 +1119,32 @@ export function buildServer({ dataDir, port }) {
     return { ok: true, secret, uri: otpauthUri({ secret, account: me.username }), digits: 6, period: 30 };
   });
 
+  const twoFaFails = new Map();
+  const twoFaLocked = (uid) => {
+    const rec = twoFaFails.get(uid);
+    if (!rec) return false;
+    if (Date.now() - rec.firstAt > LOGIN_FAIL_WINDOW) { twoFaFails.delete(uid); return false; }
+    return rec.count >= LOGIN_FAIL_LIMIT;
+  };
+  const noteTwoFaFail = (uid) => {
+    const now = Date.now();
+    const rec = twoFaFails.get(uid);
+    if (!rec || now - rec.firstAt > LOGIN_FAIL_WINDOW) twoFaFails.set(uid, { count: 1, firstAt: now });
+    else rec.count++;
+  };
+
   // 2) 确认绑定：校验一次验证码 → 启用 + 生成恢复码（明文只返回这一次）
   app.post('/api/system/2fa/confirm', async (req, reply) => {
     const me = req.user;
     if (!me) return reply.code(401).send({ error: '未登录' });
+    if (twoFaLocked(me.id)) return reply.code(429).send({ error: '验证失败次数过多，请 10 分钟后再试' });
     const { code } = req.body || {};
     if (!me.totp?.secret) return reply.code(400).send({ error: '尚未开始绑定' });
-    if (!verifyTotp(me.totp.secret, code)) return reply.code(400).send({ error: '验证码错误' });
+    if (verifyTotpStep(me.totp.secret, code, 1) === null) {
+      noteTwoFaFail(me.id);
+      return reply.code(400).send({ error: '验证码错误' });
+    }
+    twoFaFails.delete(me.id);
     const codes = generateRecoveryCodes(10);
     me.totp = { ...me.totp, enabled: true, confirmedAt: Date.now() };
     me.recoveryCodes = codes.map(hashRecoveryCode);
@@ -1060,10 +1157,12 @@ export function buildServer({ dataDir, port }) {
   app.post('/api/system/2fa/disable', async (req, reply) => {
     const me = req.user;
     if (!me) return reply.code(401).send({ error: '未登录' });
+    if (twoFaLocked(me.id)) return reply.code(429).send({ error: '验证失败次数过多，请 10 分钟后再试' });
     const { password, code } = req.body || {};
-    if (!verifyPwd(password || '', me.passwordHash)) return reply.code(401).send({ error: '密码不正确' });
+    if (!verifyPwd(password || '', me.passwordHash)) { noteTwoFaFail(me.id); return reply.code(401).send({ error: '密码不正确' }); }
     if (!me.totp?.enabled) return reply.code(400).send({ error: '未启用两步验证' });
-    if (!verifyTotp(me.totp.secret, code)) return reply.code(400).send({ error: '验证码错误' });
+    if (verifyTotpStep(me.totp.secret, code, 1) === null) { noteTwoFaFail(me.id); return reply.code(400).send({ error: '验证码错误' }); }
+    twoFaFails.delete(me.id);
     me.totp = null;
     me.recoveryCodes = [];
     store.flush();
@@ -1075,10 +1174,12 @@ export function buildServer({ dataDir, port }) {
   app.post('/api/system/2fa/recovery-codes', async (req, reply) => {
     const me = req.user;
     if (!me) return reply.code(401).send({ error: '未登录' });
+    if (twoFaLocked(me.id)) return reply.code(429).send({ error: '验证失败次数过多，请 10 分钟后再试' });
     const { password, code } = req.body || {};
-    if (!verifyPwd(password || '', me.passwordHash)) return reply.code(401).send({ error: '密码不正确' });
+    if (!verifyPwd(password || '', me.passwordHash)) { noteTwoFaFail(me.id); return reply.code(401).send({ error: '密码不正确' }); }
     if (!me.totp?.enabled) return reply.code(400).send({ error: '未启用两步验证' });
-    if (!verifyTotp(me.totp.secret, code)) return reply.code(400).send({ error: '验证码错误' });
+    if (verifyTotpStep(me.totp.secret, code, 1) === null) { noteTwoFaFail(me.id); return reply.code(400).send({ error: '验证码错误' }); }
+    twoFaFails.delete(me.id);
     const codes = generateRecoveryCodes(10);
     me.recoveryCodes = codes.map(hashRecoveryCode);
     store.flush();
@@ -1363,7 +1464,7 @@ export function buildServer({ dataDir, port }) {
   const AI_MAXTOKENS_DEFAULT = 1024;
   const AI_MAX_NODES = 6;
   const AI_MAX_EDGES = 8;
-  const AI_NODE_TYPES = new Set(['http', 'log', 'set', 'delay']);
+  const AI_NODE_TYPES = new Set(['http', 'log', 'set', 'delay', 'extract', 'condition', 'random-delay']);
   const AI_BAD_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
   const AI_RATE_LIMIT = 30;             // 每账号/Key 每分钟最多 30 次 AI 调用（generate + test）
   const AI_RATE_WINDOW = 60e3;
@@ -1399,7 +1500,7 @@ export function buildServer({ dataDir, port }) {
     s = s.replace(/sk-[A-Za-z0-9._\-]{6,}/g, 'sk-***');
     return s.slice(0, 300);
   };
-  /** baseUrl 归一化：只接受 http(s)，去尾部 /，兼容用户填 .../v1 或 .../v1/chat/completions */
+  /** baseUrl 归一化：只接受 http(s)，去尾部 /，兼容 .../v1/chat/completions 并保留查询参数（如 Azure api-version） */
   const normalizeAiBaseUrl = (raw) => {
     const s = String(raw || '').trim();
     if (!s) return { url: '' };
@@ -1407,12 +1508,19 @@ export function buildServer({ dataDir, port }) {
     try { u = new URL(s); } catch { return { error: 'Base URL 不是合法地址（例：https://api.deepseek.com/v1）' }; }
     if (u.protocol !== 'http:' && u.protocol !== 'https:') return { error: 'Base URL 只支持 http(s)' };
     if (u.username || u.password) return { error: 'Base URL 不能包含账号密码' };
-    u.search = '';
     u.hash = '';
-    let url = u.toString().replace(/\/+$/, '');
-    if (/\/chat\/completions$/i.test(url)) url = url.replace(/\/chat\/completions$/i, '');
-    return { url };
+    const cleanPath = u.pathname.replace(/\/+$/, '').replace(/\/chat\/completions$/i, '');
+    return { url: `${u.origin}${cleanPath}${u.search}` };
   };
+  const extractAiContent = (msg) => {
+    const c = msg?.content;
+    if (typeof c === 'string') return c;
+    if (Array.isArray(c)) {
+      return c.map((p) => (typeof p === 'string' ? p : String(p?.text || p?.content || ''))).join('');
+    }
+    return '';
+  };
+  const stripAiThink = (s) => String(s || '').replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
   class AiError extends Error {
     constructor(message, status = 502) { super(message); this.status = status; }
   }
@@ -1438,7 +1546,9 @@ export function buildServer({ dataDir, port }) {
   };
   /** 调 OpenAI 兼容 /chat/completions：统一超时、中文错误与 Key 脱敏 */
   const aiChat = async (cfg, { messages, maxTokens, timeoutMs, temperature = 0.2 }) => {
-    const url = cfg.baseUrl.replace(/\/+$/, '') + '/chat/completions';
+    const u = new URL(cfg.baseUrl);
+    u.pathname = u.pathname.replace(/\/+$/, '') + '/chat/completions';
+    const url = u.toString();
     const started = Date.now();
     let r;
     try {
@@ -1488,6 +1598,20 @@ export function buildServer({ dataDir, port }) {
     rec.count++;
     return rec.count > AI_RATE_LIMIT;
   };
+  const aiKeyValues = (key) => new Set([...collectSecrets({ apiKey: key }), key]);
+  const containsAiSecret = (value, secrets) => {
+    if (typeof value === 'string') return redactKnownValues(value, secrets) !== value;
+    return value !== null && typeof value === 'object' && Object.entries(value)
+      .some(([name, item]) => redactKnownValues(name, secrets) !== name || containsAiSecret(item, secrets));
+  };
+  const aiUsage = (usage) => {
+    const counts = {};
+    for (const field of ['prompt_tokens', 'completion_tokens', 'total_tokens']) {
+      const count = usage?.[field];
+      if (Number.isSafeInteger(count) && count >= 0) counts[field] = count;
+    }
+    return Object.keys(counts).length ? counts : null;
+  };
   /** 去掉危险键（防原型污染）并限制深度/数组长度 */
   const sanitizeAiJson = (value, depth = 0) => {
     if (value === null || typeof value !== 'object') return value;
@@ -1534,10 +1658,12 @@ export function buildServer({ dataDir, port }) {
       if (!ids.has(source) || !ids.has(target) || source === target) continue;
       const type = byId.get(source)?.type;
       const handleRaw = String(e.sourceHandle || '').slice(0, 20);
-      // http 只有 success/failed 两个出口；其余节点统一 next（与 FlowEditor 默认出口一致）
+      // http 只有 success/failed、condition 有 true/false；其余节点统一 next（与 FlowEditor 默认出口一致）
       const sourceHandle = type === 'http'
         ? (['success', 'failed'].includes(handleRaw) ? handleRaw : 'success')
-        : 'next';
+        : type === 'condition'
+          ? (['true', 'false'].includes(handleRaw) ? handleRaw : 'true')
+          : 'next';
       const key = `${source}|${sourceHandle}|${target}`;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -1633,15 +1759,28 @@ export function buildServer({ dataDir, port }) {
     const override = Number((req.body || {}).timeoutSec);
     const timeoutSec = Number.isFinite(override) && override > 0 ? Math.min(120, Math.max(1, Math.round(override))) : cfg.timeoutSec;
     try {
-      const { data, latencyMs } = await aiChat(cfg, {
+      let { data, latencyMs } = await aiChat(cfg, {
         messages: [{ role: 'user', content: '只回复 ok' }],
         maxTokens: 16,
         timeoutMs: timeoutSec * 1000,
         temperature: 0,
       });
-      const sample = String(data.choices?.[0]?.message?.content || '').trim().slice(0, 120);
+      let content = stripAiThink(extractAiContent(data.choices?.[0]?.message));
+      if (!content && data.choices?.[0]?.finish_reason === 'length') {
+        const retry = await aiChat(cfg, {
+          messages: [{ role: 'user', content: '只回复 ok' }],
+          maxTokens: 128,
+          timeoutMs: timeoutSec * 1000,
+          temperature: 0,
+        });
+        data = retry.data;
+        latencyMs += retry.latencyMs;
+        content = stripAiThink(extractAiContent(data.choices?.[0]?.message));
+      }
+      if (!content) throw new AiError('LLM 返回空内容（可能模型不支持或 token 上限过低）', 502);
+      const sample = redactText(content, aiKeyValues(cfg.apiKey)).slice(0, 120);
       store.audit('ai.test', `模型=${cfg.model} 结果=ok 耗时=${latencyMs}ms`, aiActor(req));
-      return { ok: true, latencyMs, model: cfg.model, sample, usage: data.usage || null };
+      return { ok: true, latencyMs, model: cfg.model, sample, usage: aiUsage(data.usage) };
     } catch (e) {
       const msg = aiSafeText(e?.message || e, cfg.apiKey);
       store.audit('ai.test', `模型=${cfg.model} 结果=fail 原因=${msg.slice(0, 160)}`, aiActor(req));
@@ -1669,7 +1808,7 @@ export function buildServer({ dataDir, port }) {
     }
     const sys = 'You generate CheckQ automation flow JSON. Output ONLY compact JSON, no markdown fences. Shape: '
       + '{"name":"<short task name>","cron":"<5-field cron e.g. 0 8 * * *>","nodes":[{"id":"n0","type":"http","name":"<short>","x":80,"y":60,"config":{"method":"GET","url":"<absolute https url from user text>","headers":[{"name":"user-agent","value":"Mozilla/5.0","enabled":true}],"body":"","asserts":[]}},{"id":"n1","type":"log","name":"记录结果","x":360,"y":60,"config":{"text":"完成：{{last.status}}"}}],"edges":[{"id":"e0","source":"n0","sourceHandle":"success","target":"n1"}]} '
-      + 'Rules: only node types http,log,set,delay; first node must be http with a real absolute url from the user text; node ids must be unique; edges may only reference existing node ids (sourceHandle success/failed for http, next for others); cron must be a 5-field cron or empty string; if user says 看到X算成功 set asserts:[{"res":["X"],"from":"content"}]; <=5 nodes; JSON only.';
+      + 'Rules: only node types http,log,set,delay,extract,condition,random-delay; first node must be http with a real absolute url from the user text; node ids must be unique; edges may only reference existing node ids (sourceHandle success/failed for http, true/false for condition, next for others); cron must be a 5-field cron or empty string; if user says 看到X算成功 set asserts:[{"res":["X"],"from":"content"}]; <=5 nodes; JSON only.';
     try {
       const { data } = await aiChat(cfg, {
         messages: [{ role: 'system', content: sys }, { role: 'user', content: sentence }],
@@ -1677,7 +1816,7 @@ export function buildServer({ dataDir, port }) {
         timeoutMs: cfg.timeoutSec * 1000,
         temperature: 0.2,
       });
-      let text = String(data.choices?.[0]?.message?.content || '');
+      let text = stripAiThink(extractAiContent(data.choices?.[0]?.message));
       text = text.replace(/^```(json)?/i, '').replace(/```\s*$/, '').trim();
       const start = text.indexOf('{');
       const end = text.lastIndexOf('}');
@@ -1689,6 +1828,9 @@ export function buildServer({ dataDir, port }) {
         throw new AiError('LLM 返回的 JSON 无法解析', 502);
       }
       const clean = sanitizeAiJson(parsed);
+      if (containsAiSecret(clean, [...knownSecrets, ...aiKeyValues(cfg.apiKey)])) {
+        throw new AiError('LLM 草稿包含疑似凭据，已拒绝生成', 502);
+      }
       if (!clean || !Array.isArray(clean.nodes) || !clean.nodes.length) throw new AiError('LLM JSON 缺少 nodes', 502);
       const { nodes, edges } = normalizeAiDraft(clean);
       if (!nodes.length) throw new AiError('LLM JSON 缺少 nodes', 502);
@@ -2056,6 +2198,37 @@ export function buildServer({ dataDir, port }) {
     return { ...visibleDefinition(req, f), template: store.templateInfo(f, undefined, !keyHasScope(req, 'secrets')), detached };
   });
 
+  app.post('/api/flows/validate', async (req) => {
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const errors = validateFlow({ name: body.name || '未命名流程', ...body }, { allowEmptyDraft: body.allowEmptyDraft === true });
+    return { ok: errors.length === 0, errors };
+  });
+
+  app.patch('/api/flows/:id/vars', async (req, reply) => {
+    const f = store.getFlow(req.params.id);
+    if (!f) return reply.code(404).send({ error: 'not found' });
+    const body = req.body || {};
+    const raw = body.vars && typeof body.vars === 'object' && !Array.isArray(body.vars)
+      ? body.vars
+      : (typeof body === 'object' && !Array.isArray(body) && !Object.hasOwn(body, 'vars') ? body : null);
+    if (!raw) return reply.code(400).send({ error: '缺少 vars 对象' });
+    const BAD = new Set(['__proto__', 'constructor', 'prototype']);
+    const nextVars = { ...(f.vars || {}) };
+    const updatedKeys = [];
+    for (const [k, v] of Object.entries(raw)) {
+      if (!k || BAD.has(k)) continue;
+      if (v === null) {
+        delete nextVars[k];
+        updatedKeys.push(k);
+      } else if (v !== undefined) {
+        nextVars[k] = typeof v === 'object' ? JSON.stringify(v) : String(v);
+        updatedKeys.push(k);
+      }
+    }
+    const updated = store.updateFlow(f.id, { vars: nextVars });
+    return { ok: true, id: updated.id, varsCount: Object.keys(updated.vars || {}).length, updatedKeys };
+  });
+
   app.delete('/api/flows/:id', async (req, reply) => {
     const ok = store.deleteFlow(req.params.id);
     scheduler.rebuild();
@@ -2073,10 +2246,28 @@ export function buildServer({ dataDir, port }) {
       return { ok: true, deduped: true, queued: true, flowId: f.id, message: '已在运行，本次未重复提交' };
     }
     const claimed = body.dedupe === true;
+    const maskCredentials = !keyHasScope(req, 'secrets');
+    const secrets = maskCredentials ? collectDefinitionSecrets(f) : [];
+    const visibleRun = (run) => maskCredentials ? maskStoredRun(run, secrets) : run;
+    if (body.wait === false && !stream) {
+      let queued;
+      const execution = runner.runFlow(f, debugStopId ? 'debug' : 'manual', {
+        debugStopId, debug: body.debug === true, timeoutMs: body.timeoutMs,
+        onQueued: (run) => { queued = run; },
+      });
+      if (!queued) {
+        try {
+          return visibleRun(await execution);
+        } finally {
+          if (claimed) runner.releaseManual(f.id);
+        }
+      }
+      execution
+        .catch((error) => app.log.error({ err: error, runId: queued.id }, 'Background run failed'))
+        .finally(() => { if (claimed) runner.releaseManual(f.id); });
+      return reply.code(202).send({ ok: true, id: queued.id, runId: queued.id, flowId: f.id, status: 'queued' });
+    }
     try {
-      const maskCredentials = !keyHasScope(req, 'secrets');
-      const secrets = maskCredentials ? collectDefinitionSecrets(f) : [];
-      const visibleRun = (run) => maskCredentials ? maskStoredRun(run, secrets) : run;
       // SSE 模式（PRD §4.7.3 实时推送）：边执行边推送日志，结束事件携带完整 run
       if (stream) {
         reply.raw.writeHead(200, {
@@ -2183,8 +2374,19 @@ export function buildServer({ dataDir, port }) {
   });
 
   // 站内通知（inbox 渠道）：列表 / 已读 / 清空
-  app.get('/api/notifications', async (req) => store.listNotifications((req.query || {}).limit));
+  app.get('/api/notifications', async (req) => {
+    const limit = (req.query || {}).limit;
+    if (keyHasFullFlowScope(req)) return store.listNotifications(limit);
+    const allowed = store.notifications.filter((n) => n.flowId && keyAllowsFlow(req, store.getFlowRaw(n.flowId)));
+    const lim = Math.max(1, Math.min(200, Number(limit) || 50));
+    return {
+      items: allowed.slice(0, lim),
+      unread: allowed.filter((n) => !n.read).length,
+      total: allowed.length,
+    };
+  });
   app.post('/api/notifications/read', async (req, reply) => {
+    if (!keyHasFullFlowScope(req)) return keyScopeDenied(reply, '受限 API Key 不能修改全局通知状态');
     const body = req.body === undefined ? {} : req.body;
     if (!body || typeof body !== 'object' || Array.isArray(body)) {
       return reply.code(400).send({ error: '请求体必须是 JSON 对象' });
@@ -2200,7 +2402,10 @@ export function buildServer({ dataDir, port }) {
       return reply.code(500).send({ error: '无法保存通知状态，请重试' });
     }
   });
-  app.delete('/api/notifications', async () => ({ ok: true, cleared: store.clearNotifications() }));
+  app.delete('/api/notifications', async (req, reply) => {
+    if (!keyHasFullFlowScope(req)) return keyScopeDenied(reply, '受限 API Key 不能清空全局通知');
+    return { ok: true, cleared: store.clearNotifications() };
+  });
 
   app.get('/api/system/daily-summary-config', async () => {
     const cfg = store.meta.dailySummary || {};
@@ -2242,13 +2447,13 @@ export function buildServer({ dataDir, port }) {
     if (!url || !/^https?:\/\//i.test(String(url))) return reply.code(400).send({ error: '缺少合法 url' });
     let data;
     try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
-      if (!res.ok) return reply.code(502).send({ error: `拉取失败 HTTP ${res.status}` });
-      data = await res.json();
+      data = await fetchJson(String(url), { maxBytes: MARKET_LIMITS.templateBytes, timeoutMs: 10000 });
     } catch (e) {
-      return reply.code(502).send({ error: `拉取失败: ${e.message}` });
+      return reply.code(502).send({ error: e.message });
     }
     if (!data?.name || !Array.isArray(data.nodes)) return reply.code(400).send({ error: '索引 JSON 不合法（需 name + nodes[]）' });
+    const errs = validateFlow({ name: data.name, nodes: data.nodes, edges: data.edges || [], vars: data.vars || {} });
+    if (errs.length) return reply.code(400).send({ error: errs.join('; ') });
     const tpl = store.createTemplate({ name: data.name, desc: data.desc || `来自 ${url}`, vars: data.vars || {}, varNames: data.varNames, nodes: data.nodes, edges: data.edges || [], log: data.log || null }, 'market');
     return { id: tpl.id, name: tpl.name };
   });
@@ -2262,6 +2467,10 @@ export function buildServer({ dataDir, port }) {
     const group = String((req.body || {}).group || '').trim().replace(/\s+/g, ' ').slice(0, 40);
     if (ids.length > 200) return reply.code(400).send({ error: '单次最多 200 个' });
     if (req.apiKey && !req.legacyApiKey) {
+      const needScope = action === 'run' ? 'run' : 'write';
+      if (!keyHasScope(req, needScope)) {
+        return reply.code(403).send({ error: `API Key 权限不足：需要 ${needScope}` });
+      }
       if (action === 'set-group' && !keyHasFullFlowScope(req)) {
         return keyScopeDenied(reply, '受限 API Key 不能修改任务分组');
       }
@@ -2304,7 +2513,8 @@ export function buildServer({ dataDir, port }) {
 
   // 备份/恢复：导出 flows/runs/templates（meta 密码不导出）；恢复以新 ID 导入避免覆盖
   // 备份（默认脱敏：cookie/token/密码等一律清空，适合分享与存档）
-  app.get('/api/system/backup', async () => {
+  app.get('/api/system/backup', async (req, reply) => {
+    if (!keyHasFullFlowScope(req)) return keyScopeDenied(reply, '受限 API Key 不能导出全量备份');
     const secretsByFlow = new Map(store.flows.map((f) => [f.id, collectDefinitionSecrets(store.resolveFlow(f))]));
     return {
       version: VERSION,
@@ -2340,32 +2550,37 @@ export function buildServer({ dataDir, port }) {
   // 恢复只重建 flows/templates（默认停用、新 ID）：runs 是历史运行记录，
   // 导出来仅供离线审计，导入会把旧 startedAt / flowId 混进新任务的今日统计。
   app.post('/api/system/restore', async (req, reply) => {
+    if (!keyHasFullFlowScope(req)) return keyScopeDenied(reply, '受限 API Key 不能恢复全量备份');
     const b = req.body || {};
     if (!Array.isArray(b.flows)) return reply.code(400).send({ error: '备份文件无效：缺少 flows 数组' });
     const createdFlows = [];
-    for (const f of b.flows) {
-      if (!f?.name) continue;
-      const nf = store.createFlow({
-        name: `${f.name}（恢复）`,
-        note: f.note || '从备份恢复',
-        group: f.group,
-        cron: f.cron || '', timezone: f.timezone, jitterMinutes: f.jitterMinutes || 0,
-        vars: f.vars || {}, nodes: f.nodes || [], edges: f.edges || [],
-        notify: f.notify || {}, log: f.log || null, tplId: null,
-        retry: f.retry,
-        recovery: f.recovery ? { enabled: f.recovery.enabled, intervalMinutes: f.recovery.intervalMinutes, maxAttempts: f.recovery.maxAttempts } : undefined,
-      });
-      nf.enabled = false;
-      createdFlows.push({ id: nf.id, name: nf.name });
-    }
     const createdTemplates = [];
-    if (Array.isArray(b.templates)) {
-      for (const t of b.templates) {
-        if (!t?.name) continue;
-        const nt = store.createTemplate({ name: `${t.name}（恢复）`, desc: t.desc, vars: t.vars || {}, varNames: t.varNames, nodes: t.nodes || [], edges: t.edges || [], log: t.log || null, notify: t.notify || {} });
-        createdTemplates.push({ id: nt.id, name: nt.name });
+    store.batch(() => {
+      for (const f of b.flows) {
+        if (!f?.name) continue;
+        if (validateFlow({ name: f.name, nodes: f.nodes || [], edges: f.edges || [] }, { allowEmptyDraft: true }).length) continue;
+        const nf = store.createFlow({
+          name: `${f.name}（恢复）`,
+          note: f.note || '从备份恢复',
+          group: f.group,
+          cron: f.cron || '', timezone: f.timezone, jitterMinutes: f.jitterMinutes || 0,
+          vars: f.vars || {}, nodes: f.nodes || [], edges: f.edges || [],
+          notify: f.notify || {}, log: f.log || null, tplId: null,
+          retry: f.retry,
+          recovery: f.recovery ? { enabled: f.recovery.enabled, intervalMinutes: f.recovery.intervalMinutes, maxAttempts: f.recovery.maxAttempts } : undefined,
+        });
+        nf.enabled = false;
+        createdFlows.push({ id: nf.id, name: nf.name });
       }
-    }
+      if (Array.isArray(b.templates)) {
+        for (const t of b.templates) {
+          if (!t?.name) continue;
+          if (validateFlow({ name: t.name, nodes: t.nodes || [], edges: t.edges || [] }, { allowEmptyDraft: true }).length) continue;
+          const nt = store.createTemplate({ name: `${t.name}（恢复）`, desc: t.desc, vars: t.vars || {}, varNames: t.varNames, nodes: t.nodes || [], edges: t.edges || [], log: t.log || null, notify: t.notify || {} });
+          createdTemplates.push({ id: nt.id, name: nt.name });
+        }
+      }
+    });
     scheduler.rebuild();
     return { createdFlows, createdTemplates, channelsIgnored: true };
   });
@@ -2555,12 +2770,18 @@ export function buildServer({ dataDir, port }) {
   });
 
   // ---- 度量（P0-6）：只算本机数据，不外传 ----
-  app.get('/api/system/metrics', async (req) => computeMetrics({
-    flows: store.flows,
-    runs: store.runs,
-    templates: store.templates,
-    days: Number((req.query || {}).days) || 7,
-  }));
+  app.get('/api/system/metrics', async (req) => {
+    const full = keyHasFullFlowScope(req);
+    const flows = full ? store.flows : store.flows.filter((flow) => keyAllowsFlow(req, flow));
+    const allowedIds = full ? null : new Set(flows.map((f) => f.id));
+    const runs = full ? store.runs : store.runs.filter((r) => allowedIds.has(r.flowId));
+    return computeMetrics({
+      flows,
+      runs,
+      templates: store.templates,
+      days: Number((req.query || {}).days) || 7,
+    });
+  });
 
   // 界面本地事件（白名单、只落 meta、不随备份导出）
   app.get('/api/system/events', async () => ({ events: store.meta.events || {} }));

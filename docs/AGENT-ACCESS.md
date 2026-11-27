@@ -8,10 +8,10 @@
 
 ## 1. 两种接入方式对比
 
-| | **MCP（stdio）** | **REST API** |
+| | **MCP（stdio / HTTP `/api/mcp`）** | **REST API** |
 |---|---|---|
 | 适合 | Claude Desktop / Cursor / OpenCode 等支持 MCP 的 Agent | 任意能发 HTTP 的脚本 / Agent 框架 |
-| 交接物 | 基址 + API Key（2 个环境变量） | 基址 + API Key（1 个请求头） |
+| 交接物 | 基址 + API Key（本地 `checkq-mcp.cjs` 或直接连 `/api/mcp`） | 基址 + API Key（1 个请求头） |
 | 语义 | 现成工具（跑签到/换 cookie/看日志…） | 需自己拼 REST 路径 |
 | 依赖 | Node 18+（本仓库 `mcp/checkq-mcp.cjs`，零依赖） | 无 |
 | 建议 | **首选** | 需要精细控制时用 |
@@ -83,7 +83,7 @@ curl -H "x-api-key: cq_xxxx" http://checkq.local:18888/api/flows
 
 ---
 
-## 3. Agent 能做什么（MCP 工具清单，20 个）
+## 3. Agent 能做什么（MCP 工具清单，22 个）
 
 | 工具 | 作用 | 需要权限 |
 |---|---|---|
@@ -93,12 +93,14 @@ curl -H "x-api-key: cq_xxxx" http://checkq.local:18888/api/flows
 | `notifications_list` | 站内通知（含未读） | 只读 |
 | `flows_list` | 列出所有任务（含 cron/enabled/nextRunAt/上次结果） | 只读 |
 | `flow_get` | 任务完整定义（nodes/vars/log/notify） | 只读 |
+| `flow_validate` | 静态校验流程定义（不落库） | 只读 |
 | `flow_logs` | **连续日志流**（多次运行的人话日志，最像 qinglong 面板） | 只读 |
 | `runs_list` / `run_get` | 历史运行记录 / 某次运行详情 | 只读 |
 | `templates_list` / `template_get` | 模板列表 / 模板详情（变量名与默认值） | 只读 |
-| **`flow_run`** | **立即跑一次签到**，返回状态+摘要+人话日志 | 可运行 |
-| `flow_update_vars` | **换 cookie / token / ua**（其余字段保留） | 可修改 |
-| `flow_update` | 改 name/cron/timezone/jitter/enabled/note | 可修改 |
+| **`flow_run`** | **立即跑一次签到**（支持 `wait=false` 异步与 `debug`），返回状态+摘要+人话日志 | 可运行 |
+| `run_cancel` | 取消排队中或运行中的一次运行 | 可运行 |
+| `flow_update_vars` | **安全合并变量**（换 cookie / token / ua，传 `null` 删除，不回显密钥） | 可修改 |
+| `flow_update` | 改 name/cron/timezone/jitter/enabled/note/group | 可修改 |
 | `flow_toggle` | 启用/停用定时调度 | 可修改 |
 | `flow_create` | 新建任务（可从模板克隆） | 可修改 |
 | `flow_delete` | 删除任务（不可恢复，建议只给 trusted Agent） | 可修改（高风险） |

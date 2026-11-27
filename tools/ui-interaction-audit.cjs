@@ -315,5 +315,5 @@ const VIEWPORTS = [
   for (const f of findings) console.log(`[${f.where}] ${f.msg}`);
   console.log('console errors:', JSON.stringify(page.consoleErrors.slice(0, 10)));
   await page.close(); cdp.close(); proc.kill();
-  process.exit(0);
+  process.exit(findings.length ? 1 : 0);
 })().catch((e) => { console.error('ERR', e); process.exit(1); });

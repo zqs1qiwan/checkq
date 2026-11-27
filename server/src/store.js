@@ -19,7 +19,7 @@ import { normalizeRecovery, nextProbeTime } from './recovery.js';
 function stable(v) {
   if (v === null || typeof v !== 'object') return JSON.stringify(v ?? null);
   if (Array.isArray(v)) return `[${v.map(stable).join(',')}]`;
-  const keys = Object.keys(v).sort();
+  const keys = Object.keys(v).filter((k) => v[k] !== undefined).sort();
   return `{${keys.map((k) => `${JSON.stringify(k)}:${stable(v[k])}`).join(',')}}`;
 }
 
@@ -75,6 +75,9 @@ const RUNS_PER_FLOW = 500;
 
 export class Store {
   #runRetentionChecked = false;
+  #batchDepth = 0;
+  #dirty = new Set();
+  #metaTimer = null;
 
   constructor(dataDir) {
     this.dir = dataDir;
@@ -166,6 +169,15 @@ export class Store {
       this.#save(this.metaFile, encryptMeta(this.secretKey, this.meta));
     }
     this.#reconcileInterruptedRuns();
+    for (const [kind, file] of [
+      ['flows', this.flowsFile],
+      ['templates', this.templatesFile],
+      ['channels', this.channelsFile],
+      ['runs', this.runsFile],
+      ['notifications', this.notificationsFile],
+    ]) {
+      if (!fs.existsSync(file)) this.#writeKind(kind);
+    }
   }
 
   #reconcileInterruptedRuns() {
@@ -265,7 +277,7 @@ export class Store {
 
   setSystemChannels(list) {
     this.channels = { version: 1, system: this.#normalizeChannels(list) };
-    this.flush();
+    this.flushChannels();
     return this.getSystemChannels();
   }
 
@@ -273,8 +285,66 @@ export class Store {
     return maskChannels(this.channels.system);
   }
 
+  #writeKind(kind) {
+    try {
+      if (kind === 'flows') this.#save(this.flowsFile, this.flows.map((flow) => encryptSecrets(this.secretKey, flow)));
+      else if (kind === 'runs') this.#save(this.runsFile, this.runs);
+      else if (kind === 'templates') this.#save(this.templatesFile, this.templates.map((template) => encryptSecrets(this.secretKey, template)));
+      else if (kind === 'notifications') this.#save(this.notificationsFile, this.notifications);
+      else if (kind === 'channels') this.#save(this.channelsFile, { version: 1, system: encryptChannels(this.secretKey, this.channels.system) });
+      else if (kind === 'meta') {
+        if (this.#metaTimer) { clearTimeout(this.#metaTimer); this.#metaTimer = null; }
+        this.#save(this.metaFile, encryptMeta(this.secretKey, this.meta));
+      }
+    } catch (err) {
+      console.error(`[CheckQ] flush ${kind} failed:`, err.message);
+    }
+  }
+
+  #flushTarget(kind) {
+    if (this.#batchDepth > 0) {
+      this.#dirty.add(kind);
+      return;
+    }
+    this.#writeKind(kind);
+  }
+
+  #scheduleMetaFlush() {
+    if (this.#batchDepth > 0) { this.#dirty.add('meta'); return; }
+    if (this.#metaTimer) return;
+    this.#metaTimer = setTimeout(() => {
+      this.#metaTimer = null;
+      this.#writeKind('meta');
+    }, 2000);
+    this.#metaTimer.unref?.();
+  }
+
+  batch(fn) {
+    this.#batchDepth++;
+    try {
+      return fn();
+    } finally {
+      this.#batchDepth--;
+      if (this.#batchDepth === 0 && this.#dirty.size > 0) {
+        const todo = [...this.#dirty];
+        this.#dirty.clear();
+        for (const kind of todo) this.#writeKind(kind);
+      }
+    }
+  }
+
+  flushFlows() { this.#flushTarget('flows'); }
+  flushTemplates() { this.#flushTarget('templates'); }
+  flushChannels() { this.#flushTarget('channels'); }
+  flushMeta() { this.#flushTarget('meta'); }
+
   /** 配置更新与进程退出时持久化完整存储。 */
   flush() {
+    if (this.#batchDepth > 0) {
+      for (const k of ['flows', 'runs', 'templates', 'notifications', 'channels', 'meta']) this.#dirty.add(k);
+      return;
+    }
+    if (this.#metaTimer) { clearTimeout(this.#metaTimer); this.#metaTimer = null; }
     try {
       this.#save(this.flowsFile, this.flows.map((flow) => encryptSecrets(this.secretKey, flow)));
       this.#save(this.runsFile, this.runs);
@@ -299,16 +369,19 @@ export class Store {
     const key = `${flow.cron}|${flow.timezone || 'Asia/Shanghai'}`;
     const hit = this.#nextRunCache.get(key);
     const now = Date.now();
-    if (hit && hit.at > now) return hit.at;
+    if (hit) {
+      if (hit.invalid && now - hit.checkedAt < 60_000) return null;
+      if (!hit.invalid && hit.at > now) return hit.at;
+    }
     try {
       const job = new Cron(flow.cron, { timezone: flow.timezone || 'Asia/Shanghai' });
       const next = job.nextRun();
       const at = next ? next.getTime() : null;
       job.stop();
-      this.#nextRunCache.set(key, { at: at || 0 });
+      this.#nextRunCache.set(key, { at: at || 0, invalid: false });
       return at;
     } catch {
-      this.#nextRunCache.set(key, { at: 0 });
+      this.#nextRunCache.set(key, { at: 0, invalid: true, checkedAt: now });
       return null;   // 无效 cron 不显示
     }
   }
@@ -386,9 +459,9 @@ export class Store {
     if (!tpl) return { ...f };
     return {
       ...f,
-      nodes: tpl.nodes || [],
-      edges: tpl.edges || [],
-      log: tpl.log || null,
+      nodes: structuredClone(tpl.nodes || []),
+      edges: structuredClone(tpl.edges || []),
+      log: tpl.log ? structuredClone(tpl.log) : null,
     };
   }
 
@@ -429,7 +502,7 @@ export class Store {
       rev: 0,
     };
     this.flows.push(flow);
-    this.flush();
+    this.flushFlows();
     return flow;
   }
 
@@ -447,6 +520,7 @@ export class Store {
       }
     }
     for (const k of allowed) {
+      if (detached && k === 'tplId') continue;
       if (patch[k] !== undefined && k !== 'recovery') f[k] = patch[k];
     }
     // 分组名始终收敛成合法值（去空白 / 限长）
@@ -483,7 +557,7 @@ export class Store {
     }
     f.updatedAt = Date.now();
     f.rev = (Number(f.rev) || 0) + 1;
-    this.flush();
+    this.flushFlows();
     const out = this.resolveFlow(f);
     if (detached) out.detached = detached;   // 只在返回值里提示一次，不落盘
     return out;
@@ -494,7 +568,10 @@ export class Store {
     if (i >= 0) {
       this.flows.splice(i, 1);
       this.runs = this.runs.filter((r) => r.flowId !== id);
-      this.flush();
+      this.batch(() => {
+        this.flushFlows();
+        this.flushRuns();
+      });
       return true;
     }
     return false;
@@ -544,7 +621,7 @@ export class Store {
       updatedAt: now,
     };
     this.templates.push(tpl);
-    this.flush();
+    this.flushTemplates();
     return tpl;
   }
 
@@ -563,7 +640,10 @@ export class Store {
     t.updatedAt = Date.now();
     // 派生任务立刻跟随：把新版本写进它们各自的副本（模板被删时任务仍能用最后这份）
     this.refreshDerived(t);
-    this.flush();
+    this.batch(() => {
+      this.flushTemplates();
+      this.flushFlows();
+    });
     return t;
   }
 
@@ -594,7 +674,7 @@ export class Store {
     if (i < 0) return false;
     // 模板删了：派生任务保留最后一份流程图（resolveFlow 找不到模板就用本地副本），照常能跑
     this.templates.splice(i, 1);
-    this.flush();
+    this.flushTemplates();
     return true;
   }
 
@@ -608,10 +688,10 @@ export class Store {
       name: name || `${tpl.name} · ${seq}`,
       note: note !== undefined ? note : `来自模板「${tpl.name}」`,
       vars: mergedVars,
-      nodes: tpl.nodes,
-      edges: tpl.edges,
-      log: tpl.log,
-      notify: tpl.notify || {},
+      nodes: structuredClone(tpl.nodes || []),
+      edges: structuredClone(tpl.edges || []),
+      log: tpl.log ? structuredClone(tpl.log) : null,
+      notify: structuredClone(tpl.notify || {}),
       tplId,
     });
   }
@@ -774,7 +854,7 @@ export class Store {
       lockedUntil: null,
     };
     this.meta.users.push(user);
-    this.flush();
+    this.flushMeta();
     return user;
   }
 
@@ -793,7 +873,7 @@ export class Store {
     if (patch.recoveryCodes !== undefined) u.recoveryCodes = patch.recoveryCodes;
     if (patch.failedLogins !== undefined) u.failedLogins = patch.failedLogins;
     if (patch.lockedUntil !== undefined) u.lockedUntil = patch.lockedUntil;
-    this.flush();
+    this.flushMeta();
     return u;
   }
 
@@ -801,7 +881,7 @@ export class Store {
     const i = this.meta.users.findIndex((u) => u.id === id);
     if (i === -1) return false;
     this.meta.users.splice(i, 1);
-    this.flush();
+    this.flushMeta();
     return true;
   }
 
@@ -834,7 +914,7 @@ export class Store {
       allowedIps: Array.isArray(allowedIps) ? allowedIps.filter(Boolean) : [],
     };
     this.meta.apiKeys.push(k);
-    this.flush();
+    this.flushMeta();
     return k;
   }
 
@@ -843,7 +923,7 @@ export class Store {
     if (i === -1) return false;
     if (this.meta.apiKey && hashApiKey(this.meta.apiKey) === this.meta.apiKeys[i].hash) delete this.meta.apiKey;
     this.meta.apiKeys.splice(i, 1);
-    this.flush();
+    this.flushMeta();
     return true;
   }
 
@@ -854,8 +934,8 @@ export class Store {
       k.lastUsedAt = Date.now();
       k.useCount = (k.useCount || 0) + 1;
       if (ip) k.lastUsedIp = String(ip).slice(0, 64);
-      this.flush();
       if (firstUse) this.audit('apikey.first-use', `名称=${k.name}`, '');
+      else this.#scheduleMetaFlush();
     }
     return k || null;
   }
@@ -878,7 +958,7 @@ export class Store {
       k.allowedIps = patch.allowedIps.map((x) => String(x || '').trim()).filter(Boolean);
     }
     if (patch.expiresAt !== undefined) k.expiresAt = patch.expiresAt || null;
-    this.flush();
+    this.flushMeta();
     return k;
   }
 
@@ -891,14 +971,14 @@ export class Store {
     const v = String(ip || '').trim();
     if (!v) return this.listBlockedIps();
     if (!this.meta.ipBlocklist.includes(v)) this.meta.ipBlocklist.push(v);
-    this.flush();
+    this.flushMeta();
     return this.listBlockedIps();
   }
 
   unblockIp(ip) {
     const v = String(ip || '').trim();
     this.meta.ipBlocklist = this.meta.ipBlocklist.filter((x) => String(x).trim() !== v);
-    this.flush();
+    this.flushMeta();
     return this.listBlockedIps();
   }
 
@@ -906,7 +986,7 @@ export class Store {
   audit(action, detail = '', actor = '') {
     this.meta.audit.unshift({ at: Date.now(), action, detail: String(detail || '').slice(0, 300), actor: actor || '' });
     if (this.meta.audit.length > 500) this.meta.audit.length = 500;
-    this.flush();
+    this.flushMeta();
   }
 
   listAudit(limit = 100) {

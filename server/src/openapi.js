@@ -146,22 +146,64 @@ export function buildOpenApi() {
       '/api': { get: op('接口索引（无需鉴权即可访问的元信息）', { tags: ['meta'], scope: null }) },
       '/api/health': { get: op('健康检查', { tags: ['meta'] }) },
       '/api/me': { get: op('当前身份（会话用户 / API Key 身份与作用域）', { tags: ['meta'] }) },
-      '/api/flows': { get: op('列出任务（含 cron/enabled/nextRunAt/上次结果）', { tags: ['flows'], schema: { type: 'array', items: { $ref: '#/components/schemas/Flow' } } }) },
+      '/api/mcp': {
+        post: op('MCP JSON-RPC 2.0 端点（initialize / tools/list / tools/call）', {
+          tags: ['mcp'], scope: 'read',
+          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { jsonrpc: { type: 'string' }, id: {}, method: { type: 'string' }, params: { type: 'object' } }, required: ['method'] } } } },
+          errors: [400, 401, 403],
+        }),
+      },
+      '/api/login': { post: op('用户名+密码（+可选两步验证码）登录，返回 HttpOnly Cookie qsid', { tags: ['auth'], scope: null, errors: [401, 429] }) },
+      '/api/logout': { post: op('退出当前会话', { tags: ['auth'] }) },
+      '/api/flows': {
+        get: op('列出任务（含 cron/enabled/nextRunAt/上次结果）', { tags: ['flows'], schema: { type: 'array', items: { $ref: '#/components/schemas/Flow' } } }),
+        post: op('新建任务（允许草稿；需 write 作用域）', {
+          tags: ['flows'], scope: 'write',
+          requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/Flow' } } } },
+          schema: { $ref: '#/components/schemas/Flow' }, errors: [400, 401, 403],
+        }),
+      },
+      '/api/flows/validate': {
+        post: op('静态校验流程定义（节点类型 / 连线 / 允许请求源，不落库）', {
+          tags: ['flows'], scope: 'read',
+          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object' } } } },
+          schema: { type: 'object', properties: { ok: { type: 'boolean' }, errors: { type: 'array', items: { type: 'string' } } } },
+          errors: [401, 403],
+        }),
+      },
+      '/api/flows/batch': {
+        post: op('批量运行/启用/停用/删除/设分组', {
+          tags: ['flows'], scope: 'write',
+          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['ids', 'action'], properties: { ids: { type: 'array', items: { type: 'string' } }, action: { type: 'string', enum: ['run', 'enable', 'disable', 'delete', 'set-group'] }, wait: { type: 'boolean' }, group: { type: 'string' } } } } } },
+          errors: [400, 401, 403],
+        }),
+      },
       '/api/flows/{id}': {
         get: op('任务详情（nodes/vars/log/notify）', { tags: ['flows'], parameters: [idParam()], schema: { $ref: '#/components/schemas/Flow' } }),
         put: op('更新任务（vars/cron/timezone/jitterMinutes/enabled/name/note）', {
           tags: ['flows'], scope: 'write', parameters: [idParam()],
           requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/Flow' } } } },
-          errors: [401, 403],
+          errors: [401, 403, 409],
+        }),
+        delete: op('删除任务（不可恢复）', { tags: ['flows'], scope: 'write', parameters: [idParam()], errors: [401, 403, 404] }),
+      },
+      '/api/flows/{id}/vars': {
+        patch: op('只写合并更新任务变量（传 null 可删除键；不修改节点且不回显密钥）', {
+          tags: ['flows'], scope: 'write', parameters: [idParam()],
+          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { vars: { type: 'object', additionalProperties: { type: ['string', 'null'] } } } } } } },
+          schema: { type: 'object', properties: { ok: { type: 'boolean' }, id: { type: 'string' }, varsCount: { type: 'integer' }, updatedKeys: { type: 'array', items: { type: 'string' } } } },
+          errors: [400, 401, 403, 404],
         }),
       },
       '/api/flows/{id}/run': {
-        post: op('立即运行一次（跑签到），返回状态 + 摘要 + 人话日志', {
+        post: op('立即运行一次（wait=false 返回 202 排队；debug=true 单次调试）', {
           tags: ['flows'], scope: 'run', parameters: [idParam()],
-          requestBody: { required: false, content: { 'application/json': { schema: { type: 'object' } } } },
+          requestBody: { required: false, content: { 'application/json': { schema: { type: 'object', properties: { wait: { type: 'boolean', default: true }, debug: { type: 'boolean', default: false }, dedupe: { type: 'boolean' }, stream: { type: 'boolean' }, debugStopId: { type: 'string' }, timeoutMs: { type: 'integer' } } } } } },
           schema: { $ref: '#/components/schemas/Run' }, errors: [401, 403],
         }),
       },
+      '/api/flows/{id}/clone': { post: op('克隆任务（新副本默认停用）', { tags: ['flows'], scope: 'write', parameters: [idParam()], errors: [401, 403, 404] }) },
+      '/api/flows/{id}/curl': { post: op('导出指定 HTTP 节点的等价 curl 命令', { tags: ['flows'], parameters: [idParam()], errors: [400, 401, 403, 404] }) },
       '/api/flows/{id}/logs': {
         get: op('连续日志流（普通运行整组返回，超长运行由后向前分段）', {
           tags: ['flows'],
@@ -180,6 +222,8 @@ export function buildOpenApi() {
       '/api/flows/{id}/notify-test': {
         post: op('向该任务已配置的渠道发一条测试通知', { tags: ['flows'], scope: 'write', parameters: [idParam()], errors: [401, 403] }),
       },
+      '/api/import/curl': { post: op('解析 cURL 命令为 HTTP 节点配置', { tags: ['import'], scope: 'write', errors: [400, 401, 403] }) },
+      '/api/import/har': { post: op('解析 HAR JSON 为 CheckQ 流程草稿', { tags: ['import'], scope: 'write', errors: [400, 401, 403] }) },
       '/api/runs': {
         get: op('运行历史（按 flowId 过滤）', {
           tags: ['runs'],
@@ -195,8 +239,18 @@ export function buildOpenApi() {
         }),
       },
       '/api/runs/{id}/har': { get: op('导出单次运行的 HAR（默认脱敏；响应体沿用日志截断）', { tags: ['runs'], parameters: [idParam()], schema: { type: 'object' } }) },
-      '/api/templates': { get: op('模板列表（含变量名）', { tags: ['templates'], schema: { type: 'array', items: { type: 'object' } } }) },
-      '/api/templates/{id}': { get: op('模板详情（变量名 + 默认值，敏感项已脱敏）', { tags: ['templates'], parameters: [idParam()], schema: { type: 'object' } }) },
+      '/api/templates': {
+        get: op('模板列表（含变量名）', { tags: ['templates'], schema: { type: 'array', items: { type: 'object' } } }),
+        post: op('创建模板', { tags: ['templates'], scope: 'write', errors: [400, 401, 403] }),
+      },
+      '/api/templates/from-flow/{flowId}': { post: op('将已有任务另存为模板', { tags: ['templates'], scope: 'write', parameters: [idParam('flowId', '源任务 ID')], errors: [401, 403, 404] }) },
+      '/api/templates/from-url': { post: op('从远程 URL 导入模板（流式限体积 + 校验）', { tags: ['templates'], scope: 'write', errors: [400, 401, 403, 502] }) },
+      '/api/templates/{id}': {
+        get: op('模板详情（变量名 + 默认值，敏感项已脱敏）', { tags: ['templates'], parameters: [idParam()], schema: { type: 'object' } }),
+        put: op('更新模板（自动同步关联派生任务）', { tags: ['templates'], scope: 'write', parameters: [idParam()], errors: [400, 401, 403, 404] }),
+        delete: op('删除模板（已派生任务保留本地副本）', { tags: ['templates'], scope: 'write', parameters: [idParam()], errors: [401, 403, 404] }),
+      },
+      '/api/templates/{id}/export': { get: op('导出脱敏模板 JSON', { tags: ['templates'], parameters: [idParam()], errors: [401, 404] }) },
       '/api/templates/{id}/instantiate': {
         post: op('从模板创建任务（变量可覆盖）', {
           tags: ['templates'], scope: 'write', parameters: [idParam()],
@@ -204,9 +258,23 @@ export function buildOpenApi() {
           errors: [401, 403],
         }),
       },
-      '/api/notifications': { get: op('站内通知列表', { tags: ['meta'], parameters: [{ name: 'limit', in: 'query', schema: { type: 'integer', default: 50 } }], schema: { type: 'object' } }) },
+      '/api/templates/{id}/instantiate-csv': { post: op('CSV 批量从模板创建任务', { tags: ['templates'], scope: 'write', parameters: [idParam()], errors: [400, 401, 403, 404] }) },
+      '/api/notifications': {
+        get: op('站内通知列表', { tags: ['meta'], parameters: [{ name: 'limit', in: 'query', schema: { type: 'integer', default: 50 } }], schema: { type: 'object' } }),
+        delete: op('清空站内通知', { tags: ['meta'], scope: 'write', errors: [401, 403] }),
+      },
+      '/api/notifications/read': { post: op('标记站内通知已读', { tags: ['meta'], scope: 'write', errors: [400, 401, 403] }) },
       '/api/system/stats': { get: op('运维统计（任务数/今日运行/成功率/下次调度）', { tags: ['meta'], schema: { type: 'object' } }) },
       '/api/system/push-targets': { get: op('可推送单位（带通知渠道的任务）', { tags: ['meta'], schema: { type: 'array', items: { type: 'object' } } }) },
+      '/api/system/backup': {
+        get: op('导出脱敏备份 JSON', { tags: ['system'], errors: [401, 403] }),
+        post: op('导出完整备份（含明文凭据，需校验当前密码）', { tags: ['system'], scope: 'write', errors: [401, 403] }),
+      },
+      '/api/system/restore': { post: op('从备份恢复任务与模板（默认停用并分配新 ID）', { tags: ['system'], scope: 'write', errors: [400, 401, 403] }) },
+      '/api/system/ui': {
+        get: op('获取界面偏好设置', { tags: ['system'] }),
+        put: op('保存界面偏好设置', { tags: ['system'], scope: 'write' }),
+      },
       // ---- AI 助手 ----
       '/api/system/ai': {
         get: op('读取 AI 助手配置（登录用户；API Key 只回显前缀，绝不返回明文）', {
@@ -271,9 +339,17 @@ export function buildOpenApi() {
           errors: [401, 403],
         }),
       },
-      '/api/system/apikeys/{id}': { delete: op('吊销 API Key（立即失效）', { tags: ['keys'], scope: 'write', parameters: [idParam('id', 'API Key ID')], errors: [401, 403] }) },
-      '/api/system/users': { get: op('用户列表（管理员）', { tags: ['admin'], errors: [401, 403] }) },
-      '/api/system/audit': { get: op('审计日志（管理员）', { tags: ['admin'], errors: [401, 403] }) },
+      '/api/system/apikeys/{id}': {
+        put: op('更新 API Key 作用域/IP 白名单/回收日期', { tags: ['keys'], scope: 'write', role: 'admin', parameters: [idParam('id', 'API Key ID')], errors: [400, 401, 403, 404] }),
+        delete: op('吊销 API Key（立即失效）', { tags: ['keys'], scope: 'write', role: 'admin', parameters: [idParam('id', 'API Key ID')], errors: [401, 403] }),
+      },
+      '/api/system/ip-blocklist': {
+        get: op('全局 IP 黑名单列表（管理员）', { tags: ['admin'], role: 'admin', errors: [401, 403] }),
+        put: op('加入全局 IP 黑名单（管理员）', { tags: ['admin'], scope: 'write', role: 'admin', errors: [400, 401, 403] }),
+      },
+      '/api/system/ip-blocklist/{ip}': { delete: op('移出全局 IP 黑名单（管理员）', { tags: ['admin'], scope: 'write', role: 'admin', parameters: [idParam('ip', 'IP 或 CIDR')], errors: [401, 403] }) },
+      '/api/system/users': { get: op('用户列表（管理员）', { tags: ['admin'], role: 'admin', errors: [401, 403] }) },
+      '/api/system/audit': { get: op('审计日志（管理员）', { tags: ['admin'], role: 'admin', errors: [401, 403] }) },
       // ---- v0.5 ----
       '/api/system/features': { get: op('功能开关（演练场是否可用）', { tags: ['meta'], schema: { type: 'object', properties: { demo: { type: 'boolean' }, version: { type: 'string' } } } }) },
       '/api/system/metrics': { get: op('本机度量（运行/成功率/首跑与修复耗时/模板复用）', { tags: ['meta'], parameters: [{ name: 'days', in: 'query', schema: { type: 'integer', default: 7 } }], schema: { type: 'object' } }) },

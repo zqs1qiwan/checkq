@@ -25,7 +25,7 @@ export function shouldAutoPause(trigger, run) {
  * 落库并重建调度。返回是否真的停用了。
  * 调用方负责把提示写进 run.finalMessage（本函数只做状态变更）。
  */
-export function applyAutoPause({ store, scheduler, flowId, reason }) {
+export function applyAutoPause({ store, scheduler, flowId, reason, skipRecovery = false }) {
   if (!flowId || !store) return false;
   const flow = store.getFlowRaw?.(flowId);
   if (!flow || flow.enabled !== true) return false;
@@ -35,14 +35,16 @@ export function applyAutoPause({ store, scheduler, flowId, reason }) {
     pausedAt: Date.now(),
     pausedReason: String(reason || '连续失败'),
     recovery: rec.enabled
-      ? {
-        ...rec,
-        attempts: 0,
-        nextProbeAt: nextProbeTime(rec),
-        lastProbeAt: null,
-        lastResult: null,
-        exhausted: false,
-      }
+      ? (skipRecovery
+        ? { ...rec, nextProbeAt: null, lastResult: 'failed', exhausted: true }
+        : {
+          ...rec,
+          attempts: 0,
+          nextProbeAt: nextProbeTime(rec),
+          lastProbeAt: null,
+          lastResult: null,
+          exhausted: false,
+        })
       : rec,
   });
   scheduler?.rebuild?.();

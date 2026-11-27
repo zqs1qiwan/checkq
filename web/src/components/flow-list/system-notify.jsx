@@ -204,7 +204,7 @@ export default function SystemNotify({ onToast, isAdmin }) {
           initial={editing}
           onClose={() => setEditing(null)}
           onApply={(c) => {
-            setChannels(editing.id ? channels.map((x) => (x === editing ? c : x)) : [...channels, c]);
+            setChannels(editing.id ? channels.map((x) => (x.id === editing.id ? c : x)) : [...channels, c]);
             setEditing(null);
           }}
         />
